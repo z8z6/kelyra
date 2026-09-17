@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Kelyra 是一门处于早期设计阶段的系统编程语言，面向原生性能、资源安全、CPU 与 GPU 编程，以及人和 AI 的共同维护。">
+  <meta name="theme-color" content="#f5f5ef">
+  <title>Kelyra — 为系统、计算与图形而设计</title>
+  <style>
+    :root { color-scheme: light; --paper: #f5f5ef; --ink: #202d28; --muted: #59665e; --line: #cdd5ca; --green: #245c3d; }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 2rem; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; line-height: 1.8; }
+    a { color: var(--green); text-underline-offset: .25em; }
+    a:hover { text-decoration-thickness: 2px; }
+    a:focus-visible { outline: 3px solid var(--green); outline-offset: 5px; }
+    .skip { position: absolute; left: 1rem; top: -6rem; padding: .5rem 1rem; background: white; }
+    .skip:focus { top: 1rem; }
+    .wrap { width: min(1100px, calc(100% - 3rem)); margin-inline: auto; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: 1.5rem; border-bottom: 1px solid var(--line); }
+    .brand { font-size: 1.4rem; font-weight: 750; letter-spacing: -.05em; text-decoration: none; color: var(--ink); }
+    nav { display: flex; flex-wrap: wrap; gap: 1.5rem; font-size: .9rem; }
+    nav a { text-decoration: none; }
+    .hero { padding-block: clamp(4rem, 10vw, 8rem) 4rem; }
+    .eyebrow { color: var(--green); font-size: .8rem; font-weight: 700; letter-spacing: .12em; }
+    h1 { margin: 1.5rem 0; font-size: clamp(2.5rem, 6.4vw, 5rem); line-height: 1.2; letter-spacing: -.055em; font-weight: 650; }
+    h1 span { color: var(--green); }
+    .lead { max-width: 43rem; font-size: 1.15rem; color: var(--muted); }
+    .status { display: inline-block; margin-top: 1.5rem; padding: .35rem .85rem; border: 1px solid var(--line); border-radius: 2rem; color: var(--muted); font-size: .82rem; }
+    section { padding-block: 3.5rem; border-top: 1px solid var(--line); }
+    .section-head { display: grid; grid-template-columns: 1fr 2fr; gap: 2rem; margin-bottom: 2rem; }
+    h2 { margin: .4rem 0 0; font-size: 1.9rem; line-height: 1.35; letter-spacing: -.04em; }
+    h3 { margin: .5rem 0; font-size: 1.12rem; }
+    p { margin: .5rem 0 1rem; }
+    .section-head > p, article p { color: var(--muted); }
+    .principles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+    .principles article { padding: 1.5rem; background: #e9eee4; border-radius: .5rem; }
+    .goals { display: grid; grid-template-columns: repeat(2, 1fr); column-gap: 3rem; }
+    .goals article { padding: 1.5rem 0; border-top: 1px solid var(--line); }
+    .number { font-family: ui-monospace, monospace; color: var(--green); font-size: .82rem; }
+    .vision { padding: clamp(1.5rem, 4vw, 3rem); background: var(--ink); color: var(--paper); border-radius: .5rem; }
+    .vision h3 { font-size: 1.4rem; }
+    .vision p { max-width: 48rem; color: #d3dfd3; }
+    .stages { list-style: none; padding: 0; margin: 0; }
+    .stages li { display: grid; grid-template-columns: 5rem 1fr; gap: 1rem; padding: 1.25rem 0; border-top: 1px solid var(--line); }
+    .stages p { margin-bottom: 0; color: var(--muted); }
+    .note { color: var(--muted); font-size: .9rem; }
+    footer { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding-block: 2rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; }
+    @media (max-width: 650px) {
+      header { align-items: flex-start; }
+      nav { gap: .5rem 1rem; justify-content: flex-end; }
+      .section-head, .principles, .goals { grid-template-columns: 1fr; }
+      .section-head { gap: .75rem; }
+      .hero { padding-top: 3.5rem; }
+      section { padding-block: 2.5rem; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print { body { background: white; } nav, .skip { display: none; } section { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">跳转到正文</a>
+  <div class="wrap">
+    <header>
+      <a class="brand" href="#main" aria-label="Kelyra 首页">kelyra<span aria-hidden="true">.</span></a>
+      <nav aria-label="文档导航">
+        <a href="#principles">设计理念</a>
+        <a href="#goals">语言目标</a>
+        <a href="#progress">当前进展</a>
+      </nav>
+    </header>
+    <main id="main">
+      <div class="hero">
+        <div class="eyebrow">KELYRA / 系统编程语言</div>
+        <h1>贴近硬件。<br><span>让复杂性有边界。</span></h1>
+        <p class="lead">Kelyra 致力于成为一门默认安全、性能可预测的系统编程语言，将 CPU 原生程序、GPU Shader 与 C 生态连接起来，让人和 AI 都能理解、检查和维护代码。</p>
+        <p class="status">早期设计与原型阶段 · 以下能力为设计目标</p>
+      </div>
+
+      <section id="principles" aria-labelledby="principles-title">
+        <div class="section-head">
+          <div><span class="eyebrow">01 / 设计理念</span><h2 id="principles-title">控制成本，也明确责任。</h2></div>
+          <p>系统编程需要对内存、布局、并行和硬件能力保持控制。Kelyra 希望将这些控制与清晰的安全边界结合，让程序的行为可以解释，修改的影响可以审查。</p>
+        </div>
+        <div class="principles">
+          <article><h3>安全作为基础</h3><p>设计明确的所有权、借用与资源释放规则。普通代码受到安全约束，裸指针、外部接口和底层操作通过显式边界表达。</p></article>
+          <article><h3>性能可以解释</h3><p>让分配、复制、布局和并发的成本可见。不强制依赖追踪式垃圾回收，以实际程序和基准验证抽象的代价。</p></article>
+          <article><h3>规则适合共同维护</h3><p>追求一致的语法、明确的接口和可定位的诊断，为人工审查、自动化工具与 AI 辅助开发提供共同依据。</p></article>
+        </div>
+      </section>
+
+      <section id="goals" aria-labelledby="goals-title">
+        <div class="section-head">
+          <div><span class="eyebrow">02 / 语言目标</span><h2 id="goals-title">七个方向，一套工具链。</h2></div>
+          <p>从获取依赖到运行原生程序，从主机内存到 GPU 资源，语言与工具链共同描述程序的输入、能力和约束。</p>
+        </div>
+        <div class="goals">
+          <article><span class="number">G1 / BUILD</span><h3>依赖管理与构建</h3><p>通过统一清单与命令管理依赖、构建、测试和打包。固定依赖版本与工具链输入，让离线构建和可复现验证成为工作流的一部分。</p></article>
+          <article><span class="number">G2 / PORTABILITY</span><h3>跨平台与能力检查</h3><p>以 Windows、Linux、macOS 及多种 CPU 架构为长期方向，明确区分各平台的支持程度。专用硬件能力通过显式声明和检查使用。</p></article>
+          <article><span class="number">G3 / PERFORMANCE</span><h3>原生性能与成本可见</h3><p>面向 AOT 原生编译，提供对数据布局、分配器、值传递和向量运算的控制。以吞吐量、延迟、内存和编译耗时共同衡量表现。</p></article>
+          <article><span class="number">G4 / INTEROP</span><h3>连接 C 与汇编</h3><p>通过双向 C ABI 复用现有库，并向外部程序提供接口。为汇编、回调和跨语言资源管理明确调用约定、生命周期及错误边界。</p></article>
+          <article><span class="number">G5 / TOOLING</span><h3>面向人和 AI 的工具</h3><p>提供机器可读的诊断、源码范围，以及符号、类型和引用查询。让自动化修改有可检查的契约，并以独立测试验证修改结果。</p></article>
+          <article><span class="number">G6 / GRAPHICS</span><h3>图形学与 Shader</h3><p>目标是用 Kelyra 编写顶点、片元和计算 Shader。CPU 与 GPU 共享兼容的模块和类型表达，同时明确执行域、数据布局与同步规则。</p></article>
+          <article><span class="number">G7 / PARALLELISM</span><h3>多线程与并行</h3><p>围绕系统线程、作用域任务和数据并行建立一致的资源规则。明确共享数据、取消和任务结束时的责任，检查跨线程访问的合法性。</p></article>
+        </div>
+      </section>
+
+      <section aria-labelledby="scenario-title">
+        <div class="section-head">
+          <div><span class="eyebrow">03 / 应用愿景</span><h2 id="scenario-title">用完整程序检验语言。</h2></div>
+          <p>Kelyra 的首版目标是形成可运行的端到端路径，让各项能力在同一个程序中协作，并接受正确性与性能验证。</p>
+        </div>
+        <div class="vision">
+          <h3>从资源加载，到并行计算，再到画面。</h3>
+          <p>一个代表性程序可以调用 C 库解码资源，使用 CPU 任务并行准备数据，再通过 Kelyra Shader 完成绘制与计算。主机和 GPU 的接口布局保持一致，任务结束后正确等待并回收资源。</p>
+          <p>这是一条计划中的验收路径。语言也面向非图形系统程序，覆盖复杂数据结构、资源管理与批量处理。</p>
+        </div>
+      </section>
+
+      <section id="progress" aria-labelledby="progress-title">
+        <div class="section-head">
+          <div><span class="eyebrow">04 / 当前进展</span><h2 id="progress-title">从基础开始，逐步验证。</h2></div>
+          <div><p>项目已建立 CMake 构建基础并接入 LLVM / MLIR，当前最小程序可以创建并输出一个空的 MLIR 模块。语言语法、类型系统和安全模型仍在设计中，尚不能编译 Kelyra 源程序。</p><p class="note">下面是设计草案中的阶段规划，不代表已经交付，也不承诺发布时间或完整的平台覆盖。</p></div>
+        </div>
+        <ol class="stages">
+          <li><span class="number">M0</span><div><h3>语义原型</h3><p>验证值与资源规则、模块与错误语义，探索基础 CPU 程序、C 接口及 Shader 子集。</p></div></li>
+          <li><span class="number">M1</span><div><h3>首版最小闭环</h3><p>围绕代表性程序串联七项目标，验证跨平台运行、受限安全模型、图形计算和作用域并行。</p></div></li>
+          <li><span class="number">M2</span><div><h3>平台与工程扩展</h3><p>逐步扩展架构和图形后端，改善增量分析、调试与异步能力。</p></div></li>
+          <li><span class="number">M3</span><div><h3>稳定化</h3><p>在实践基础上形成版本迁移、兼容性策略和成熟的发布流程。</p></div></li>
+        </ol>
+      </section>
+    </main>
+    <footer><span>kelyra. 为系统、计算与图形而设计。</span><span>语言介绍 · 基于目标草案 v0.1</span></footer>
+  </div>
+</body>
+</html>

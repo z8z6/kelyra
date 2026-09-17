@@ -2,6 +2,15 @@
 
 Kelyra is a neo lang for myself.
 
+## 语言介绍
+
+直接打开 [doc/index.html](doc/index.html) 阅读中文介绍。
+
+文档通过 `.github/workflows/pages.yml` 发布到 GitHub Pages。
+首次发布需在仓库 **Settings → Pages → Build and deployment → Source** 中选择 **GitHub Actions**。
+推送 `doc/` 或工作流的修改到 `main` 后自动部署，也可在 Actions 中手动运行。
+默认站点地址为 <https://z8z6.github.io/kelyra/>，实际地址以部署结果为准。
+
 ## 构建
 
 需要 CMake 3.20+、支持 C++17 的编译器、Python 3 和 Ninja（也可使用其他 CMake 生成器）。
