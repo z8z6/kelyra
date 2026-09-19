@@ -3,3 +3,8 @@
 	url = https://github.com/llvm/llvm-project.git
 	branch = main
 	shallow = true
+[submodule "third_party/googletest"]
+	path = third_party/googletest
+	url = https://github.com/google/googletest.git
+	branch = main
+	shallow = true

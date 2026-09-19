@@ -1,0 +1,9 @@
+module math.vector;
+
+pub fn answer() -> i32 {
+  return 42;
+}
+
+fn hidden() -> i32 {
+  return 7;
+}

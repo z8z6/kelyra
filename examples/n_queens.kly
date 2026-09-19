@@ -1,0 +1,59 @@
+// Counts all 92 solutions of the eight queens puzzle.
+// Returning the count keeps the example independent of an I/O runtime.
+fn main() -> i32 {
+  // 棋盘
+  let board: i32[8][8];
+  let next: i32[8];
+  let row = 0;
+  let solutions = 0;
+
+  while row >= 0 {
+    if row == 8 {
+      solutions = solutions + 1;
+      row = row - 1;
+      board[row][next[row] - 1] = 0;
+    } else {
+      let col = next[row];
+      let placed = false;
+
+      while col < 8 && !placed {
+        let safe = true;
+        let previous = 0;
+        while previous < row {
+          let queen = 0;
+          while queen < 8 {
+            if board[previous][queen] == 1 {
+              if queen == col || queen + row - previous == col ||
+                  queen - row + previous == col {
+                safe = false;
+              }
+            }
+            queen = queen + 1;
+          }
+          previous = previous + 1;
+        }
+
+        if safe {
+          board[row][col] = 1;
+          next[row] = col + 1;
+          row = row + 1;
+          if row < 8 {
+            next[row] = 0;
+          }
+          placed = true;
+        } else {
+          col = col + 1;
+        }
+      }
+
+      if !placed {
+        next[row] = 0;
+        row = row - 1;
+        if row >= 0 {
+          board[row][next[row] - 1] = 0;
+        }
+      }
+    }
+  }
+  return solutions;
+}

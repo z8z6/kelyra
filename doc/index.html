@@ -120,7 +120,7 @@
       <section id="progress" aria-labelledby="progress-title">
         <div class="section-head">
           <div><span class="eyebrow">04 / 当前进展</span><h2 id="progress-title">从基础开始，逐步验证。</h2></div>
-          <div><p>项目已建立 CMake 构建基础并接入 LLVM / MLIR，当前最小程序可以创建并输出一个空的 MLIR 模块。语言语法、类型系统和安全模型仍在设计中，尚不能编译 Kelyra 源程序。</p><p class="note">下面是设计草案中的阶段规划，不代表已经交付，也不承诺发布时间或完整的平台覆盖。</p></div>
+          <div><p>项目已接入 LLVM / MLIR，并实现基础词法与语法分析，支持输出函数、结构体、基本语句和表达式的 AST。无参数运行输出包含 kelyra.add 的 MLIR dialect 示例；类型系统和安全模型仍在设计中，尚不能将 Kelyra 源程序编译为可执行程序。</p><p class="note">下面是设计草案中的阶段规划，不代表已经交付，也不承诺发布时间或完整的平台覆盖。</p></div>
         </div>
         <ol class="stages">
           <li><span class="number">M0</span><div><h3>语义原型</h3><p>验证值与资源规则、模块与错误语义，探索基础 CPU 程序、C 接口及 Shader 子集。</p></div></li>
