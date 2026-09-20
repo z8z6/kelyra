@@ -220,7 +220,7 @@ struct Document {
       if (Node.text == "true" || Node.text == "false")
         return "bool";
       if (!Node.text.empty() && Node.text.front() == '"')
-        return "c.char*";
+        return "*c.char";
       return Node.text.find_first_of(".eE") == std::string::npos ? "i32"
                                                                  : "f64";
     }
@@ -228,8 +228,15 @@ struct Document {
       if (const auto *Found = FindVisible(Node.text, Offset))
         return Found->Type;
     }
-    if ((Node.kind == K::ast_unary || Node.kind == K::ast_group ||
-         Node.kind == K::ast_binary) &&
+    if (Node.kind == K::ast_unary && !Node.children.empty()) {
+      auto Result = InferType(*Node.children.front(), Offset);
+      if (Node.text == "&")
+        return "*" + Result;
+      if (Node.text == "*" && !Result.empty() && Result.front() == '*')
+        Result.erase(Result.begin());
+      return Result;
+    }
+    if ((Node.kind == K::ast_group || Node.kind == K::ast_binary) &&
         !Node.children.empty())
       return InferType(*Node.children.front(), Offset);
     if (Node.kind == K::ast_index && !Node.children.empty()) {
@@ -582,12 +589,12 @@ public:
           Add(Symbol.Name, CompletionItemKind::Struct, Symbol.Detail);
       }
     for (const auto Keyword :
-         {"fn", "struct", "let", "mut", "pub", "if", "else", "while", "return",
-          "break", "continue", "true", "false", "module", "import"})
+         {"fn", "struct", "let", "pub", "if", "else", "while", "return",
+          "break", "continue", "asm", "true", "false", "module", "import"})
       Add(Keyword, CompletionItemKind::Keyword, "Kelyra keyword");
     for (const auto Type :
-         {"i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128",
-          "f32", "f64", "f128", "bool", "char"})
+         {"i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64",
+          "u128", "usize", "f32", "f64", "f128", "bool", "char"})
       Add(Type, CompletionItemKind::Class, "Kelyra type");
     return Result;
   }

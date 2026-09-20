@@ -22,7 +22,7 @@ ctest --test-dir build --output-on-failure
 
 `--check` 成功时无输出，`--dump-ast` 输出 S 表达式，`--emit-mlir` 输出 `builtin + func + arith` MLIR，`--emit-obj` 输出可链接的本机目标文件，`--emit-exe` 通过系统 `cc` 链接可执行文件并要求入口为 `fn main() -> i32`。当前支持函数、参数、数值与布尔常量、`+ - * / %`、一元正负号和单条 `return`。退出码：0 成功，1 词法、语法、语义或代码生成错误，2 参数或文件读取错误。
 
-内置类型为 `i8/i16/i32/i64/i128`、`u8/u16/u32/u64/u128`、`f32/f64/f128/f256/f512`、`bool` 和 `char`。`bool` lowering 为 `i1`；`char` 表示 Unicode 标量值并 lowering 为 `i32`。MLIR 没有原生 `f256/f512`，因此它们表示为 `!kelyra.f256` 和 `!kelyra.f512`，目前仅支持函数签名与参数透传，不支持字面量和算术。
+内置类型为 `i8/i16/i32/i64/i128/isize`、`u8/u16/u32/u64/u128/usize`、`f32/f64/f128/f256/f512`、`bool` 和 `char`。`usize` 和 `isize` 使用本机指针宽度。`bool` lowering 为 `i1`；`char` 表示 Unicode 标量值并 lowering 为 `i32`。MLIR 没有原生 `f256/f512`，因此它们表示为 `!kelyra.f256` 和 `!kelyra.f512`，目前仅支持函数签名与参数透传，不支持字面量和算术。
 
 前端库本身没有 LLVM 依赖。测试统一使用独立的 GoogleTest 子模块，可按测试套件筛选：
 
@@ -40,25 +40,40 @@ ctest --test-dir build --output-on-failure
 ```ebnf
 module       = [ module-decl ], { import }, { declaration } ;
 module-decl  = "module", qualified-name, ";" ;
-import       = "import", qualified-name, ";" ;
+import       = "import", qualified-name, [ ".", "*" ], ";" ;
 qualified-name = name, { ".", name } ;
-declaration  = { annotation }, [ "pub" ], ( function | struct ) ;
-annotation   = "@", name ;
+declaration  = { annotation }, [ "pub" ],
+               ( function | struct | annotation-declaration ) ;
+annotation   = "@", qualified-name,
+               [ "(", [ annotation-arguments ], ")" ] ;
+annotation-arguments = annotation-argument,
+                       { ",", annotation-argument }, [ "," ] ;
+annotation-argument = [ name, "=" ], expression ;
+annotation-declaration = "annotation", name,
+                         "(", [ annotation-parameters ], ")", ";" ;
+annotation-parameters = annotation-parameter,
+                        { ",", annotation-parameter }, [ "," ] ;
+annotation-parameter = name, ":", type, [ "=", expression ] ;
+meta-expression = "meta", "(", ( qualified-name | type ), ")" ;
 function     = "fn", name, "(", [ parameters ], ")", [ "->", type ], block ;
 parameters   = parameter, { ",", parameter }, [ "," ] ;
 parameter    = name, ":", type ;
 struct       = "struct", name, "{", [ fields ], "}" ;
 fields       = field, { ",", field }, [ "," ] ;
 field        = name, ":", type ;
-type         = name, { "[", integer, "]" } ;
+type         = "*", type | name, { "[", integer, "]" } ;
 block        = "{", { statement }, "}" ;
 statement    = block | let | assignment | return | if | while
-             | "break", ";" | "continue", ";" | expression, ";" ;
-let          = "let", [ "mut" ], name, [ ":", type ], [ "=", expression ], ";" ;
+             | asm | "break", ";" | "continue", ";" | expression, ";" ;
+let          = "let", name, [ ":", type ], [ "=", expression ], ";" ;
 assignment   = expression, "=", expression, ";" ;
 return       = "return", [ expression ], ";" ;
 if           = "if", expression, block, [ "else", ( block | if ) ] ;
 while        = "while", expression, block ;
+asm          = "asm", raw-block, { asm-chain }, ";" ;
+asm-chain    = ".", ( "in" | "out" ), "(", name, [ ",", name ], ")"
+             | ".", "op", "(", asm-option, { ",", asm-option }, ")" ;
+asm-option   = name | "clobber", "(", name, { ",", name }, ")" ;
 ```
 
 一个文件对应一个模块。入口文件所在目录是模块根目录，例如
@@ -76,14 +91,28 @@ pub fn main() -> i32 {
 ```
 
 Kelyra 函数会使用包含模块路径的符号名；可执行程序的 `main` 保留平台入口名。
+同一文件中的函数先统一注册签名再检查函数体，因此可以在函数定义之前调用它。
+
+用户可以声明带类型的注解，并在定义之前使用。注解支持位置参数、命名参数和默认值；
+参数值必须是编译期常量。模块外使用公开注解时需要写限定名，例如
+`@web.route("/")`。完整模型见 [`annotation` 设计](annotation.md)。
+
+`meta(target)` 构造目标的编译期反射引用，可用于 `meta.type` 和
+`meta.symbol` 注解参数；反射值不能进入普通运行期表达式。完整模型见
+[`meta` 反射设计](meta.md)。
+
+`import math.vector.*;` 会加载同一模块，并让其公开函数可以不带
+`math.vector.` 前缀调用。它不导入私有函数或类型。当前模块中的同名函数
+优先；如果两个通配导入同时提供同名函数，调用处会报歧义错误。
 
 C 头文件使用固定的 `c` 模块导入：
 
 ```kelyra
 import c "print.h";
+import c.*;
 
 pub fn main() -> i32 {
-  c.print();
+  print();
   return 0;
 }
 ```
@@ -98,9 +127,15 @@ kelyra --emit-exe --c-source=print.c -o app main.kly
 ```
 
 当前 C 导入支持表中的 C 标量类型、数据指针、完整结构体和可变参数函数。结构体值
-保持 opaque，由 Clang 编译 ABI thunk 负责按值传递；可使用 `c.Pair*` 标注指针类型，
-字符串字面量可传给 `char*` 参数。结构体字段访问、函数指针、枚举、宏常量和非默认
+保持 opaque，由 Clang 编译 ABI thunk 负责按值传递；可使用 `*c.Pair` 标注指针类型，
+字符串字面量可传给 `*c.char` 参数。结构体字段访问、函数指针、枚举、宏常量和非默认
 calling convention 尚未支持。
+
+原始指针类型写作 `*T`。一元 `&` 取得名称、数组元素或解引用表达式的地址，一元 `*` 读取指针指向的值，也可以作为赋值目标。指针不区分只读和可写，编译器不执行借用或生命周期检查。
+
+`asm { ... }` 保留原始汇编文本；`{name}` 通过 `.in(name)` 或
+`.out(name)` 绑定 Kelyra 变量并自动分配寄存器。第二个参数可指定固定
+寄存器，例如 `.out(low, eax)`。完整规则见 [`asm` 设计](asm.md)。
 
 `let` 必须包含类型或初始值。赋值左边只接受名称、成员访问、索引；链式赋值暂不支持。条件后的花括号不可省略。函数参数类型必须写出；省略返回类型的语义留待类型系统确定。
 
@@ -114,7 +149,7 @@ calling convention 尚未支持。
 | 40 | `a < b`、`a <= b`、`a > b`、`a >= b` |
 | 50 | `a + b`、`a - b` |
 | 60 | `a * b`、`a / b`、`a % b` |
-| 70 | `-a`、`+a`、`!a` |
+| 70 | `-a`、`+a`、`!a`、`*a`、`&a` |
 | 80 | `f(args)`、`a[i]`、`a.member` |
 
 调用支持空参数和末尾逗号，后缀可以连续组合。比较链（包括 `a < b == c`）必须通过括号明确分组。不支持逗号运算符、隐式相乘或赋值表达式。
@@ -131,4 +166,4 @@ calling convention 尚未支持。
 
 递归解析和 AST 高度均设 128 上限，超限给出诊断，避免异常输入耗尽栈。由于 AST 中还包含语句、函数等外围节点，源代码允许的嵌套层数会略少于该值。
 
-首版未实现泛型、C 导入、结构体/数组字面量、模式匹配、引用类型和完整 CST。后续按实际语言规则增加对应解析分支。
+首版未实现泛型、结构体/数组字面量、模式匹配、引用类型和完整 CST。后续按实际语言规则增加对应解析分支。

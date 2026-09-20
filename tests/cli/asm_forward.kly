@@ -1,0 +1,24 @@
+fn main() -> i32 {
+  return later();
+}
+
+fn later() -> i32 {
+  let right: i32 = 2;
+  let result: i32 = 40;
+  asm {
+    add {result}, {right}
+  }
+  .in(result)
+  .in(right)
+  .out(result)
+  .op(intel, nomem, nostack);
+  let low: u32 = 0;
+  let high: u32 = 0;
+  asm {
+    rdtsc
+  }
+  .out(low, eax)
+  .out(high, edx)
+  .op(nomem, nostack);
+  return result;
+}

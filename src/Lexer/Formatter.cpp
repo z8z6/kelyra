@@ -44,6 +44,22 @@ public:
   void PopIndent() { --Indent; }
   bool IsLineStart() const { return LineStart; }
 
+  void RawLines(std::string_view Text) {
+    while (!Text.empty()) {
+      const auto End = Text.find('\n');
+      auto Line = Text.substr(0, End);
+      const auto First = Line.find_first_not_of(" \t\r");
+      const auto Last = Line.find_last_not_of(" \t\r");
+      if (First != std::string_view::npos) {
+        Write(Line.substr(First, Last - First + 1));
+        NewLine();
+      }
+      if (End == std::string_view::npos)
+        break;
+      Text.remove_prefix(End + 1);
+    }
+  }
+
   std::string Take() {
     NewLine();
     return std::move(Output);
@@ -51,33 +67,29 @@ public:
 };
 
 bool IsOperator(TokenKind Kind) {
-  return Kind >= TokenKind::op_arrow && Kind <= TokenKind::op_not;
+  return Kind >= TokenKind::op_arrow && Kind <= TokenKind::op_address;
 }
 
 bool IsUnary(const std::vector<Token> &Tokens, std::size_t Index) {
   const auto Kind = Tokens[Index].kind;
-  if (Kind == TokenKind::op_not)
+  if (Kind == TokenKind::op_not || Kind == TokenKind::op_address)
     return true;
-  if (Kind != TokenKind::op_add && Kind != TokenKind::op_subtract)
+  if (Kind != TokenKind::op_add && Kind != TokenKind::op_subtract &&
+      Kind != TokenKind::op_multiply)
     return false;
   if (Index == 0)
     return true;
   const auto Previous = Tokens[Index - 1].kind;
   return IsOperator(Previous) || Previous == TokenKind::punc_left_paren ||
+         Previous == TokenKind::punc_left_brace ||
          Previous == TokenKind::punc_left_bracket ||
          Previous == TokenKind::punc_comma ||
+         Previous == TokenKind::punc_colon || Previous == TokenKind::punc_dot ||
+         Previous == TokenKind::punc_semicolon ||
+         Previous == TokenKind::keyword_if ||
+         Previous == TokenKind::keyword_when ||
+         Previous == TokenKind::keyword_while ||
          Previous == TokenKind::keyword_return;
-}
-
-bool IsPointerStar(const std::vector<Token> &Tokens, std::size_t Index) {
-  if (Tokens[Index].kind != TokenKind::op_multiply ||
-      Index + 1 >= Tokens.size())
-    return false;
-  const auto Next = Tokens[Index + 1].kind;
-  return Next == TokenKind::op_multiply || Next == TokenKind::op_assign ||
-         Next == TokenKind::punc_comma || Next == TokenKind::punc_right_paren ||
-         Next == TokenKind::punc_semicolon ||
-         Next == TokenKind::punc_left_brace;
 }
 
 bool StartsWord(TokenKind Kind) {
@@ -90,9 +102,11 @@ bool StartsWord(TokenKind Kind) {
 std::string kelyra::lex::Format(const ParseResult &Parsed) {
   Writer Output;
   std::vector<bool> StructBraces;
+  std::vector<bool> AsmBraces;
   unsigned Parentheses = 0;
   TokenKind Previous = TokenKind::end;
   bool Annotation = false;
+  bool AsmChain = false;
 
   for (std::size_t Index = 0; Index < Parsed.tokens.size(); ++Index) {
     const auto &Token = Parsed.tokens[Index];
@@ -129,20 +143,27 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
           break;
       }
       StructBraces.push_back(IsStruct);
+      AsmBraces.push_back(Previous == TokenKind::keyword_asm);
       break;
     }
     case TokenKind::punc_right_brace: {
+      const bool WasAsm = !AsmBraces.empty() && AsmBraces.back();
       Output.PopIndent();
       Output.NewLine();
       Output.Write(Text);
       if (!StructBraces.empty())
         StructBraces.pop_back();
+      if (!AsmBraces.empty())
+        AsmBraces.pop_back();
       const auto Next = Index + 1 < Parsed.tokens.size()
                             ? Parsed.tokens[Index + 1].kind
                             : TokenKind::end;
       if (Next == TokenKind::keyword_else)
         Output.Space();
-      else
+      else if (WasAsm && Next == TokenKind::punc_dot) {
+        Output.NewLine();
+        AsmChain = true;
+      } else
         Output.NewLine(StructBraces.empty() && Next != TokenKind::end);
       break;
     }
@@ -156,6 +177,7 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
                                 Next != TokenKind::keyword_module &&
                                 Next != TokenKind::end;
       Output.NewLine(EndOfImports);
+      AsmChain = false;
       break;
     }
     case TokenKind::punc_comma:
@@ -174,14 +196,25 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
     case TokenKind::punc_right_paren:
       Output.TrimSpace();
       Output.Write(Text);
-      if (Token.kind == TokenKind::punc_right_paren)
+      if (Token.kind == TokenKind::punc_right_paren) {
         --Parentheses;
+        if (Annotation && Parentheses == 0) {
+          Output.NewLine();
+          Annotation = false;
+        }
+        const auto Next = Index + 1 < Parsed.tokens.size()
+                              ? Parsed.tokens[Index + 1].kind
+                              : TokenKind::end;
+        if (AsmChain && Next == TokenKind::punc_dot)
+          Output.NewLine();
+      }
       break;
     case TokenKind::punc_left_bracket:
       Output.Write(Text);
       break;
     case TokenKind::punc_left_paren:
       if (Previous == TokenKind::keyword_if ||
+          Previous == TokenKind::keyword_when ||
           Previous == TokenKind::keyword_while)
         Output.Space();
       Output.Write(Text);
@@ -195,18 +228,20 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       Output.Write(Text);
       Output.Space();
       break;
+    case TokenKind::asm_text:
+      Output.RawLines(Text);
+      break;
     default:
       if (IsOperator(Token.kind)) {
         const bool Unary = IsUnary(Parsed.tokens, Index);
-        const bool Pointer = IsPointerStar(Parsed.tokens, Index);
         if (Unary &&
             (StartsWord(Previous) || Previous == TokenKind::punc_right_paren ||
              Previous == TokenKind::punc_right_bracket))
           Output.Space();
-        if (!Unary && !Pointer)
+        if (!Unary)
           Output.Space();
         Output.Write(Text);
-        if (!Unary && !Pointer)
+        if (!Unary)
           Output.Space();
       } else {
         if (StartsWord(Token.kind) &&
@@ -214,7 +249,11 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
              Previous == TokenKind::punc_right_bracket))
           Output.Space();
         Output.Write(Text);
-        if (Annotation && Token.kind == TokenKind::name) {
+        const auto Next = Index + 1 < Parsed.tokens.size()
+                              ? Parsed.tokens[Index + 1].kind
+                              : TokenKind::end;
+        if (Annotation && Token.kind == TokenKind::name &&
+            Next != TokenKind::punc_dot && Next != TokenKind::punc_left_paren) {
           Output.NewLine();
           Annotation = false;
         }

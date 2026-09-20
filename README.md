@@ -50,7 +50,9 @@ module {
 }
 ```
 
-`src/IR/Kelyra.td` 定义项目自有 dialect；当前源程序生成使用 `func`、`arith`、`cf` 和 LLVM 标准 dialect。内置类型包括 `i8/i16/i32/i64/i128`、`u8/u16/u32/u64/u128`、`f32/f64/f128/f256/f512`、`bool` 和 `char`。`--emit-obj` 经 LLVM dialect 和 LLVM IR 生成本机目标文件；`--emit-exe` 再调用系统 `cc` 链接可执行文件，入口必须为 `fn main() -> i32`。`f256/f512` 使用 Kelyra 自有类型，目前只支持函数签名和透传，不能生成目标文件；其余数值类型支持当前算术子集。
+`src/IR/Kelyra.td` 定义项目自有 dialect；当前源程序生成使用 `func`、`arith`、`cf` 和 LLVM 标准 dialect。内置类型包括 `i8/i16/i32/i64/i128/isize`、`u8/u16/u32/u64/u128/usize`、`f32/f64/f128/f256/f512`、`bool` 和 `char`。`usize` 和 `isize` 使用本机指针宽度。`--emit-obj` 经 LLVM dialect 和 LLVM IR 生成本机目标文件；`--emit-exe` 再调用系统 `cc` 链接可执行文件，入口必须为 `fn main() -> i32`。`f256/f512` 使用 Kelyra 自有类型，目前只支持函数签名和透传，不能生成目标文件；其余数值类型支持当前算术子集。
+
+原始指针类型使用前缀 `*T`。`&value` 取得地址，`*pointer` 读取或写入指针指向的值；Kelyra 不区分可变与只读指针，也不进行借用或生命周期检查。
 
 定长数组支持多维声明和索引读写，例如 `i32[8][8]` 与
 `board[row][column]`；未显式初始化的局部数组会清零。可执行的八皇后示例位于
@@ -60,10 +62,12 @@ module {
 
 模块按文件组织，入口文件所在目录为模块根。`import math.vector;` 加载
 `math/vector.kly`；被导入文件必须声明 `module math.vector;`。声明默认私有，使用
-`pub fn` 才能供其他模块通过完整名称调用。
+`pub fn` 才能供其他模块调用。`import math.vector.*;` 会将该模块的
+公开函数导入当前作用域，因而可直接写 `answer()`。
 
 使用 `import c "header.h";` 可让 Clang 展开并解析 C 头文件，声明统一位于 `c`
-模块。`--c-source=file.c` 使用 Clang 编译 C 实现并参与可执行文件链接，例如：
+模块；再写 `import c.*;` 可不带 `c.` 前缀调用已导入的 C 函数。
+`--c-source=file.c` 使用 Clang 编译 C 实现并参与可执行文件链接，例如：
 
 普通代码应优先使用 Kelyra 类型；同位宽、同符号性的 Kelyra/C 数值标量可在 FFI
 边界直接传递，例如 `i64` 与 `c.longlong`。
@@ -81,7 +85,8 @@ module {
 ./build/bin/kelyra --emit-exe -o main tests/cli/main.kly
 ```
 
-语法范围、诊断与独立测试方式见 [基础前端说明](doc/frontend.md)。
+语法范围、诊断与独立测试方式见 [基础前端说明](doc/frontend.md)；
+内联汇编语法见 [`asm` 设计](doc/asm.md)。
 首次构建需要编译依赖，耗时较长；内存不足时降低 `--parallel`。
 `build/compile_commands.json` 可供 clangd 使用。
 

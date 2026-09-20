@@ -34,6 +34,53 @@ TEST(IRGen, IntegerFunction) {
   EXPECT_EQ(Output.find("kelyra."), std::string::npos);
 }
 
+TEST(IRGen, UserAnnotationMetadataDoesNotChangeLowering) {
+  lex::Lexer Lexer;
+  auto Parsed = Lexer.parse(R"(
+@target(function)
+annotation route(path: meta.string);
+@route("/")
+fn handler() -> i32 { return 0; }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+
+  mlir::MLIRContext Context;
+  codegen::IRGen Generator(Context, Analysis);
+  auto Module = Generator.Generate(*Parsed.root);
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*Module)));
+
+  std::string Output;
+  llvm::raw_string_ostream OS(Output);
+  Module->print(OS);
+  EXPECT_NE(Output.find("func.func private @handler"), std::string::npos);
+}
+
+TEST(IRGen, WhenEmitsOnlySelectedBranch) {
+  lex::Lexer Lexer;
+  auto Parsed = Lexer.parse(R"(
+fn choose() -> i32 {
+  when false { return 99; } else { return 7; }
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+
+  mlir::MLIRContext Context;
+  codegen::IRGen Generator(Context, Analysis);
+  auto Module = Generator.Generate(*Parsed.root);
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*Module)));
+
+  std::string Output;
+  llvm::raw_string_ostream OS(Output);
+  Module->print(OS);
+  EXPECT_NE(Output.find("arith.constant 7"), std::string::npos);
+  EXPECT_EQ(Output.find("arith.constant 99"), std::string::npos);
+  EXPECT_EQ(Output.find("cf.cond_br"), std::string::npos);
+}
+
 TEST(IRGen, RejectUnknownName) {
   lex::Lexer Lexer;
   auto Parsed = Lexer.parse(
@@ -54,11 +101,13 @@ fn id_i16(x: i16) -> i16 { return x; }
 fn id_i32(x: i32) -> i32 { return x; }
 fn id_i64(x: i64) -> i64 { return x; }
 fn id_i128(x: i128) -> i128 { return x; }
+fn id_isize(x: isize) -> isize { return x; }
 fn id_u8(x: u8) -> u8 { return x; }
 fn id_u16(x: u16) -> u16 { return x; }
 fn id_u32(x: u32) -> u32 { return x; }
 fn id_u64(x: u64) -> u64 { return x; }
 fn id_u128(x: u128) -> u128 { return x; }
+fn id_usize(x: usize) -> usize { return x; }
 fn id_f32(x: f32) -> f32 { return x; }
 fn id_f64(x: f64) -> f64 { return x; }
 fn id_f128(x: f128) -> f128 { return x; }
@@ -81,7 +130,9 @@ fn id_char(x: char) -> char { return x; }
   Module->print(OS);
   EXPECT_NE(Output.find("@id_i8(%arg0: i8) -> i8"), std::string::npos);
   EXPECT_NE(Output.find("@id_i128(%arg0: i128) -> i128"), std::string::npos);
+  EXPECT_NE(Output.find("@id_isize(%arg0: i64) -> i64"), std::string::npos);
   EXPECT_NE(Output.find("@id_u128(%arg0: i128) -> i128"), std::string::npos);
+  EXPECT_NE(Output.find("@id_usize(%arg0: i64) -> i64"), std::string::npos);
   EXPECT_NE(Output.find("@id_f128(%arg0: f128) -> f128"), std::string::npos);
   EXPECT_NE(Output.find("@id_f256(%arg0: !kelyra.f256) -> !kelyra.f256"),
             std::string::npos);

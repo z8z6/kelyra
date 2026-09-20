@@ -14,7 +14,7 @@ Kelyra 应当同时支持以下五个方向：
 | 编译 C 源文件 | 项目中可以直接加入 `.c`              |
 | 链接 C 库   | 支持静态库、动态库、系统库和 pkg-config   |
 | 导出给 C    | 自动生成 `.h` 和 C ABI 符号        |
-| 安全封装     | 在原始 C 接口上生成可选的安全 Kelyra API |
+| API 封装     | 在原始 C 接口上建立惯用的 Kelyra API     |
 
 理想体验应当是：
 
@@ -22,17 +22,15 @@ Kelyra 应当同时支持以下五个方向：
 import c "sqlite3.h" as sqlite;
 
 fn main() -> i32 {
-    var database: *mut sqlite.sqlite3 = null;
+    let database: *sqlite.sqlite3;
 
-    unsafe {
-        let result = sqlite.sqlite3_open(c"database.db", &database);
+    let result = sqlite.sqlite3_open(c"database.db", &database);
 
-        if result != sqlite.SQLITE_OK {
-            return result;
-        }
-
-        sqlite.sqlite3_close(database);
+    if result != sqlite.SQLITE_OK {
+        return result;
     }
+
+    sqlite.sqlite3_close(database);
 
     return 0;
 }
@@ -43,7 +41,7 @@ fn main() -> i32 {
 * 头文件由 Clang 解析
 * C 内容放入独立命名空间
 * C 字符串有明确语法
-* 原始 C 指针和调用位于 `unsafe`
+* 原始 C 指针和调用直接使用，正确性由程序员负责
 * 不需要 `bindgen`
 * 不需要手写几百行 `extern` 声明
 
@@ -100,12 +98,12 @@ flowchart TD
 | `ptrdiff_t`     | `c.ptrdiff`  |
 | `_Bool`         | `c.bool`     |
 | `wchar_t`       | `c.wchar`    |
-| `void*`         | `*mut void`  |
+| `void*`         | `*void`      |
 
 例如：
 
 ```kly
-extern "C" fn strlen(text: *const c.char) -> c.size;
+extern "C" fn strlen(text: *c.char) -> c.size;
 ```
 
 允许显式转换：
@@ -130,16 +128,14 @@ Kelyra 的 `str` 不应该隐式转换为 `char*`，因为 C 字符串涉及：
 建议提供 C 字符串字面量：
 
 ```kly
-let name: *const c.char = c"hello";
+let name: *c.char = c"hello";
 ```
 
 动态字符串使用拥有所有权的类型：
 
 ```kly
 let path = CString.from_str(user_path)?;
-unsafe {
-    c_api.open(path.ptr());
-}
+c_api.open(path.ptr());
 ```
 
 区分：
@@ -148,12 +144,12 @@ unsafe {
 str                 // Kelyra UTF-8 字符串视图
 String              // Kelyra 拥有的字符串
 CString             // 拥有的 NUL 结尾 C 字符串
-*const c.char       // 原始 C 字符指针
+*c.char             // 原始 C 字符指针
 ```
 
 不要自动猜测。
 
-## 五、原始层和安全层必须分开
+## 五、原始层和惯用封装分开
 
 C 接口本身没有足够的信息表达：
 
@@ -164,34 +160,30 @@ C 接口本身没有足够的信息表达：
 * 回调何时失效
 * 函数是否线程安全
 
-因此导入的原始接口默认应该是 `unsafe`：
+导入的原始接口可以直接调用：
 
 ```kly
 import c "libpng.h" as png;
 
-unsafe {
-    let image = png.png_create_read_struct(...);
-}
+let image = png.png_create_read_struct(...);
 ```
 
-用户或工具可以在其上建立安全包装：
+用户或工具可以在其上建立惯用包装：
 
 ```kly
 struct PngReader {
-    raw: *mut png.png_struct,
+    raw: *png.png_struct,
 }
 
 impl Drop for PngReader {
-    fn drop(self: &mut Self) {
-        unsafe {
-            png.png_destroy_read_struct(&self.raw, null, null);
-        }
+    fn drop(self: *Self) {
+        png.png_destroy_read_struct(&self.raw, null, null);
     }
 }
 
 impl PngReader {
-    pub fn open(path: &Path) -> Result[PngReader, PngError] {
-        // 安全封装
+    pub fn open(path: *Path) -> Result[PngReader, PngError] {
+        // 惯用封装
     }
 }
 ```
@@ -256,7 +248,7 @@ opaque struct sqlite.sqlite3;
 只能通过指针操作：
 
 ```kly
-let db: *mut sqlite.sqlite3;
+let db: *sqlite.sqlite3;
 ```
 
 ### 位域
@@ -293,8 +285,8 @@ extern "stdcall" fn legacy_api(...) -> c.int;
 函数指针：
 
 ```kly
-let callback: *const extern "C" fn(
-    context: *mut void,
+let callback: *extern "C" fn(
+    context: *void,
     value: c.int,
 ) -> c.int;
 ```
@@ -317,17 +309,15 @@ let callback: *const extern "C" fn(
 
 ```kly
 extern "C" fn compare(
-    lhs: *const void,
-    rhs: *const void,
+    lhs: *void,
+    rhs: *void,
 ) -> c.int {
-    let a = unsafe cast[*const i32](lhs);
-    let b = unsafe cast[*const i32](rhs);
-    return unsafe { *a - *b };
+    let a = cast[*i32](lhs);
+    let b = cast[*i32](rhs);
+    return *a - *b;
 }
 
-unsafe {
-    libc.qsort(data.ptr(), data.len(), sizeof[i32], compare);
-}
+libc.qsort(data.ptr(), data.len(), sizeof[i32], compare);
 ```
 
 带状态回调使用常见的 `context` 指针：
@@ -338,13 +328,11 @@ struct CallbackState {
 }
 
 extern "C" fn callback(
-    context: *mut void,
+    context: *void,
     value: c.int,
 ) {
-    let state = unsafe cast[*mut CallbackState](context);
-    unsafe {
-        state.count += 1;
-    }
+    let state = cast[*CallbackState](context);
+    state.count += 1;
 }
 ```
 
@@ -378,12 +366,10 @@ sqlite.BUFFER_SIZE
 
 ### 3. 函数式宏
 
-常见宏可以作为 `unsafe` pseudo-function：
+常见宏可以作为编译器生成的 pseudo-function：
 
 ```kly
-unsafe {
-    libc.FD_SET(fd, &set);
-}
+libc.FD_SET(fd, &set);
 ```
 
 内部仍由 Clang 处理展开。
@@ -413,9 +399,7 @@ int kelyra_MY_DECLARE_wrapper(...) {
 需要支持：
 
 ```kly
-unsafe {
-    libc.printf(c"value = %d\n", value);
-}
+libc.printf(c"value = %d\n", value);
 ```
 
 但必须遵循 C 默认参数提升：
@@ -429,14 +413,14 @@ unsafe {
 
 ```kly
 libc.printf(c"%s", 42);
-// 错误：%s 需要 *const c.char，但传入了 i32
+// 错误：%s 需要 *c.char，但传入了 i32
 ```
 
 对于自定义可变参数函数：
 
 ```kly
 @c_format("printf", format_index = 1, args_index = 2)
-extern "C" fn log(format: *const c.char, ...) -> c.int;
+extern "C" fn log(format: *c.char, ...) -> c.int;
 ```
 
 ## 十一、Kelyra 导出给 C
@@ -497,7 +481,7 @@ int kelyra_add(int a, int b);
 
 ```kly
 @c_export("process")
-extern "C" fn process(input: *const Data) -> c.int {
+extern "C" fn process(input: *Data) -> c.int {
     // panic 默认在边界处 abort
 }
 ```
@@ -507,7 +491,7 @@ extern "C" fn process(input: *const Data) -> c.int {
 ```kly
 @c_export("process")
 @panic_to_error(-1)
-extern "C" fn process(input: *const Data) -> c.int {
+extern "C" fn process(input: *Data) -> c.int {
     // panic 转换为 -1
 }
 ```
@@ -523,7 +507,7 @@ extern "C" fn load() -> Result[Data, Error];
 
 ```kly
 extern "C" fn load(
-    output: *mut Data,
+    output: *Data,
 ) -> c.int;
 ```
 
@@ -632,7 +616,7 @@ C++ ABI 包含：
 * TLS
 * 特殊 calling convention
 
-### 第五阶段：安全封装生成器
+### 第五阶段：API 封装生成器
 
 * ownership annotation
 * nullability

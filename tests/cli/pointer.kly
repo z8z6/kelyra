@@ -1,0 +1,6 @@
+fn main() -> i32 {
+  let value: i32 = 41;
+  let pointer: *i32 = &value;
+  *pointer = *pointer + 1;
+  return value;
+}

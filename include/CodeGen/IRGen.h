@@ -42,8 +42,26 @@ class IRGen {
   Variable *FindVariable(std::string_view Name);
   mlir::Value CreateAlloca(const sema::Type &Type, mlir::Location Loc);
   mlir::Value EmitAddress(const lex::Node &Expression);
+  mlir::Value EmitNameExpression(const lex::Node &Expression);
+  mlir::Value EmitIndexExpression(const lex::Node &Expression);
+  mlir::Value EmitCallExpression(const lex::Node &Expression);
+  mlir::Value EmitLiteralExpression(const lex::Node &Expression);
+  mlir::Value EmitGroupExpression(const lex::Node &Expression);
+  mlir::Value EmitUnaryExpression(const lex::Node &Expression);
+  mlir::Value EmitBinaryExpression(const lex::Node &Expression);
   mlir::Value EmitExpression(const lex::Node &Expression);
   void EmitBlock(const lex::Node &Block);
+  void EmitBlockStatement(const lex::Node &Statement);
+  void EmitLetStatement(const lex::Node &Statement);
+  void EmitAssignStatement(const lex::Node &Statement);
+  void EmitExpressionStatement(const lex::Node &Statement);
+  void EmitAsmStatement(const lex::Node &Statement);
+  void EmitReturnStatement(const lex::Node &Statement);
+  void EmitBreakStatement(const lex::Node &Statement);
+  void EmitContinueStatement(const lex::Node &Statement);
+  void EmitIfStatement(const lex::Node &Statement);
+  void EmitWhenStatement(const lex::Node &Statement);
+  void EmitWhileStatement(const lex::Node &Statement);
   void EmitStatement(const lex::Node &Statement);
   void EmitFunction(const lex::Node &Function);
 

@@ -2,8 +2,8 @@ import c "print.h";
 
 pub fn main() -> i32 {
   let pair: c.Pair = c.make_pair(20, 22);
-  let pointer: c.Pair* = c.pair_pointer();
-  let total = c.sum_many(2, c.sum_pair(pair), c.sum_pair_pointer(pointer));
+  let pointer: *c.Pair = c.pair_pointer();
+  let total = c.sum_many(3, c.sum_pair(pair), c.sum_pair_pointer(pointer), c.sum_pair(*pointer));
   c.print_format("total=%d\n", total);
   return 0;
 }

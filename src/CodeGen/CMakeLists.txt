@@ -1,4 +1,4 @@
-add_library(kelyra_codegen IRGen.cpp)
+add_library(kelyra_codegen Expression.cpp IRGen.cpp Statement.cpp)
 get_directory_property(KELYRA_LLVM_NATIVE_ARCH
   DIRECTORY "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm"
   DEFINITION LLVM_NATIVE_ARCH
@@ -11,6 +11,7 @@ target_include_directories(kelyra_codegen SYSTEM PUBLIC
   "${PROJECT_BINARY_DIR}/llvm/tools/mlir/include"
 )
 target_link_libraries(kelyra_codegen PUBLIC
+  LLVM${KELYRA_LLVM_NATIVE_ARCH}AsmParser
   LLVM${KELYRA_LLVM_NATIVE_ARCH}CodeGen
   LLVM${KELYRA_LLVM_NATIVE_ARCH}Desc
   LLVM${KELYRA_LLVM_NATIVE_ARCH}Info

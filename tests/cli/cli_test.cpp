@@ -102,12 +102,66 @@ TEST(CLI, EmitExecutable) {
       << error;
 }
 
+TEST(CLI, InlineAssemblyAndForwardFunction) {
+  llvm::SmallString<128> executablePath;
+  llvm::sys::fs::createUniquePath("kelyra-asm-%%%%%%%%", executablePath, true);
+  llvm::FileRemover removeExecutable(executablePath);
+  run({"--emit-exe", "-o", executablePath, KELYRA_TEST_DIR "/asm_forward.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> args{executablePath};
+  std::string error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(executablePath, args, std::nullopt, {},
+                                      10, 0, &error),
+            42)
+      << error;
+}
+
+TEST(CLI, RejectInvalidInlineAssemblyRegister) {
+  llvm::SmallString<128> objectPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("kelyra-invalid-asm", "o",
+                                                  objectPath));
+  llvm::FileRemover removeObject(objectPath);
+  run({"--emit-obj", "-o", objectPath, KELYRA_TEST_DIR "/invalid_asm.kly"}, 1,
+      "", "could not allocate output register");
+}
+
+TEST(CLI, PointerAddressAndDereference) {
+  llvm::SmallString<128> executablePath;
+  llvm::sys::fs::createUniquePath("kelyra-pointer-%%%%%%%%", executablePath,
+                                  true);
+  llvm::FileRemover removeExecutable(executablePath);
+  run({"--emit-exe", "-o", executablePath, KELYRA_TEST_DIR "/pointer.kly"}, 0,
+      "", "");
+  llvm::SmallVector<llvm::StringRef> args{executablePath};
+  std::string error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(executablePath, args, std::nullopt, {},
+                                      10, 0, &error),
+            42)
+      << error;
+}
+
 TEST(CLI, EmitExecutableWithModules) {
   llvm::SmallString<128> executablePath;
   llvm::sys::fs::createUniquePath("kelyra-modules-%%%%%%%%", executablePath,
                                   true);
   llvm::FileRemover removeExecutable(executablePath);
   run({"--emit-exe", "-o", executablePath, KELYRA_TEST_DIR "/modules/main.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> args{executablePath};
+  std::string error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(executablePath, args, std::nullopt, {},
+                                      10, 0, &error),
+            42)
+      << error;
+}
+
+TEST(CLI, EmitExecutableWithWildcardImport) {
+  llvm::SmallString<128> executablePath;
+  llvm::sys::fs::createUniquePath("kelyra-wildcard-%%%%%%%%", executablePath,
+                                  true);
+  llvm::FileRemover removeExecutable(executablePath);
+  run({"--emit-exe", "-o", executablePath,
+       KELYRA_TEST_DIR "/modules/wildcard_main.kly"},
       0, "", "");
   llvm::SmallVector<llvm::StringRef> args{executablePath};
   std::string error;
@@ -166,7 +220,7 @@ TEST(CLI, CallCWithStructPointerAndVarargs) {
       << error;
   auto output = llvm::MemoryBuffer::getFile(outputPath);
   ASSERT_TRUE(bool(output));
-  EXPECT_TRUE((*output)->getBuffer().contains("total=84"));
+  EXPECT_TRUE((*output)->getBuffer().contains("total=126"));
 }
 
 TEST(CLI, RejectPrivateModuleFunction) {

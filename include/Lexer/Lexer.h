@@ -14,10 +14,11 @@ struct Token {
   Location Loc;
 };
 
-// Children are in source order. Declarations: annotations first; Function:
-// parameters, optional return type, body; Let: name, optional type, optional
-// initializer; If: condition, then, optional else. Text holds a name, operator,
-// literal spelling, or "let"/"mut" for Let.
+// Children are in source order. Declarations: annotations first. Annotation
+// declarations: parameters with type and optional default. Functions:
+// parameters, optional return type, body. Let: name, optional type, optional
+// initializer. If/When: condition, then, optional else. Text holds a name,
+// operator, literal spelling, or "let" for Let.
 struct Node {
   TokenKind kind;
   Location Loc;
@@ -48,7 +49,7 @@ class Lexer {
   static TokenKind keyword(std::string_view s);
   static TokenKind punctuation(std::string_view s);
   void lex();
-  const Token &peek() const;
+  const Token &peek(std::size_t Offset = 0) const;
   std::string_view spelling(const Token &token) const;
   bool at(std::string_view spelling) const;
   bool end() const;
@@ -58,7 +59,7 @@ class Lexer {
   [[noreturn]] void fail(Location Loc, DiagnosticKind Kind);
   Token expect(std::string_view spelling);
   Token name();
-  Ptr qualified(TokenKind Kind);
+  Ptr qualified(TokenKind Kind, bool AllowWildcard = false);
   class Guard {
     Lexer &lexer;
 
@@ -69,11 +70,13 @@ class Lexer {
   Ptr node(TokenKind kind, Location Loc, std::string text = {});
   void add(Node &parent, Ptr child);
   Ptr type();
+  Ptr annotation();
   static int binding(std::string_view op);
   static bool comparison(const Node &node);
   Ptr expr(int minBp = 0);
   void recover(bool top, std::size_t start);
   Ptr block();
+  Ptr assembly();
   Ptr stmt();
   Ptr decl();
   void run();

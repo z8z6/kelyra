@@ -47,6 +47,7 @@ TEST(Frontend, ExpressionAst) {
   expression("!f()", "(Unary \"!\" (Call (Name \"f\")))");
   expression("1.25e-3", "(Literal \"1.25e-3\")");
   expression("true", "(Literal \"true\")");
+  expression("meta(*u8)", "(Meta (PointerType (Type \"u8\")))");
   expression("\"a\\n\"", "(Literal \"\\\"a\\\\n\\\"\")");
   expression(
       "a / b % c",
@@ -56,7 +57,8 @@ TEST(Frontend, ExpressionAst) {
 TEST(Frontend, Format) {
   auto Parsed = lexer.parse(
       "module app.main; import math.vector; @Vertex struct Pair{left:i32,"
-      "right:i32[4],} pub fn main()->i32{let x:c.Pair*=c.make(1,);if !x{"
+      "right:i32[4],} pub fn main()->i32{let x:*c.Pair=c.make(1,);let value=1;"
+      "let pointer:*i32=&value;*pointer=*pointer+1;if !x{"
       "return -1;}else{return 0;}} // end\n");
   ASSERT_TRUE(Parsed.ok());
   const std::string Expected = "module app.main;\n"
@@ -67,7 +69,10 @@ TEST(Frontend, Format) {
                                "  right: i32[4],\n"
                                "}\n\n"
                                "pub fn main() -> i32 {\n"
-                               "  let x: c.Pair* = c.make(1,);\n"
+                               "  let x: *c.Pair = c.make(1,);\n"
+                               "  let value = 1;\n"
+                               "  let pointer: *i32 = &value;\n"
+                               "  *pointer = *pointer + 1;\n"
                                "  if !x {\n"
                                "    return -1;\n"
                                "  } else {\n"
@@ -99,6 +104,8 @@ TEST(Frontend, ExpressionValidation) {
     expression("a " + op + " b",
                "(Binary \"" + op + "\" (Name \"a\") (Name \"b\"))");
   expression("+x", "(Unary \"+\" (Name \"x\"))");
+  expression("*pointer", "(Unary \"*\" (Name \"pointer\"))");
+  expression("&value", "(Unary \"&\" (Name \"value\"))");
 }
 
 TEST(Frontend, TokensAndComments) {
@@ -117,16 +124,17 @@ TEST(Frontend, TokensAndComments) {
 
 TEST(Frontend, TokenKinds) {
   auto result = lexer.parseExpression(
-      "name 1 \"s\" let mut fn struct if else while return break continue "
+      "name 1 \"s\" let fn struct annotation if else while return break "
+      "continue "
       "true false meta when parallel extern defer module import pub -> = + - "
-      "* / % == != < <= > >= && || ! ( ) { } [ ] , : ; . @");
+      "* / % == != < <= > >= && || ! & ( ) { } [ ] , : ; . @");
   const std::vector<TokenKind> expected = {TokenKind::name,
                                            TokenKind::number,
                                            TokenKind::string,
                                            TokenKind::keyword_let,
-                                           TokenKind::keyword_mut,
                                            TokenKind::keyword_fn,
                                            TokenKind::keyword_struct,
+                                           TokenKind::keyword_annotation,
                                            TokenKind::keyword_if,
                                            TokenKind::keyword_else,
                                            TokenKind::keyword_while,
@@ -159,6 +167,7 @@ TEST(Frontend, TokenKinds) {
                                            TokenKind::op_and,
                                            TokenKind::op_or,
                                            TokenKind::op_not,
+                                           TokenKind::op_address,
                                            TokenKind::punc_left_paren,
                                            TokenKind::punc_right_paren,
                                            TokenKind::punc_left_brace,
@@ -177,6 +186,47 @@ TEST(Frontend, TokenKinds) {
   EXPECT_EQ(actual, expected);
   EXPECT_EQ(lexer.parseExpression("include").tokens.front().kind,
             TokenKind::name);
+  EXPECT_EQ(lexer.parseExpression("mut").tokens.front().kind, TokenKind::name);
+}
+
+TEST(Frontend, UserDefinedAnnotations) {
+  const std::string Source = R"(
+@target(function)
+pub annotation route(path: meta.string, method: meta.string = "GET",);
+
+@route("/users", method = "POST")
+fn create_user() -> i32 { return 0; }
+)";
+  auto Parsed = lexer.parse(Source);
+  ASSERT_TRUE(Parsed.ok());
+  EXPECT_EQ(lexer.dumpAst(*Parsed.root),
+            "(Module (AnnotationDecl \"route\" (Annotation \"target\" "
+            "(AnnotationArgument (Name \"function\"))) (Public) "
+            "(AnnotationParameter \"path\" (Type \"meta.string\")) "
+            "(AnnotationParameter \"method\" (Type \"meta.string\") "
+            "(Literal \"\\\"GET\\\"\"))) (Function \"create_user\" "
+            "(Annotation \"route\" (AnnotationArgument (Literal "
+            "\"\\\"/users\\\"\")) (AnnotationArgument \"method\" (Literal "
+            "\"\\\"POST\\\"\"))) (Type \"i32\") (Block (Return (Literal "
+            "\"0\")))))");
+
+  const auto Formatted = Format(Parsed);
+  auto Reparsed = lexer.parse(Formatted);
+  ASSERT_TRUE(Reparsed.ok()) << Formatted;
+  EXPECT_EQ(Format(Reparsed), Formatted);
+}
+
+TEST(Frontend, WhenStatement) {
+  auto Parsed = lexer.parse(
+      "fn choose() -> i32 { when meta(choose).is_public { return 1; } "
+      "else when false { return 2; } else { return 3; } }");
+  ASSERT_TRUE(Parsed.ok());
+  EXPECT_EQ(lexer.dumpAst(*Parsed.root),
+            "(Module (Function \"choose\" (Type \"i32\") (Block (When "
+            "(Member \"is_public\" (Meta (Type \"choose\"))) (Block "
+            "(Return (Literal \"1\"))) (When (Literal \"false\") (Block "
+            "(Return (Literal \"2\"))) (Block (Return (Literal "
+            "\"3\"))))))))");
 }
 
 TEST(Frontend, ModuleImportsAndVisibility) {
@@ -188,6 +238,32 @@ TEST(Frontend, ModuleImportsAndVisibility) {
             "(Function \"main\" (Public) (Type \"i32\") (Block (Return "
             "(Call (Member \"answer\" (Member \"vector\" (Name "
             "\"math\"))))))))");
+}
+
+TEST(Frontend, WildcardImport) {
+  auto Parsed = lexer.parse("import math.vector.*; fn main() { return; }");
+  ASSERT_TRUE(Parsed.ok());
+  EXPECT_EQ(lexer.dumpAst(*Parsed.root),
+            "(Module (Import \"math.vector.*\") (Function \"main\" (Block "
+            "(Return))))");
+  EXPECT_EQ(Format(Parsed),
+            "import math.vector.*;\n\nfn main() {\n  return;\n}\n");
+}
+
+TEST(Frontend, InlineAssembly) {
+  auto Parsed = lexer.parse(R"(
+fn add(left: i32, right: i32) -> i32 {
+  let result: i32 = left;
+  asm {
+    add {result}, {right}
+  }.in(result).in(right).out(result).op(intel, nomem, nostack);
+  return result;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Ast = lexer.dumpAst(*Parsed.root);
+  EXPECT_NE(Ast.find("(Asm \""), std::string::npos);
+  EXPECT_NE(Ast.find("add {result}, {right}"), std::string::npos);
 }
 
 TEST(Frontend, TokenLocations) {
@@ -208,7 +284,7 @@ TEST(Frontend, ModuleAst) {
 @Vertex
 struct Pair { left: i32, right: i32[4], }
 fn choose(x: i32, y: i32,) -> i32 {
-  let mut z: i32 = x + y;
+  let z: i32 = x + y;
   let inferred = false;
   let pending: i32;
   while z > 0 {

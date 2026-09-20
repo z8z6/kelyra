@@ -1,0 +1,9 @@
+fn main() -> i32 {
+  let value: i32 = 0;
+  asm {
+    nop
+  }
+  .out(value, not_a_register)
+  .op(nomem, nostack);
+  return value;
+}

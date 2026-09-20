@@ -101,18 +101,24 @@ class ModuleLoader {
                 .string());
         continue;
       }
-      const auto Known = States.find(Child->text);
+      const bool Wildcard = Child->text.ends_with(".*");
+      const auto Imported = Wildcard
+                                ? Child->text.substr(0, Child->text.size() - 2)
+                                : Child->text;
+      if (Imported == "c")
+        continue;
+      const auto Known = States.find(Imported);
       if (Known != States.end()) {
         if (Known->second == State::Loading) {
           std::cerr << Module.Path << ": error: cyclic module import '"
-                    << Child->text << "'\n";
+                    << Imported << "'\n";
           return false;
         }
         continue;
       }
-      auto Relative = Child->text;
+      auto Relative = Imported;
       std::replace(Relative.begin(), Relative.end(), '.', '/');
-      if (!Load(Root / (Relative + ".kly"), Child->text, false))
+      if (!Load(Root / (Relative + ".kly"), Imported, false))
         return false;
     }
     if (!Name.empty())

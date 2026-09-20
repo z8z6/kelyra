@@ -15,16 +15,18 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Number";
   case TokenKind::string:
     return "String";
+  case TokenKind::asm_text:
+    return "AsmText";
   case TokenKind::keyword_let:
     return "let";
   case TokenKind::keyword_var:
     return "var";
-  case TokenKind::keyword_mut:
-    return "mut";
   case TokenKind::keyword_fn:
     return "fn";
   case TokenKind::keyword_struct:
     return "struct";
+  case TokenKind::keyword_annotation:
+    return "annotation";
   case TokenKind::keyword_if:
     return "if";
   case TokenKind::keyword_else:
@@ -57,6 +59,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "import";
   case TokenKind::keyword_pub:
     return "pub";
+  case TokenKind::keyword_asm:
+    return "asm";
   case TokenKind::op_arrow:
     return "->";
   case TokenKind::op_assign:
@@ -89,6 +93,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "||";
   case TokenKind::op_not:
     return "!";
+  case TokenKind::op_address:
+    return "&";
   case TokenKind::punc_left_paren:
     return "(";
   case TokenKind::punc_right_paren:
@@ -125,6 +131,12 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Public";
   case TokenKind::ast_annotation:
     return "Annotation";
+  case TokenKind::ast_annotation_decl:
+    return "AnnotationDecl";
+  case TokenKind::ast_annotation_parameter:
+    return "AnnotationParameter";
+  case TokenKind::ast_annotation_argument:
+    return "AnnotationArgument";
   case TokenKind::ast_function:
     return "Function";
   case TokenKind::ast_parameter:
@@ -149,12 +161,22 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Return";
   case TokenKind::ast_if:
     return "If";
+  case TokenKind::ast_when:
+    return "When";
   case TokenKind::ast_while:
     return "While";
   case TokenKind::ast_break:
     return "Break";
   case TokenKind::ast_continue:
     return "Continue";
+  case TokenKind::ast_asm:
+    return "Asm";
+  case TokenKind::ast_asm_input:
+    return "AsmInput";
+  case TokenKind::ast_asm_output:
+    return "AsmOutput";
+  case TokenKind::ast_asm_option:
+    return "AsmOption";
   case TokenKind::ast_expr_stmt:
     return "ExprStmt";
   case TokenKind::ast_literal:
@@ -173,6 +195,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Member";
   case TokenKind::ast_group:
     return "Group";
+  case TokenKind::ast_meta:
+    return "Meta";
   }
   assert("Some token doesn't have a name!");
   return "Unknown";

@@ -46,24 +46,33 @@ enum class DiagnosticKind {
                                        // declaration.
   ExpectedTypeAnnotationOrInitializer, // Let needs a type or initializer.
   InvalidAssignmentTarget,             // Assignment target is not writable.
-  ExpectedFunctionOrStruct, // Expected a function or struct declaration.
-  ExpectedEndOfExpression,  // Tokens remain after the expression.
-  DuplicateFunction,        // Function name is already declared.
-  DuplicateParameter,       // Parameter name is already declared.
-  UnsupportedType,          // Type is not supported by IR generation.
-  UnsupportedDeclaration,   // Declaration is not supported by IR generation.
-  UnsupportedStatement,     // Statement is not supported by IR generation.
-  UnsupportedExpression,    // Expression is not supported by IR generation.
-  UnknownName,              // Name cannot be resolved.
-  InvalidIntegerLiteral,    // Integer literal does not fit its target type.
-  MissingReturn,            // Function does not return a value.
-  TypeMismatch,             // Expression type does not match its context.
-  MissingEntrypoint,        // Executable has no main function.
-  InvalidEntrypoint,        // Main must have the executable ABI signature.
-  DuplicateModule,          // Module name is already defined.
-  UnknownModule,            // Imported module cannot be resolved.
-  PrivateDeclaration,       // Declaration is private to another module.
-  Count,                    // Number of diagnostic kinds.
+  ExpectedDeclaration,                 // Expected a top-level declaration.
+  ExpectedEndOfExpression,             // Tokens remain after the expression.
+  DuplicateFunction,                   // Function name is already declared.
+  DuplicateParameter,                  // Parameter name is already declared.
+  DuplicateAnnotation,          // Annotation is repeated or already declared.
+  DuplicateAnnotationParameter, // Annotation parameter is repeated.
+  UnknownAnnotation,            // Annotation name cannot be resolved.
+  InvalidAnnotation,            // Annotation declaration or arguments invalid.
+  InvalidAnnotationTarget,      // Annotation cannot target this declaration.
+  MetaValueInRuntimeExpression, // Reflection metadata cannot escape.
+  InvalidWhenCondition,         // When requires a compile-time boolean.
+  UnsupportedType,              // Type is not supported by IR generation.
+  UnsupportedDeclaration, // Declaration is not supported by IR generation.
+  UnsupportedStatement,   // Statement is not supported by IR generation.
+  InvalidInlineAssembly,  // Inline assembly constraints are invalid.
+  UnsupportedExpression,  // Expression is not supported by IR generation.
+  UnknownName,            // Name cannot be resolved.
+  AmbiguousName,          // Name is provided by multiple wildcard imports.
+  InvalidIntegerLiteral,  // Integer literal does not fit its target type.
+  MissingReturn,          // Function does not return a value.
+  TypeMismatch,           // Expression type does not match its context.
+  MissingEntrypoint,      // Executable has no main function.
+  InvalidEntrypoint,      // Main must have the executable ABI signature.
+  DuplicateModule,        // Module name is already defined.
+  UnknownModule,          // Imported module cannot be resolved.
+  PrivateDeclaration,     // Declaration is private to another module.
+  Count,                  // Number of diagnostic kinds.
 };
 
 struct Diagnostic {

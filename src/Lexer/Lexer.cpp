@@ -118,11 +118,43 @@ void Lexer::lex() {
       if (nesting)
         error(l, DiagnosticKind::UnterminatedBlockComment);
     } else {
+      if (c == '{' && !result.tokens.empty() &&
+          result.tokens.back().kind == TokenKind::keyword_asm) {
+        result.tokens.push_back({TokenKind::punc_left_brace,
+                                 {result.File, l, tokenLine, tokenColumn, 1}});
+        advance(l, r);
+        const auto BodyStart = r;
+        const auto BodyLine = line;
+        const auto BodyColumn = column;
+        std::size_t Nesting = 1;
+        while (r < s.size() && Nesting != 0) {
+          if (s[r] == '{')
+            ++Nesting;
+          else if (s[r] == '}')
+            --Nesting;
+          if (Nesting != 0)
+            ++r;
+        }
+        result.tokens.push_back(
+            {TokenKind::asm_text,
+             {result.File, BodyStart, BodyLine, BodyColumn, r - BodyStart}});
+        advance(BodyStart, r);
+        if (r == s.size()) {
+          result.diagnostics.push_back({DiagnosticKind::ExpectedRightBrace,
+                                        {result.File, r, line, column, 0}});
+          continue;
+        }
+        result.tokens.push_back(
+            {TokenKind::punc_right_brace, {result.File, r, line, column, 1}});
+        advance(r, r + 1);
+        ++r;
+        continue;
+      }
       const auto pair = std::string_view(s).substr(l, 2);
       if (pair == "->" || pair == "==" || pair == "!=" || pair == "<=" ||
           pair == ">=" || pair == "&&" || pair == "||")
         ++r;
-      else if (std::string_view("(){}[],:;.@+-*/%!=<>").find(c) ==
+      else if (std::string_view("(){}[],:;.@+-*/%!=<>&").find(c) ==
                std::string_view::npos) {
         error(l, DiagnosticKind::UnexpectedCharacter);
         advance(l, r);
@@ -138,7 +170,17 @@ void Lexer::lex() {
 }
 
 struct ParseError {};
-const Token &Lexer::peek() const { return result.tokens[pos]; }
+const Token &Lexer::peek(std::size_t Offset) const {
+  auto Index = pos;
+  while (Offset != 0 && Index + 1 < result.tokens.size()) {
+    ++Index;
+    while (Index + 1 < result.tokens.size() &&
+           result.tokens[Index].kind == TokenKind::comment)
+      ++Index;
+    --Offset;
+  }
+  return result.tokens[Index];
+}
 
 std::string_view Lexer::spelling(const Token &token) const {
   return std::string_view(result.source)
@@ -203,10 +245,16 @@ Token Lexer::name() {
   return take();
 }
 
-Lexer::Ptr Lexer::qualified(TokenKind Kind) {
+Lexer::Ptr Lexer::qualified(TokenKind Kind, bool AllowWildcard) {
   const auto first = name();
   auto result = node(Kind, first.Loc, std::string(spelling(first)));
   while (eat(".")) {
+    if (AllowWildcard && at("*")) {
+      const auto Part = take();
+      result->text += ".*";
+      result->Loc.Len = Part.Loc.End() - result->Loc.Offset;
+      break;
+    }
     const auto part = name();
     result->text += ".";
     result->text += spelling(part);
@@ -238,14 +286,26 @@ void Lexer::add(Node &parent, Ptr child) {
 
 Lexer::Ptr Lexer::type() {
   Guard guard(*this);
-  auto result = qualified(K::ast_type);
-  while (at("*") || at("[")) {
-    if (eat("*")) {
-      auto pointer = node(K::ast_pointer_type, result->Loc);
-      add(*pointer, std::move(result));
-      result = std::move(pointer);
-      continue;
+  if (at("*")) {
+    const auto Loc = take().Loc;
+    auto pointer = node(K::ast_pointer_type, Loc);
+    add(*pointer, type());
+    return pointer;
+  }
+  Ptr result;
+  if (peek().kind == K::keyword_meta) {
+    const auto Meta = take();
+    result = node(K::ast_type, Meta.Loc, "meta");
+    while (eat(".")) {
+      const auto Part = name();
+      result->text += ".";
+      result->text += spelling(Part);
+      result->Loc.Len = Part.Loc.End() - result->Loc.Offset;
     }
+  } else {
+    result = qualified(K::ast_type);
+  }
+  while (at("[")) {
     take();
     auto array = node(K::ast_array_type, result->Loc);
     if (peek().kind != TokenKind::number ||
@@ -259,6 +319,41 @@ Lexer::Ptr Lexer::type() {
     result = std::move(array);
   }
   return result;
+}
+
+Lexer::Ptr Lexer::annotation() {
+  const auto Start = expect("@").Loc;
+  auto Result = qualified(K::ast_annotation);
+  const auto NameEnd = Result->Loc.End();
+  Result->Loc.Offset = Start.Offset;
+  Result->Loc.Line = Start.Line;
+  Result->Loc.Column = Start.Column;
+  if (!eat("(")) {
+    Result->Loc.Len = NameEnd - Start.Offset;
+    return Result;
+  }
+  if (!at(")")) {
+    do {
+      auto Argument = node(K::ast_annotation_argument, peek().Loc);
+      if (peek().kind == K::name && spelling(peek(1)) == "=") {
+        const auto Name = take();
+        Argument->text = spelling(Name);
+        take();
+      }
+      if (peek().kind == K::keyword_annotation ||
+          peek().kind == K::keyword_struct ||
+          peek().kind == K::keyword_module) {
+        const auto Value = take();
+        add(*Argument,
+            node(K::ast_name, Value.Loc, std::string(spelling(Value))));
+      } else {
+        add(*Argument, expr());
+      }
+      add(*Result, std::move(Argument));
+    } while (eat(",") && !at(")"));
+  }
+  Result->Loc.Len = expect(")").Loc.End() - Start.Offset;
+  return Result;
 }
 
 int Lexer::binding(std::string_view op) {
@@ -298,7 +393,14 @@ Lexer::Ptr Lexer::expr(int minBp) {
              token.kind == TokenKind::keyword_false) {
     take();
     lhs = node(K::ast_literal, token.Loc, std::string(text));
-  } else if (text == "-" || text == "!" || text == "+") {
+  } else if (token.kind == TokenKind::keyword_meta) {
+    take();
+    lhs = node(K::ast_meta, token.Loc);
+    expect("(");
+    add(*lhs, type());
+    lhs->Loc.Len = expect(")").Loc.End() - lhs->Loc.Offset;
+  } else if (text == "-" || text == "!" || text == "+" || text == "*" ||
+             text == "&") {
     take();
     lhs = node(K::ast_unary, token.Loc, std::string(text));
     add(*lhs, expr(70));
@@ -357,10 +459,12 @@ void Lexer::recover(bool top, std::size_t start) {
   if (pos == start && !end() && !(at("}") && !top))
     take();
   while (!end()) {
-    if (at("fn") || at("struct") || (top && (at("@") || at("pub"))))
+    if (at("fn") || at("struct") || at("annotation") ||
+        (top && (at("@") || at("pub"))))
       return;
     if (!top &&
-        (at("}") || at("let") || at("return") || at("if") || at("while")))
+        (at("}") || at("let") || at("return") || at("if") || at("when") ||
+         at("while") || at("asm") || at("break") || at("continue")))
       return;
     if (eat(";"))
       return;
@@ -373,7 +477,7 @@ Lexer::Ptr Lexer::block() {
   auto result = node(K::ast_block, expect("{").Loc);
   while (!at("}") && !end()) {
     // Preserve a subsequent top-level declaration when this block lacks '}'.
-    if (at("fn") || at("struct") || at("@"))
+    if (at("fn") || at("struct") || at("annotation") || at("@"))
       fail(peek().Loc, DiagnosticKind::ExpectedRightBraceBeforeDeclaration);
     const auto start = pos;
     try {
@@ -386,14 +490,65 @@ Lexer::Ptr Lexer::block() {
   return result;
 }
 
+Lexer::Ptr Lexer::assembly() {
+  const auto Start = take().Loc;
+  auto Result = node(K::ast_asm, Start);
+  expect("{");
+  if (peek().kind != K::asm_text)
+    fail(peek().Loc, DiagnosticKind::ExpectedExpression);
+  Result->text = spelling(take());
+  expect("}");
+
+  while (eat(".")) {
+    const auto Method = name();
+    const auto MethodName = spelling(Method);
+    expect("(");
+    if (MethodName == "in" || MethodName == "out") {
+      const auto Value = name();
+      auto Binding =
+          node(MethodName == "in" ? K::ast_asm_input : K::ast_asm_output,
+               Method.Loc, std::string(spelling(Value)));
+      if (eat(",")) {
+        const auto Register = name();
+        add(*Binding,
+            node(K::ast_name, Register.Loc, std::string(spelling(Register))));
+      }
+      Binding->Loc.Len = expect(")").Loc.End() - Binding->Loc.Offset;
+      add(*Result, std::move(Binding));
+      continue;
+    }
+    if (MethodName != "op")
+      fail(Method.Loc, DiagnosticKind::InvalidInlineAssembly);
+    do {
+      const auto OptionName = name();
+      auto Option = node(K::ast_asm_option, OptionName.Loc,
+                         std::string(spelling(OptionName)));
+      if (Option->text == "clobber" && eat("(")) {
+        if (!at(")")) {
+          do {
+            const auto Register = name();
+            add(*Option, node(K::ast_name, Register.Loc,
+                              std::string(spelling(Register))));
+          } while (eat(","));
+        }
+        expect(")");
+      }
+      add(*Result, std::move(Option));
+    } while (eat(","));
+    expect(")");
+  }
+  Result->Loc.Len = expect(";").Loc.End() - Result->Loc.Offset;
+  return Result;
+}
+
 Lexer::Ptr Lexer::stmt() {
   Guard guard(*this);
   if (at("{"))
     return block();
+  if (at("asm"))
+    return assembly();
   if (at("let")) {
     auto result = node(K::ast_let, take().Loc, "let");
-    if (eat("mut"))
-      result->text = "mut";
     const auto id = name();
     add(*result, node(K::ast_name, id.Loc, std::string(spelling(id))));
     const bool annotated = eat(":");
@@ -417,20 +572,26 @@ Lexer::Ptr Lexer::stmt() {
     result->Loc.Len = expect(";").Loc.End() - result->Loc.Offset;
     return result;
   }
-  if (at("if") || at("while")) {
+  if (at("if") || at("when") || at("while")) {
     const auto t = take();
-    auto result = node(spelling(t) == "if" ? K::ast_if : K::ast_while, t.Loc);
+    const auto Kind = spelling(t) == "if"     ? K::ast_if
+                      : spelling(t) == "when" ? K::ast_when
+                                              : K::ast_while;
+    auto result = node(Kind, t.Loc);
     add(*result, expr());
     add(*result, block());
-    if (result->kind == K::ast_if && eat("else"))
-      add(*result, at("if") ? stmt() : block());
+    if ((result->kind == K::ast_if || result->kind == K::ast_when) &&
+        eat("else"))
+      add(*result,
+          at(result->kind == K::ast_if ? "if" : "when") ? stmt() : block());
     return result;
   }
   auto lhs = expr();
   auto result = node(K::ast_expr_stmt, lhs->Loc);
   if (eat("=")) {
     if (lhs->kind != K::ast_name && lhs->kind != K::ast_member &&
-        lhs->kind != K::ast_index)
+        lhs->kind != K::ast_index &&
+        !(lhs->kind == K::ast_unary && lhs->text == "*"))
       fail(lhs->Loc, DiagnosticKind::InvalidAssignmentTarget);
     result->kind = K::ast_assign;
     add(*result, std::move(lhs));
@@ -443,33 +604,46 @@ Lexer::Ptr Lexer::stmt() {
 
 Lexer::Ptr Lexer::decl() {
   std::vector<Ptr> annotations;
-  while (at("@")) {
-    auto Loc = take().Loc;
-    const auto id = name();
-    Loc.Len = id.Loc.End() - Loc.Offset;
-    annotations.push_back(
-        node(K::ast_annotation, Loc, std::string(spelling(id))));
-  }
+  while (at("@"))
+    annotations.push_back(annotation());
   Token visibility{};
   const bool isPublic = at("pub");
   if (isPublic)
     visibility = take();
-  if (!at("fn") && !at("struct"))
-    fail(peek().Loc, DiagnosticKind::ExpectedFunctionOrStruct);
+  if (!at("fn") && !at("struct") && !at("annotation"))
+    fail(peek().Loc, DiagnosticKind::ExpectedDeclaration);
   const auto t = take();
   auto Loc = t.Loc;
   if (!annotations.empty())
     Loc = annotations.front()->Loc;
   else if (isPublic)
     Loc = visibility.Loc;
-  auto result =
-      node(spelling(t) == "fn" ? K::ast_function : K::ast_struct, Loc);
+  auto result = node(spelling(t) == "fn"       ? K::ast_function
+                     : spelling(t) == "struct" ? K::ast_struct
+                                               : K::ast_annotation_decl,
+                     Loc);
   result->text = spelling(name());
   for (auto &annotation : annotations)
     add(*result, std::move(annotation));
   if (isPublic)
     add(*result, node(K::ast_public, visibility.Loc));
-  if (result->kind == K::ast_struct) {
+  if (result->kind == K::ast_annotation_decl) {
+    expect("(");
+    if (!at(")")) {
+      do {
+        const auto Id = name();
+        auto Parameter = node(K::ast_annotation_parameter, Id.Loc,
+                              std::string(spelling(Id)));
+        expect(":");
+        add(*Parameter, type());
+        if (eat("="))
+          add(*Parameter, expr());
+        add(*result, std::move(Parameter));
+      } while (eat(",") && !at(")"));
+    }
+    expect(")");
+    result->Loc.Len = expect(";").Loc.End() - result->Loc.Offset;
+  } else if (result->kind == K::ast_struct) {
     expect("{");
     while (!at("}") && !end()) {
       const auto id = name();
@@ -519,7 +693,7 @@ void Lexer::run() {
     const auto start = pos;
     try {
       take();
-      auto Import = qualified(K::ast_import);
+      auto Import = qualified(K::ast_import, true);
       if (Import->text == "c" && peek().kind == K::string) {
         const auto Header = take();
         const auto Text = spelling(Header);
@@ -607,12 +781,12 @@ bool Lexer::alpha(char c) {
 TokenKind Lexer::keyword(std::string_view s) {
   if (s == "let")
     return K::keyword_let;
-  if (s == "mut")
-    return K::keyword_mut;
   if (s == "fn")
     return K::keyword_fn;
   if (s == "struct")
     return K::keyword_struct;
+  if (s == "annotation")
+    return K::keyword_annotation;
   if (s == "if")
     return K::keyword_if;
   if (s == "else")
@@ -645,6 +819,8 @@ TokenKind Lexer::keyword(std::string_view s) {
     return K::keyword_import;
   if (s == "pub")
     return K::keyword_pub;
+  if (s == "asm")
+    return K::keyword_asm;
   return K::name;
 }
 
@@ -681,6 +857,8 @@ TokenKind Lexer::punctuation(std::string_view s) {
     return K::op_or;
   if (s == "!")
     return K::op_not;
+  if (s == "&")
+    return K::op_address;
   if (s == "(")
     return K::punc_left_paren;
   if (s == ")")

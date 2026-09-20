@@ -21,6 +21,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
@@ -48,6 +50,7 @@
 #include <cstdint>
 #include <memory>
 #include <system_error>
+#include <unordered_set>
 
 using namespace kelyra;
 
@@ -184,6 +187,8 @@ mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
     return FindVariable(Expression.text)->Address;
   if (Expression.kind == K::ast_group)
     return EmitAddress(*Expression.children.front());
+  if (Expression.kind == K::ast_unary && Expression.text == "*")
+    return EmitExpression(*Expression.children.front());
 
   const auto &Base = *Expression.children[0];
   const auto BaseType = Analysis.GetType(Base);
@@ -228,289 +233,6 @@ mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
   return mlir::LLVM::GEPOp::create(Builder, GetLocation(Expression.Loc),
                                    mlir::LLVM::LLVMPointerType::get(&Context),
                                    GetType(BaseType), BaseAddress, Indices);
-}
-
-mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
-  using K = lex::TokenKind;
-  const auto Loc = GetLocation(Expression.Loc);
-  const auto &SemanticType = Analysis.GetType(Expression);
-  const auto Type = GetType(SemanticType);
-  if (Expression.kind == K::ast_name) {
-    auto *Variable = FindVariable(Expression.text);
-    if (!Variable->Address)
-      return Variable->DirectValue;
-    return mlir::LLVM::LoadOp::create(Builder, Loc, Type,
-                                      EmitAddress(Expression));
-  }
-  if (Expression.kind == K::ast_index)
-    return mlir::LLVM::LoadOp::create(Builder, Loc, Type,
-                                      EmitAddress(Expression));
-  if (Expression.kind == K::ast_call) {
-    llvm::SmallVector<mlir::Value> Arguments;
-    const auto *Wrapper = Analysis.GetCWrapper(Expression);
-    mlir::Value ResultAddress;
-    if (Wrapper && Wrapper->ReturnByAddress) {
-      ResultAddress = CreateAlloca(SemanticType, Loc);
-      Arguments.push_back(ResultAddress);
-    }
-    for (std::size_t I = 1; I < Expression.children.size(); ++I) {
-      const auto &Argument = *Expression.children[I];
-      if (Wrapper && Wrapper->ParametersByAddress[I - 1]) {
-        if (Argument.kind == K::ast_name || Argument.kind == K::ast_index ||
-            Argument.kind == K::ast_group) {
-          Arguments.push_back(EmitAddress(Argument));
-        } else {
-          const auto &ArgumentType = Analysis.GetType(Argument);
-          auto Address = CreateAlloca(ArgumentType, GetLocation(Argument.Loc));
-          mlir::LLVM::StoreOp::create(Builder, GetLocation(Argument.Loc),
-                                      EmitExpression(Argument), Address);
-          Arguments.push_back(Address);
-        }
-      } else {
-        Arguments.push_back(EmitExpression(Argument));
-      }
-    }
-    const auto Callee =
-        Wrapper ? Wrapper->Name : Analysis.GetCallee(Expression);
-    if (Wrapper && Wrapper->ReturnByAddress) {
-      mlir::func::CallOp::create(Builder, Loc, Callee, mlir::TypeRange{},
-                                 Arguments);
-      return mlir::LLVM::LoadOp::create(Builder, Loc, Type, ResultAddress);
-    }
-    return mlir::func::CallOp::create(Builder, Loc, Callee,
-                                      mlir::TypeRange{Type}, Arguments)
-        .getResult(0);
-  }
-  if (Expression.kind == K::ast_literal) {
-    if (!Expression.text.empty() && Expression.text.front() == '"') {
-      std::string Value;
-      for (std::size_t I = 1; I + 1 < Expression.text.size(); ++I) {
-        if (Expression.text[I] != '\\') {
-          Value.push_back(Expression.text[I]);
-          continue;
-        }
-        const char Escaped = Expression.text[++I];
-        Value.push_back(Escaped == 'n'   ? '\n'
-                        : Escaped == 'r' ? '\r'
-                        : Escaped == 't' ? '\t'
-                        : Escaped == '0' ? '\0'
-                                         : Escaped);
-      }
-      Value.push_back('\0');
-      return mlir::LLVM::createGlobalString(
-          Loc, Builder, "kelyra_string_" + std::to_string(GlobalStringCount++),
-          Value, mlir::LLVM::Linkage::Private);
-    }
-    if (SemanticType.Element == sema::BuiltinType::Bool) {
-      llvm::APInt Value(1, Expression.text == "true");
-      return mlir::arith::ConstantIntOp::create(Builder, Loc, Type, Value);
-    }
-    if (sema::IsInteger(SemanticType.Element) ||
-        SemanticType.Element == sema::BuiltinType::Char) {
-      llvm::APInt Value;
-      llvm::StringRef(Expression.text).getAsInteger(10, Value);
-      Value = Value.zextOrTrunc(sema::GetBitWidth(SemanticType));
-      return mlir::arith::ConstantIntOp::create(Builder, Loc, Type, Value);
-    }
-    const auto FloatType = mlir::cast<mlir::FloatType>(Type);
-    llvm::APFloat Value(FloatType.getFloatSemantics(), Expression.text);
-    return mlir::arith::ConstantFloatOp::create(Builder, Loc, FloatType, Value);
-  }
-  if (Expression.kind == K::ast_group)
-    return EmitExpression(*Expression.children.front());
-  if (Expression.kind == K::ast_unary) {
-    auto Value = EmitExpression(*Expression.children.front());
-    if (Expression.text == "+")
-      return Value;
-    if (Expression.text == "!") {
-      auto True = mlir::arith::ConstantIntOp::create(Builder, Loc, 1, 1);
-      return mlir::arith::XOrIOp::create(Builder, Loc, Value, True);
-    }
-    if (sema::IsFloat(SemanticType.Element))
-      return mlir::arith::NegFOp::create(Builder, Loc, Value);
-    auto Zero = mlir::arith::ConstantIntOp::create(
-        Builder, Loc, Type, llvm::APInt(sema::GetBitWidth(SemanticType), 0));
-    return mlir::arith::SubIOp::create(Builder, Loc, Zero, Value);
-  }
-
-  auto Lhs = EmitExpression(*Expression.children[0]);
-  auto Rhs = EmitExpression(*Expression.children[1]);
-  const auto &OperandType = Analysis.GetType(*Expression.children[0]);
-  if (Expression.text == "&&")
-    return mlir::arith::AndIOp::create(Builder, Loc, Lhs, Rhs);
-  if (Expression.text == "||")
-    return mlir::arith::OrIOp::create(Builder, Loc, Lhs, Rhs);
-  const bool Comparison = Expression.text == "==" || Expression.text == "!=" ||
-                          Expression.text == "<" || Expression.text == "<=" ||
-                          Expression.text == ">" || Expression.text == ">=";
-  if (Comparison) {
-    if (sema::IsFloat(OperandType.Element)) {
-      auto Predicate = mlir::arith::CmpFPredicate::OEQ;
-      if (Expression.text == "!=")
-        Predicate = mlir::arith::CmpFPredicate::ONE;
-      else if (Expression.text == "<")
-        Predicate = mlir::arith::CmpFPredicate::OLT;
-      else if (Expression.text == "<=")
-        Predicate = mlir::arith::CmpFPredicate::OLE;
-      else if (Expression.text == ">")
-        Predicate = mlir::arith::CmpFPredicate::OGT;
-      else if (Expression.text == ">=")
-        Predicate = mlir::arith::CmpFPredicate::OGE;
-      return mlir::arith::CmpFOp::create(Builder, Loc, Predicate, Lhs, Rhs);
-    }
-    auto Predicate = mlir::arith::CmpIPredicate::eq;
-    if (Expression.text == "!=")
-      Predicate = mlir::arith::CmpIPredicate::ne;
-    else if (Expression.text == "<")
-      Predicate = sema::IsSignedInteger(OperandType.Element)
-                      ? mlir::arith::CmpIPredicate::slt
-                      : mlir::arith::CmpIPredicate::ult;
-    else if (Expression.text == "<=")
-      Predicate = sema::IsSignedInteger(OperandType.Element)
-                      ? mlir::arith::CmpIPredicate::sle
-                      : mlir::arith::CmpIPredicate::ule;
-    else if (Expression.text == ">")
-      Predicate = sema::IsSignedInteger(OperandType.Element)
-                      ? mlir::arith::CmpIPredicate::sgt
-                      : mlir::arith::CmpIPredicate::ugt;
-    else if (Expression.text == ">=")
-      Predicate = sema::IsSignedInteger(OperandType.Element)
-                      ? mlir::arith::CmpIPredicate::sge
-                      : mlir::arith::CmpIPredicate::uge;
-    return mlir::arith::CmpIOp::create(Builder, Loc, Predicate, Lhs, Rhs);
-  }
-  if (sema::IsFloat(SemanticType.Element)) {
-    if (Expression.text == "+")
-      return mlir::arith::AddFOp::create(Builder, Loc, Lhs, Rhs);
-    if (Expression.text == "-")
-      return mlir::arith::SubFOp::create(Builder, Loc, Lhs, Rhs);
-    if (Expression.text == "*")
-      return mlir::arith::MulFOp::create(Builder, Loc, Lhs, Rhs);
-    return mlir::arith::DivFOp::create(Builder, Loc, Lhs, Rhs);
-  }
-  if (Expression.text == "+")
-    return mlir::arith::AddIOp::create(Builder, Loc, Lhs, Rhs);
-  if (Expression.text == "-")
-    return mlir::arith::SubIOp::create(Builder, Loc, Lhs, Rhs);
-  if (Expression.text == "*")
-    return mlir::arith::MulIOp::create(Builder, Loc, Lhs, Rhs);
-  if (Expression.text == "/") {
-    if (sema::IsSignedInteger(SemanticType.Element))
-      return mlir::arith::DivSIOp::create(Builder, Loc, Lhs, Rhs);
-    return mlir::arith::DivUIOp::create(Builder, Loc, Lhs, Rhs);
-  }
-  if (sema::IsSignedInteger(SemanticType.Element))
-    return mlir::arith::RemSIOp::create(Builder, Loc, Lhs, Rhs);
-  return mlir::arith::RemUIOp::create(Builder, Loc, Lhs, Rhs);
-}
-
-void codegen::IRGen::EmitBlock(const lex::Node &Block) {
-  Scopes.emplace_back();
-  for (const auto &Statement : Block.children) {
-    if (HasTerminator(Builder.getInsertionBlock()))
-      break;
-    EmitStatement(*Statement);
-  }
-  Scopes.pop_back();
-}
-
-void codegen::IRGen::EmitStatement(const lex::Node &Statement) {
-  using K = lex::TokenKind;
-  const auto Loc = GetLocation(Statement.Loc);
-  if (Statement.kind == K::ast_block) {
-    EmitBlock(Statement);
-    return;
-  }
-  if (Statement.kind == K::ast_let) {
-    const auto &Name = *Statement.children[0];
-    const auto Type = Analysis.GetType(Statement);
-    auto Address = CreateAlloca(Type, Loc);
-    const bool HasType = Statement.children.size() > 1 &&
-                         IsTypeNode(Statement.children[1]->kind);
-    const lex::Node *Initializer =
-        Statement.children.size() > (HasType ? 2u : 1u)
-            ? Statement.children.back().get()
-            : nullptr;
-    auto Value =
-        Initializer
-            ? EmitExpression(*Initializer)
-            : mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Type)).getRes();
-    mlir::LLVM::StoreOp::create(Builder, Loc, Value, Address);
-    Scopes.back().emplace(Name.text, Variable{Type, Address, {}});
-    return;
-  }
-  if (Statement.kind == K::ast_assign) {
-    auto Address = EmitAddress(*Statement.children[0]);
-    auto Value = EmitExpression(*Statement.children[1]);
-    mlir::LLVM::StoreOp::create(Builder, Loc, Value, Address);
-    return;
-  }
-  if (Statement.kind == K::ast_expr_stmt) {
-    EmitExpression(*Statement.children.front());
-    return;
-  }
-  if (Statement.kind == K::ast_return) {
-    mlir::func::ReturnOp::create(Builder, Loc,
-                                 EmitExpression(*Statement.children.front()));
-    return;
-  }
-  if (Statement.kind == K::ast_break) {
-    mlir::cf::BranchOp::create(Builder, Loc, Loops.back().Break);
-    return;
-  }
-  if (Statement.kind == K::ast_continue) {
-    mlir::cf::BranchOp::create(Builder, Loc, Loops.back().Continue);
-    return;
-  }
-  auto *Region = Builder.getInsertionBlock()->getParent();
-  if (Statement.kind == K::ast_if) {
-    auto Condition = EmitExpression(*Statement.children[0]);
-    auto *Then = new mlir::Block();
-    auto *Else = new mlir::Block();
-    auto *After = new mlir::Block();
-    Region->push_back(Then);
-    Region->push_back(Else);
-    Region->push_back(After);
-    mlir::cf::CondBranchOp::create(Builder, Loc, Condition, Then, Else);
-
-    Builder.setInsertionPointToStart(Then);
-    EmitBlock(*Statement.children[1]);
-    if (!HasTerminator(Builder.getInsertionBlock()))
-      mlir::cf::BranchOp::create(Builder, Loc, After);
-
-    Builder.setInsertionPointToStart(Else);
-    if (Statement.children.size() == 3) {
-      if (Statement.children[2]->kind == K::ast_if)
-        EmitStatement(*Statement.children[2]);
-      else
-        EmitBlock(*Statement.children[2]);
-    }
-    if (!HasTerminator(Builder.getInsertionBlock()))
-      mlir::cf::BranchOp::create(Builder, Loc, After);
-    Builder.setInsertionPointToStart(After);
-    return;
-  }
-  if (Statement.kind == K::ast_while) {
-    auto *Header = new mlir::Block();
-    auto *Body = new mlir::Block();
-    auto *After = new mlir::Block();
-    Region->push_back(Header);
-    Region->push_back(Body);
-    Region->push_back(After);
-    mlir::cf::BranchOp::create(Builder, Loc, Header);
-
-    Builder.setInsertionPointToStart(Header);
-    auto Condition = EmitExpression(*Statement.children[0]);
-    mlir::cf::CondBranchOp::create(Builder, Loc, Condition, Body, After);
-
-    Builder.setInsertionPointToStart(Body);
-    Loops.push_back({After, Header});
-    EmitBlock(*Statement.children[1]);
-    Loops.pop_back();
-    if (!HasTerminator(Builder.getInsertionBlock()))
-      mlir::cf::BranchOp::create(Builder, Loc, Header);
-    Builder.setInsertionPointToStart(After);
-  }
 }
 
 void codegen::IRGen::EmitFunction(const lex::Node &Function) {
@@ -626,11 +348,23 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
   mlir::registerBuiltinDialectTranslation(*Module.getContext());
   mlir::registerLLVMDialectTranslation(*Module.getContext());
   llvm::LLVMContext Context;
+  std::string BackendError;
+  Context.setDiagnosticHandlerCallBack(
+      [](const llvm::DiagnosticInfo *Info, void *Opaque) {
+        if (Info->getSeverity() != llvm::DS_Error)
+          return;
+        auto &Message = *static_cast<std::string *>(Opaque);
+        llvm::raw_string_ostream Stream(Message);
+        llvm::DiagnosticPrinterRawOStream Printer(Stream);
+        Info->print(Printer);
+      },
+      &BackendError);
   auto LLVMModule = mlir::translateModuleToLLVMIR(Module, Context);
   if (!LLVMModule)
     return llvm::createStringError("failed to translate MLIR to LLVM IR");
 
   if (llvm::InitializeNativeTarget() ||
+      llvm::InitializeNativeTargetAsmParser() ||
       llvm::InitializeNativeTargetAsmPrinter())
     return llvm::createStringError("failed to initialize native target");
 
@@ -675,6 +409,8 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
                                          llvm::CodeGenFileType::ObjectFile))
     return llvm::createStringError("target cannot emit an object file");
   CodeGen.run(*LLVMModule);
+  if (!BackendError.empty())
+    return llvm::createStringError("%s", BackendError.c_str());
   Output.os().flush();
   if (Output.os().has_error())
     return llvm::createStringError(Output.os().error(),
