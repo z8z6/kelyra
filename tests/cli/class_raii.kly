@@ -1,0 +1,220 @@
+import c "c/trace.h";
+import modules.callbacks;
+
+fn main() -> i32 {
+  let imported = modules.callbacks.factory();
+  if imported(41) != 42 {
+    return 17;
+  }
+  let function: fn(i32) -> i32 = choose();
+  if function(41) != 42 || choose()(4) != 5 {
+    return 12;
+  }
+  if apply(function, 6) != 7 {
+    return 13;
+  }
+  let(callback, code) = choose_pair();
+  if callback(code) != 42 {
+    return 14;
+  }
+  let pair_callback = pair;
+  let(callback_answer, callback_ok) = pair_callback();
+  if callback_answer != 42 || !callback_ok {
+    return 15;
+  }
+  let nothing = no_result;
+  nothing();
+  let holder = Callback();
+  if holder.call(41) != 42 || holder.callback(1) != 2 {
+    return 16;
+  }
+  let(answer, ok) = forward();
+  if answer != 42 || !ok {
+    return 9;
+  }
+  let mixed = Mixed();
+  let(number, tail) = mixed.values();
+  if number != 42 || tail != 7 {
+    return 10;
+  }
+  c.trace_reset();
+  let(snapshot, success) = early_pair();
+  if snapshot != 12 || !success || c.trace_value() != 1265 {
+    return 11;
+  }
+  c.trace_reset();
+  {
+    let a = Item(1);
+    let b = Item(2);
+    b.set(2);
+    let pointer = &a;
+    pointer.set(1);
+    if (*pointer).get() != 1 {
+      return 1;
+    }
+  }
+  if c.trace_value() != 1265 {
+    return 2;
+  }
+  c.trace_reset();
+  if early() != 12 || c.trace_value() != 1265 {
+    return 3;
+  }
+  c.trace_reset();
+  let i = 0;
+  while i < 3 {
+    let a = Item(1);
+    i = i + 1;
+    {
+      let b = Item(2);
+      if i == 1 {
+        continue;
+      }
+      break;
+    }
+  }
+  if c.trace_value() != 12651265 {
+    return 4;
+  }
+  c.trace_reset();
+  {
+    let parent = Parent();
+  }
+  if c.trace_value() != 12965 {
+    return 5;
+  }
+  c.trace_reset();
+  {
+    let automatic = Automatic();
+  }
+  if c.trace_value() != 15 {
+    return 6;
+  }
+  c.trace_reset();
+  when true {
+    let selected = Item(2);
+  } else {
+    let ignored = Missing();
+  }
+  if c.trace_value() != 26 {
+    return 7;
+  }
+  c.trace_reset();
+  {
+    let outer = Item(1);
+    {
+      let outer = Item(2);
+    }
+  }
+  if c.trace_value() != 1265 {
+    return 8;
+  }
+  return 0;
+}
+
+fn increment(value: i32) -> i32 {
+  return value + 1;
+}
+
+fn choose() -> fn(i32) -> i32 {
+  let resource = Item(1);
+  return increment;
+}
+
+fn choose_pair() -> (fn(i32) -> i32, i32) {
+  return increment, 41;
+}
+
+fn apply(callback: fn(i32) -> i32, value: i32) -> i32 {
+  return callback(value);
+}
+
+fn no_result() -> void {
+  return;
+}
+
+class Callback {
+  callback: fn(i32) -> i32;
+  init() {
+    callback = increment;
+  }
+  fn call(value: i32) -> i32 {
+    return callback(value);
+  }
+}
+
+fn forward() -> (i32, bool) {
+  return pair();
+}
+
+fn pair() -> (i32, bool) {
+  return 42, true;
+}
+
+fn early_pair() -> (c.longlong, bool) {
+  let a = Item(1);
+  let b = Item(2);
+  return c.trace_value(), true;
+}
+
+class Mixed {
+  flag: bool;
+  number: i64;
+  tail: u8;
+  init() {
+    flag = true;
+    number = 42;
+    tail = 7;
+  }
+  fn values() -> (i64, u8) {
+    return number, tail;
+  }
+}
+
+fn early() -> c.longlong {
+  let a = Item(1);
+  {
+    let b = Item(2);
+    return c.trace_value();
+  }
+}
+
+class Parent {
+  first: Item;
+  second: Item;
+  init() {
+    first = Item(1);
+    second = Item(2);
+  }
+  deinit() {
+    c.trace(9);
+    return;
+  }
+}
+
+class Automatic {
+  child: Item;
+  init() {
+    child = Item(1);
+  }
+}
+
+class Item {
+  id: i32;
+  init(id: i32) {
+    this.id = id;
+    c.trace(id);
+  }
+  fn set(value: i32) -> void {
+    id = value;
+  }
+  fn get() -> i32 {
+    return read();
+  }
+  fn read() -> i32 {
+    return this.id;
+  }
+  deinit() {
+    c.trace(id + 4);
+  }
+}

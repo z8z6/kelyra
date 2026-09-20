@@ -37,8 +37,32 @@ std::string Mangle(std::string_view Module, std::string_view Name,
 }
 
 std::string MetaTypeName(const sema::Type &Type) {
+  if (Type.Element == sema::BuiltinType::Function) {
+    std::string Name(Type.PointerDepth, '*');
+    Name += "fn(";
+    for (std::size_t I = 0; I < Type.Parameters.size(); ++I) {
+      if (I)
+        Name += ", ";
+      Name += MetaTypeName(Type.Parameters[I]);
+    }
+    Name += ") -> " + MetaTypeName(Type.Results.front());
+    for (auto Dimension : Type.Dimensions)
+      Name += "[" + std::to_string(Dimension) + "]";
+    return Name;
+  }
+  if (Type.IsResults()) {
+    std::string Name = "(";
+    for (const auto &Result : Type.Results) {
+      if (Name.size() > 1)
+        Name += ", ";
+      Name += MetaTypeName(Result);
+    }
+    return Name + ")";
+  }
   std::string Result =
-      Type.CName.empty()
+      Type.Element == sema::BuiltinType::Class ? Type.ClassName
+      : Type.IsVoid()                          ? "void"
+      : Type.CName.empty()
           ? std::string(sema::GetBuiltinTypeInfo(Type.Element).Name)
           : Type.CName;
   Result.insert(0, Type.PointerDepth, '*');
@@ -68,7 +92,7 @@ sema::MetaId sema::Sema::RegisterMetaDeclaration(const lex::Node &Node,
   if (ModuleId)
     Declaration.Module = *ModuleId;
   const auto Id = Reflection.Add(&Node, std::move(Declaration));
-  if (ModuleId && (Kind == MetaKind::Function || Kind == MetaKind::Struct ||
+  if (ModuleId && (Kind == MetaKind::Function || Kind == MetaKind::Class ||
                    Kind == MetaKind::Annotation))
     Reflection.Records[*ModuleId].Children.push_back(Id);
   return Id;
@@ -82,13 +106,29 @@ sema::MetaId sema::Sema::GetOrCreateMetaType(const Type &Type) {
   Declaration.Kind = MetaKind::Type;
   Declaration.Name = Name;
   Declaration.QualifiedName = Name;
-  Declaration.TypeKind = Type.IsPointer()  ? MetaTypeKind::Pointer
-                         : Type.IsArray()  ? MetaTypeKind::Array
-                         : Type.IsRecord() ? MetaTypeKind::Record
-                                           : MetaTypeKind::Builtin;
+  Declaration.TypeKind = Type.IsPointer() ? MetaTypeKind::Pointer
+                         : Type.IsArray() ? MetaTypeKind::Array
+                         : (Type.IsRecord() || Type.IsClass())
+                             ? MetaTypeKind::Record
+                             : MetaTypeKind::Builtin;
   Declaration.BitWidth = GetBitWidth(Type);
+  if (Type.IsClass()) {
+    Declaration.BitWidth = GetClass(Type)->Size * 8;
+    Declaration.Alignment = GetClass(Type)->Alignment;
+  }
   Declaration.PointerDepth = Type.PointerDepth;
   Declaration.Dimensions = Type.Dimensions;
+  if (Type.IsFunction() && !Type.IsArray()) {
+    Declaration.TypeKind = MetaTypeKind::Function;
+    Declaration.Type = GetOrCreateMetaType(Type.Results.front());
+    for (const auto &Parameter : Type.Parameters)
+      Declaration.Children.push_back(GetOrCreateMetaType(Parameter));
+  }
+  if (Type.IsResults()) {
+    Declaration.TypeKind = MetaTypeKind::Results;
+    for (const auto &Result : Type.Results)
+      Declaration.Children.push_back(GetOrCreateMetaType(Result));
+  }
   if (Type.IsPointer()) {
     auto Pointee = Type;
     --Pointee.PointerDepth;
@@ -108,29 +148,100 @@ const sema::Type *sema::Sema::FindName(std::string_view Name) const {
   return nullptr;
 }
 
+const sema::ClassInfo *sema::Sema::GetClass(std::string_view Name) const {
+  const auto It = Classes.find(std::string(Name));
+  return It == Classes.end() ? nullptr : &It->second;
+}
+
+const sema::ClassInfo *sema::Sema::GetClass(const Type &Value) const {
+  return Value.Element == BuiltinType::Class ? GetClass(Value.ClassName)
+                                             : nullptr;
+}
+
+const sema::ClassFieldInfo *sema::Sema::GetField(const lex::Node &Node) const {
+  const auto It = FieldReferences.find(&Node);
+  if (It == FieldReferences.end())
+    return nullptr;
+  const auto *Class = GetClass(It->second.first);
+  return Class ? &Class->Fields.at(It->second.second) : nullptr;
+}
+
+std::size_t sema::Sema::GetFieldIndex(const lex::Node &Node) const {
+  return FieldReferences.at(&Node).second;
+}
+
+const sema::ClassInfo *
+sema::Sema::GetConstructorCall(const lex::Node &Node) const {
+  const auto It = ConstructorCalls.find(&Node);
+  return It == ConstructorCalls.end() ? nullptr : GetClass(It->second);
+}
+
 std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
   using K = lex::TokenKind;
+  if (Node.kind == K::ast_function_type)
+    return CheckFunctionType(Node);
+  if (Node.kind == K::ast_result_types) {
+    Type Result{BuiltinType::Results, {}};
+    for (const auto &Child : Node.children) {
+      auto Value = CheckType(*Child);
+      if (!Value)
+        return std::nullopt;
+      if (Value->IsVoid() || Value->IsClass() || Value->IsRecord() ||
+          Value->IsArray() || Value->IsResults() || GetBitWidth(*Value) > 128) {
+        Error(*Child, lex::DiagnosticKind::UnsupportedType);
+        return std::nullopt;
+      }
+      Result.Results.push_back(*Value);
+    }
+    Types[&Node] = Result;
+    return Result;
+  }
   if (Node.kind == K::ast_type) {
     const auto Element = ParseBuiltinType(Node.text);
     const auto External = ExternalTypes.find(Node.text);
-    if (!Element && External == ExternalTypes.end()) {
+    std::string ClassName = Node.text;
+    if (!Classes.contains(ClassName) &&
+        Node.text.find('.') == std::string::npos)
+      ClassName =
+          CurrentModule.empty() ? Node.text : CurrentModule + "." + Node.text;
+    const auto Class = Classes.find(ClassName);
+    if (!Element && External == ExternalTypes.end() && Class == Classes.end()) {
       Error(Node, lex::DiagnosticKind::UnsupportedType);
       return std::nullopt;
     }
-    Type Result = Element ? Type{*Element, {}} : External->second;
+    Type Result;
+    if (Element)
+      Result = Type{*Element, {}};
+    else if (External != ExternalTypes.end())
+      Result = External->second;
+    else {
+      if (Class->second.Module != CurrentModule) {
+        const auto Import = Imports.find(CurrentModule);
+        if (!Class->second.Public || Import == Imports.end() ||
+            (!Import->second.contains(Class->second.Module) &&
+             !Import->second.contains(Class->second.Module + ".*"))) {
+          Error(Node, lex::DiagnosticKind::PrivateDeclaration);
+          return std::nullopt;
+        }
+      }
+      Result = Type{BuiltinType::Class, {}};
+      Result.ClassName = ClassName;
+    }
     Types[&Node] = Result;
     return Result;
   }
   if (Node.kind == K::ast_pointer_type && Node.children.size() == 1) {
     auto Result = CheckType(*Node.children.front());
-    if (!Result || Result->IsArray()) {
+    if (!Result || Result->IsArray() || Result->IsVoid() ||
+        Result->IsResults()) {
       Error(Node, lex::DiagnosticKind::UnsupportedType);
       return std::nullopt;
     }
     ++Result->PointerDepth;
     Result->BitWidth = sizeof(void *) * 8;
     Result->Alignment = alignof(void *);
-    Result->CSpelling = detail::CSpelling(*Result) + " *";
+    if (Result->Element != BuiltinType::Class)
+      Result->CSpelling = detail::CSpelling(*Result) + " *";
     Types[&Node] = *Result;
     return Result;
   }
@@ -142,8 +253,13 @@ std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
   std::uint64_t Length = 0;
   const auto Parsed = std::from_chars(
       Node.text.data(), Node.text.data() + Node.text.size(), Length);
-  if (!Result || Parsed.ec != std::errc() || Length == 0) {
+  if (!Result || Result->IsVoid() || Result->IsResults() ||
+      Parsed.ec != std::errc() || Length == 0) {
     Error(Node, lex::DiagnosticKind::UnsupportedType);
+    return std::nullopt;
+  }
+  if (Result->IsClass()) {
+    Error(Node, lex::DiagnosticKind::ClassValueOperation);
     return std::nullopt;
   }
   if (!Result->IsRecord() && GetBitWidth(*Result) > 128) {
@@ -203,14 +319,14 @@ void sema::Sema::CheckFunction(const lex::Node &Function) {
     }
   }
   ReturnType = ReturnTypeNode ? CheckType(*ReturnTypeNode) : std::nullopt;
-  if (!ReturnTypeNode)
-    Error(Function, lex::DiagnosticKind::UnsupportedType);
+  if (ReturnType && ReturnType->IsVoid())
+    ReturnType.reset();
   if (!Body) {
     Error(Function, lex::DiagnosticKind::MissingReturn);
     return;
   }
   CheckBlock(*Body);
-  if (!AlwaysReturns(*Body))
+  if (ReturnType && !AlwaysReturns(*Body))
     Error(*Body, lex::DiagnosticKind::MissingReturn);
 }
 
@@ -240,15 +356,26 @@ bool sema::Sema::CheckModules(
   Reflection.Clear();
   Types.clear();
   Functions.clear();
+  Classes.clear();
   AnnotationDeclarations.clear();
   AnnotationInstances.clear();
   Symbols.clear();
   Callees.clear();
   CWrapperCalls.clear();
+  ConstructorCalls.clear();
+  FieldReferences.clear();
+  MethodCalls.clear();
+  FunctionValues.clear();
+  IndirectCalls.clear();
   WhenBranches.clear();
   CWrappers.clear();
   Imports.clear();
   ExternalTypes.clear();
+  CurrentClass.clear();
+  CurrentConstructor = nullptr;
+  ConstructionContext = nullptr;
+  InitializingTarget = nullptr;
+  InDestructor = false;
   ExternalFunctions = ExternalDeclarations;
   for (const auto &External : ExternalTypeDeclarations)
     ExternalTypes.emplace(External.Name, External.Value);
@@ -274,6 +401,38 @@ bool sema::Sema::CheckModules(
     }
   }
 
+  for (const auto &Input : Modules) {
+    const auto Name = ModuleName(*Input.Ast);
+    CurrentModule = Name;
+    for (const auto &Child : Input.Ast->children) {
+      if (Child->kind == K::ast_import) {
+        Imports[Name].insert(Child->text);
+        const auto Imported =
+            Child->text.ends_with(".*")
+                ? Child->text.substr(0, Child->text.size() - 2)
+                : Child->text;
+        if (Imported != "c" && !ModuleTable.contains(Imported))
+          Error(*Child, lex::DiagnosticKind::UnknownModule);
+      }
+      if (Child->kind != K::ast_class)
+        continue;
+      ClassInfo Info;
+      Info.Node = Child.get();
+      Info.Module = Name;
+      Info.Name = Child->text;
+      Info.QualifiedName =
+          Name.empty() ? Child->text : Name + "." + Child->text;
+      Info.Public = IsPublic(*Child);
+      const auto Key = Info.QualifiedName;
+      if (ParseBuiltinType(Info.Name) ||
+          !Classes.emplace(Key, std::move(Info)).second) {
+        Error(*Child, lex::DiagnosticKind::UnsupportedDeclaration);
+        continue;
+      }
+      RegisterMetaDeclaration(*Child, MetaKind::Class, Name, IsPublic(*Child));
+    }
+  }
+
   for (const auto &External : ExternalFunctions) {
     FunctionInfo Info;
     Info.Module = "c";
@@ -292,69 +451,171 @@ bool sema::Sema::CheckModules(
   for (const auto &Input : Modules) {
     const auto &Module = *Input.Ast;
     const auto Name = ModuleName(Module);
+    CurrentModule = Name;
+    const auto RegisterFunction = [&](const lex::Node &Function,
+                                      std::string_view Owner) {
+      FunctionInfo Info;
+      Info.Node = &Function;
+      Info.Module = Name;
+      Info.Public = IsPublic(Function);
+      Info.OwnerClass = Owner;
+      const auto LocalName =
+          Owner.empty() ? Function.text
+                        : std::string(Owner.substr(Owner.rfind('.') + 1)) +
+                              "." + Function.text;
+      Info.Symbol =
+          Mangle(Name, LocalName,
+                 Owner.empty() && Input.IsEntry && Function.text == "main");
+      if (!Owner.empty()) {
+        Type Receiver{BuiltinType::Class, {}};
+        Receiver.ClassName = Owner;
+        Receiver.PointerDepth = 1;
+        Receiver.BitWidth = sizeof(void *) * 8;
+        Receiver.Alignment = alignof(void *);
+        Info.Parameters.push_back(std::move(Receiver));
+      }
+      const auto Kind =
+          Owner.empty()                         ? MetaKind::Function
+          : Function.kind == K::ast_constructor ? MetaKind::Constructor
+          : Function.kind == K::ast_destructor  ? MetaKind::Destructor
+                                                : MetaKind::Method;
+      const auto Id =
+          RegisterMetaDeclaration(Function, Kind, Name, Info.Public);
+      if (!Owner.empty()) {
+        Reflection.Records[Id].QualifiedName =
+            std::string(Owner) + "." + Function.text;
+        const auto Parent =
+            Reflection.GetId(*Classes.at(std::string(Owner)).Node);
+        if (Parent)
+          Reflection.Records[*Parent].Children.push_back(Id);
+      }
+      for (const auto &Part : Function.children) {
+        if (Part->kind == K::ast_parameter && Part->children.size() == 1) {
+          if (auto Parameter = CheckType(*Part->children.front())) {
+            Info.Parameters.push_back(*Parameter);
+            Types[Part.get()] = *Parameter;
+            if (Parameter->IsClass())
+              Error(*Part, lex::DiagnosticKind::ClassValueOperation);
+            if (Parameter->IsVoid() || Parameter->IsResults())
+              Error(*Part, lex::DiagnosticKind::UnsupportedType);
+            const auto ParameterId = RegisterMetaDeclaration(
+                *Part, MetaKind::Parameter, Name, false);
+            Reflection.Records[ParameterId].QualifiedName =
+                Reflection.Records[Id].QualifiedName + "." + Part->text;
+            Reflection.Records[ParameterId].Type =
+                GetOrCreateMetaType(*Parameter);
+            Reflection.Records[Id].Children.push_back(ParameterId);
+          }
+        } else if (detail::IsTypeNode(Part->kind)) {
+          if (auto Return = CheckType(*Part)) {
+            Info.Return = *Return;
+            if (Return->IsClass())
+              Error(*Part, lex::DiagnosticKind::ClassValueOperation);
+          }
+        }
+      }
+      Reflection.Records[Id].Type = GetOrCreateMetaType(Info.Return);
+      Reflection.Records[Id].Symbol = Info.Symbol;
+      Types[&Function] = Info.Return;
+      const auto Key =
+          Owner.empty()
+              ? (Name.empty() ? Function.text : Name + "." + Function.text)
+              : std::string(Owner) + "." + Function.text;
+      if (Classes.contains(Key) || !Functions.emplace(Key, Info).second)
+        Error(Function, lex::DiagnosticKind::DuplicateFunction);
+      Symbols[&Function] = Info.Symbol;
+    };
     for (const auto &Child : Module.children) {
       if (Child->kind == K::ast_module_decl)
         continue;
-      if (Child->kind == K::ast_import) {
-        Imports[Name].insert(Child->text);
-        const auto Imported =
-            Child->text.ends_with(".*")
-                ? Child->text.substr(0, Child->text.size() - 2)
-                : Child->text;
-        if (Imported != "c" && !ModuleTable.contains(Imported))
-          Error(*Child, lex::DiagnosticKind::UnknownModule);
+      if (Child->kind == K::ast_import)
         continue;
-      }
       if (Child->kind == K::ast_annotation_decl) {
         RegisterMetaDeclaration(*Child, MetaKind::Annotation, Name,
                                 IsPublic(*Child));
         RegisterAnnotation(*Child, Name);
         continue;
       }
+      if (Child->kind == K::ast_class) {
+        const auto ClassIt =
+            Classes.find(Name.empty() ? Child->text : Name + "." + Child->text);
+        if (ClassIt == Classes.end() || ClassIt->second.Node != Child.get())
+          continue;
+        auto &Class = ClassIt->second;
+        std::unordered_set<std::string> MemberNames;
+        for (const auto &Member : Child->children) {
+          if (Member->kind == K::ast_public ||
+              Member->kind == K::ast_annotation)
+            continue;
+          if (!MemberNames.insert(Member->text).second ||
+              (Member->kind == K::ast_function &&
+               (Member->text == "init" || Member->text == "deinit")))
+            Error(*Member, lex::DiagnosticKind::InvalidClass);
+          if (Member->kind == K::ast_field) {
+            const auto TypeNode =
+                std::find_if(Member->children.begin(), Member->children.end(),
+                             [](const auto &Part) {
+                               return detail::IsTypeNode(Part->kind);
+                             });
+            if (TypeNode == Member->children.end())
+              continue;
+            if (auto Value = CheckType(**TypeNode)) {
+              if (Value->IsVoid() || Value->IsResults())
+                Error(*Member, lex::DiagnosticKind::UnsupportedType);
+              Types[Member.get()] = *Value;
+              Class.Fields.push_back(
+                  {Member.get(), Member->text, *Value, IsPublic(*Member)});
+              const auto Id = RegisterMetaDeclaration(*Member, MetaKind::Field,
+                                                      Name, IsPublic(*Member));
+              Reflection.Records[Id].QualifiedName =
+                  Class.QualifiedName + "." + Member->text;
+              Reflection.Records[Id].Type = GetOrCreateMetaType(*Value);
+              Reflection.Records[*Reflection.GetId(*Child)].Children.push_back(
+                  Id);
+            }
+            continue;
+          }
+          if (Member->kind != K::ast_function &&
+              Member->kind != K::ast_constructor &&
+              Member->kind != K::ast_destructor)
+            continue;
+          if (Member->kind == K::ast_constructor) {
+            if (Class.Constructor)
+              Error(*Member, lex::DiagnosticKind::DuplicateFunction);
+            Class.Constructor = Member.get();
+          } else if (Member->kind == K::ast_destructor) {
+            if (Class.Destructor || IsPublic(*Member) ||
+                std::any_of(Member->children.begin(), Member->children.end(),
+                            [](const auto &Part) {
+                              return Part->kind == K::ast_parameter;
+                            }))
+              Error(*Member, lex::DiagnosticKind::InvalidClass);
+            Class.Destructor = Member.get();
+          }
+          RegisterFunction(*Member, Class.QualifiedName);
+        }
+        if (!Class.Constructor)
+          Error(*Child, lex::DiagnosticKind::InvalidClass);
+        Class.ConstructorSymbol = Symbols.contains(Class.Constructor)
+                                      ? Symbols.at(Class.Constructor)
+                                      : std::string();
+        if (Class.Destructor)
+          Class.DestructorSymbol = Symbols.at(Class.Destructor);
+        else
+          Class.DestructorSymbol = Mangle(Name, Class.Name + ".deinit", false);
+        continue;
+      }
       if (Child->kind != K::ast_function) {
-        if (Child->kind == K::ast_struct)
-          RegisterMetaDeclaration(*Child, MetaKind::Struct, Name,
-                                  IsPublic(*Child));
         Error(*Child, lex::DiagnosticKind::UnsupportedDeclaration);
         continue;
       }
-      const auto FunctionMeta = RegisterMetaDeclaration(
-          *Child, MetaKind::Function, Name, IsPublic(*Child));
-      FunctionInfo Info;
-      Info.Node = Child.get();
-      Info.Module = Name;
-      Info.Public = IsPublic(*Child);
-      Info.Symbol =
-          Mangle(Name, Child->text, Input.IsEntry && Child->text == "main");
-      for (const auto &Part : Child->children) {
-        if (Part->kind == K::ast_parameter && Part->children.size() == 1) {
-          if (auto Parameter = CheckType(*Part->children.front())) {
-            Info.Parameters.push_back(*Parameter);
-            Types[Part.get()] = *Parameter;
-            auto ParameterMeta = RegisterMetaDeclaration(
-                *Part, MetaKind::Parameter, Name, false);
-            auto &ParameterRecord = Reflection.Records[ParameterMeta];
-            ParameterRecord.QualifiedName =
-                Reflection.Records[FunctionMeta].QualifiedName + "." +
-                Part->text;
-            ParameterRecord.Type = GetOrCreateMetaType(*Parameter);
-            Reflection.Records[FunctionMeta].Children.push_back(ParameterMeta);
-          }
-        } else if (detail::IsTypeNode(Part->kind)) {
-          if (auto Return = CheckType(*Part)) {
-            Info.Return = *Return;
-            Reflection.Records[FunctionMeta].Type =
-                GetOrCreateMetaType(*Return);
-          }
-        }
-      }
-      const auto Key = Name.empty() ? Child->text : Name + "." + Child->text;
-      if (!Functions.emplace(Key, Info).second)
-        Error(*Child, lex::DiagnosticKind::DuplicateFunction);
-      Symbols[Child.get()] = std::move(Info.Symbol);
-      Reflection.Records[FunctionMeta].Symbol = Symbols[Child.get()];
+      RegisterFunction(*Child, {});
     }
   }
+
+  CheckClassLayouts();
+  if (!Diagnostics.empty())
+    return false;
 
   for (const auto &Input : Modules) {
     CurrentModule = ModuleName(*Input.Ast);
@@ -365,10 +626,16 @@ bool sema::Sema::CheckModules(
 
   for (const auto &Input : Modules) {
     CurrentModule = ModuleName(*Input.Ast);
-    for (const auto &Child : Input.Ast->children)
+    for (const auto &Child : Input.Ast->children) {
       if (Child->kind == K::ast_function ||
-          Child->kind == K::ast_annotation_decl || Child->kind == K::ast_struct)
+          Child->kind == K::ast_annotation_decl || Child->kind == K::ast_class)
         CheckAnnotations(*Child);
+      if (Child->kind == K::ast_class)
+        for (const auto &Member : Child->children)
+          if (Member->kind != K::ast_public &&
+              Member->kind != K::ast_annotation)
+            CheckAnnotations(*Member);
+    }
   }
 
   for (const auto &[Node, Instances] : AnnotationInstances)
@@ -378,7 +645,19 @@ bool sema::Sema::CheckModules(
     CurrentModule = ModuleName(*Input.Ast);
     for (const auto &Child : Input.Ast->children) {
       if (Child->kind != K::ast_function)
-        continue;
+        if (Child->kind == K::ast_class) {
+          const auto &Class = Classes.at(
+              CurrentModule.empty() ? Child->text
+                                    : CurrentModule + "." + Child->text);
+          for (const auto &Member : Child->children)
+            if (Member->kind == K::ast_function ||
+                Member->kind == K::ast_constructor ||
+                Member->kind == K::ast_destructor)
+              CheckClassMember(*Member, Class);
+          continue;
+        } else
+          continue;
+      CurrentClass.clear();
       CheckFunction(*Child);
     }
   }

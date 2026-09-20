@@ -43,7 +43,7 @@ module-decl  = "module", qualified-name, ";" ;
 import       = "import", qualified-name, [ ".", "*" ], ";" ;
 qualified-name = name, { ".", name } ;
 declaration  = { annotation }, [ "pub" ],
-               ( function | struct | annotation-declaration ) ;
+               ( function | class | annotation-declaration ) ;
 annotation   = "@", qualified-name,
                [ "(", [ annotation-arguments ], ")" ] ;
 annotation-arguments = annotation-argument,
@@ -55,19 +55,24 @@ annotation-parameters = annotation-parameter,
                         { ",", annotation-parameter }, [ "," ] ;
 annotation-parameter = name, ":", type, [ "=", expression ] ;
 meta-expression = "meta", "(", ( qualified-name | type ), ")" ;
-function     = "fn", name, "(", [ parameters ], ")", [ "->", type ], block ;
+function     = "fn", name, "(", [ parameters ], ")", [ "->", result-type ], block ;
+result-type  = type | "(", type, ",", type, { ",", type }, [ "," ], ")" ;
 parameters   = parameter, { ",", parameter }, [ "," ] ;
 parameter    = name, ":", type ;
-struct       = "struct", name, "{", [ fields ], "}" ;
-fields       = field, { ",", field }, [ "," ] ;
-field        = name, ":", type ;
-type         = "*", type | name, { "[", integer, "]" } ;
+class        = "class", name, "{", { class-member }, "}" ;
+class-member = { annotation }, [ "pub" ], ( field | function | constructor | destructor ) ;
+field        = name, ":", type, ";" ;
+constructor  = "init", "(", [ parameters ], ")", block ;
+destructor   = "deinit", "(", ")", block ;
+type         = "*", type | qualified-name, { "[", integer, "]" }
+             | "fn", "(", [ type, { ",", type } ], ")", [ "->", result-type ] ;
 block        = "{", { statement }, "}" ;
 statement    = block | let | assignment | return | if | while
              | asm | "break", ";" | "continue", ";" | expression, ";" ;
-let          = "let", name, [ ":", type ], [ "=", expression ], ";" ;
+let          = "let", name, [ ":", type ], [ "=", expression ], ";"
+             | "let", "(", name, { ",", name }, ")", "=", expression, ";" ;
 assignment   = expression, "=", expression, ";" ;
-return       = "return", [ expression ], ";" ;
+return       = "return", [ expression, { ",", expression } ], ";" ;
 if           = "if", expression, block, [ "else", ( block | if ) ] ;
 while        = "while", expression, block ;
 asm          = "asm", raw-block, { asm-chain }, ";" ;
@@ -166,4 +171,54 @@ calling convention 尚未支持。
 
 递归解析和 AST 高度均设 128 上限，超限给出诊断，避免异常输入耗尽栈。由于 AST 中还包含语句、函数等外围节点，源代码允许的嵌套层数会略少于该值。
 
-首版未实现泛型、结构体/数组字面量、模式匹配、引用类型和完整 CST。后续按实际语言规则增加对应解析分支。
+首版未实现泛型、聚合/数组字面量、模式匹配、引用类型和完整 CST。后续按实际语言规则增加对应解析分支。
+
+已实现 `class`、`init`、`deinit` 和确定性作用域 RAII；接收者为 `this`，无歧义时可省略。
+普通函数和方法支持 `-> void`，省略返回类型等价于 `void`，允许 `return;` 或自然返回。
+`void` 不可用于变量、字段、参数、数组或指针元素类型。不再支持 Kelyra `struct` 声明。
+完整语义与首版限制见 [`class` 与 RAII](class.md)。
+
+## 多返回值
+
+```kelyra
+fn divide(value: i32, divisor: i32) -> (i32, i32) {
+  return value / divisor, value % divisor;
+}
+fn forward() -> (i32, i32) { return divide(17, 5); }
+fn main() -> i32 {
+  let (quotient, remainder) = forward();
+  return quotient + remainder;
+}
+```
+
+函数和方法均支持两个或更多返回值；顺序、数量和类型必须匹配。解构声明推断每个变量的类型，
+调用只执行一次。`return f();` 可转发完全匹配的多返回值；`return a, b;` 从左到右求值，
+全部求值完成后执行 RAII 清理。调用结果也可整体丢弃。
+
+首版返回项支持标量、指针和函数值（数值位宽不超过 128 位）。不支持嵌套返回列表、class/数组/C record
+按值返回项、列表参数或普通列表变量；必须用 `let (a, b) = f();` 接收。
+后端使用 LLVM aggregate 承载返回值，不引入堆分配；这是内部 ABI，不承诺与 C ABI 兼容。
+
+## 函数值与返回函数
+
+```kelyra
+fn increment(value: i32) -> i32 { return value + 1; }
+fn choose() -> fn(i32) -> i32 { return increment; }
+fn apply(callback: fn(i32) -> i32, value: i32) -> i32 {
+  return callback(value);
+}
+fn main() -> i32 {
+  let callback = choose();
+  return callback(41);
+}
+```
+
+`fn(参数类型...) -> 返回类型` 表示函数值类型；函数类型内部省略返回类型同样表示 `void`。
+直接使用函数名称获得函数值，不需要 `&`；支持限定名和 `import module.*` 的可见性规则。
+可存入变量、作为参数或返回值，也可作为多返回值的一项。支持 `choose()(41)` 连续调用。
+签名必须精确匹配；调用时先求接收的函数值，再从左到右求各参数。
+
+首版函数值是无捕获的原生函数地址，不包含环境或隐式分配。尚不支持匿名闭包、捕获、绑定方法，
+也不直接把 C 导入函数转换成函数值；可用普通 Kelyra 包装函数适配 C 调用。
+函数值签名暂不支持 class、数组和 C record 按值参数/返回，以及超过 128 位的数值。
+函数值本身不做生命周期管理；函数型字段可保存回调，但不会自动获取接收对象的所有权。

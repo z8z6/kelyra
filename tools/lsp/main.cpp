@@ -27,7 +27,15 @@ namespace {
 cl::opt<bool> Stdio("stdio", cl::desc("Use standard input/output for LSP"),
                     cl::init(false));
 
-enum class SymbolType { Function, Struct, Field, Parameter, Variable, Module };
+enum class SymbolType {
+  Function,
+  Class,
+  Method,
+  Field,
+  Parameter,
+  Variable,
+  Module
+};
 
 struct Span {
   std::size_t Offset = 0;
@@ -44,6 +52,7 @@ struct Symbol {
   Span Scope;
   bool Public = false;
   std::string Documentation;
+  std::string Owner;
 };
 
 std::size_t Utf8Length(unsigned char C) {
@@ -98,17 +107,37 @@ std::size_t OffsetAt(std::string_view Source, Position Position) {
 bool IsType(const lex::Node &Node) {
   return Node.kind == lex::TokenKind::ast_type ||
          Node.kind == lex::TokenKind::ast_pointer_type ||
-         Node.kind == lex::TokenKind::ast_array_type;
+         Node.kind == lex::TokenKind::ast_array_type ||
+         Node.kind == lex::TokenKind::ast_result_types ||
+         Node.kind == lex::TokenKind::ast_function_type;
 }
 
 std::string TypeName(const lex::Node &Node) {
+  if (Node.kind == lex::TokenKind::ast_function_type) {
+    std::string Result = "fn(";
+    for (std::size_t I = 0; I + 1 < Node.children.size(); ++I) {
+      if (I)
+        Result += ", ";
+      Result += TypeName(*Node.children[I]);
+    }
+    return Result + ") -> " + TypeName(*Node.children.back());
+  }
+  if (Node.kind == lex::TokenKind::ast_result_types) {
+    std::string Result = "(";
+    for (const auto &Child : Node.children) {
+      if (Result.size() > 1)
+        Result += ", ";
+      Result += TypeName(*Child);
+    }
+    return Result + ")";
+  }
   if (Node.kind == lex::TokenKind::ast_type)
     return Node.text;
   if (Node.children.empty())
     return {};
   auto Result = TypeName(*Node.children.front());
   if (Node.kind == lex::TokenKind::ast_pointer_type)
-    return Result + "*";
+    return "*" + Result;
   if (Node.kind == lex::TokenKind::ast_array_type)
     return Result + "[" + Node.text + "]";
   return Result;
@@ -190,6 +219,9 @@ struct Document {
         continue;
       if (Token.Loc.Offset >= Node.Loc.End())
         break;
+      if (Keyword == lex::TokenKind::name && Token.kind == Keyword &&
+          Spelling(Token) == Node.text)
+        return {Token.Loc.Offset, Token.Loc.Len};
       if (Token.kind == Keyword) {
         SawKeyword = true;
         continue;
@@ -204,7 +236,12 @@ struct Document {
   const Symbol *FindVisible(std::string_view Name, std::size_t Offset) const {
     const Symbol *Best = nullptr;
     for (const auto &Candidate : Symbols) {
-      if (Candidate.Name != Name || Candidate.Definition.Offset > Offset ||
+      const bool Forward = Candidate.Kind == SymbolType::Function ||
+                           Candidate.Kind == SymbolType::Class ||
+                           Candidate.Kind == SymbolType::Method ||
+                           Candidate.Kind == SymbolType::Field;
+      if (Candidate.Name != Name ||
+          (!Forward && Candidate.Definition.Offset > Offset) ||
           Offset < Candidate.Scope.Offset ||
           Offset > Candidate.Scope.Offset + Candidate.Scope.Length)
         continue;
@@ -252,7 +289,9 @@ struct Document {
                                : Callee->kind == K::ast_name ? Callee->text
                                                              : "";
       for (const auto &Candidate : Symbols)
-        if (Candidate.Kind == SymbolType::Function && Candidate.Name == Name)
+        if ((Candidate.Kind == SymbolType::Function ||
+             Candidate.Kind == SymbolType::Class) &&
+            Candidate.Name == Name)
           return Candidate.Type;
     }
     return {};
@@ -275,6 +314,38 @@ struct Document {
       }
       if (Type.empty() && Initializer)
         Type = InferType(*Initializer, Name.Loc.Offset);
+      if (Name.kind == K::ast_binding_list) {
+        llvm::StringRef Remaining(Type);
+        if (Remaining.starts_with("(") && Remaining.ends_with(")"))
+          Remaining = Remaining.drop_front().drop_back();
+        else
+          Remaining = {};
+        for (const auto &Binding : Name.children) {
+          unsigned Depth = 0;
+          std::size_t Separator = 0;
+          for (; Separator < Remaining.size(); ++Separator) {
+            const auto C = Remaining[Separator];
+            if (C == ',' && Depth == 0)
+              break;
+            if (C == '(')
+              ++Depth;
+            else if (C == ')' && Depth)
+              --Depth;
+          }
+          const auto BindingType = Remaining.take_front(Separator).trim().str();
+          Remaining = Separator < Remaining.size()
+                          ? Remaining.drop_front(Separator + 1)
+                          : llvm::StringRef();
+          Symbols.push_back({SymbolType::Variable,
+                             Binding->text,
+                             BindingType,
+                             "let " + Binding->text + ": " + BindingType,
+                             Module,
+                             {Binding->Loc.Offset, Binding->Loc.Len},
+                             Scope});
+        }
+        return;
+      }
       Symbols.push_back(
           {SymbolType::Variable,
            Name.text,
@@ -302,15 +373,15 @@ struct Document {
 
     const Span FileScope{0, Parsed.source.size()};
     for (const auto &Node : Parsed.root->children) {
-      if (Node->kind != K::ast_function && Node->kind != K::ast_struct)
+      if (Node->kind != K::ast_function && Node->kind != K::ast_class)
         continue;
       const bool IsFunction = Node->kind == K::ast_function;
-      const auto Definition = FindDeclaration(
-          *Node, IsFunction ? K::keyword_fn : K::keyword_struct);
+      const auto Definition =
+          FindDeclaration(*Node, IsFunction ? K::keyword_fn : K::keyword_class);
       bool IsPublic = false;
       std::string ReturnType;
       std::string Detail =
-          IsFunction ? "fn " + Node->text + "(" : "struct " + Node->text;
+          IsFunction ? "fn " + Node->text + "(" : "class " + Node->text;
       bool First = true;
       for (const auto &Child : Node->children) {
         if (Child->kind == K::ast_public)
@@ -329,22 +400,65 @@ struct Document {
         if (!ReturnType.empty())
           Detail += " -> " + ReturnType;
       }
-      Symbols.push_back({IsFunction ? SymbolType::Function : SymbolType::Struct,
-                         Node->text, ReturnType, Detail, Module, Definition,
-                         FileScope, IsPublic});
+      Symbols.push_back({IsFunction ? SymbolType::Function : SymbolType::Class,
+                         Node->text, IsFunction ? ReturnType : Node->text,
+                         Detail, Module, Definition, FileScope, IsPublic});
       Symbols.back().Documentation = DocumentationAt(Node->Loc.Offset);
+      if (!IsFunction) {
+        const Span ClassScope{Node->Loc.Offset, Node->Loc.Len};
+        for (const auto &Member : Node->children) {
+          if (Member->kind == K::ast_public ||
+              Member->kind == K::ast_annotation)
+            continue;
+          const bool Field = Member->kind == K::ast_field;
+          std::string Type;
+          bool Public = false;
+          std::string Detail = Field ? Member->text + ": " : Member->text + "(";
+          bool First = true;
+          for (const auto &Part : Member->children) {
+            if (Part->kind == K::ast_public)
+              Public = true;
+            if (IsType(*Part))
+              Type = TypeName(*Part);
+            if (Part->kind == K::ast_parameter) {
+              if (!First)
+                Detail += ", ";
+              Detail += Part->text + ": " + TypeName(*Part->children.front());
+              First = false;
+            }
+          }
+          if (Field)
+            Detail += Type;
+          else {
+            Detail += ")";
+            if (!Type.empty())
+              Detail += " -> " + Type;
+          }
+          const auto Definition = Member->kind == K::ast_function
+                                      ? FindDeclaration(*Member, K::keyword_fn)
+                                      : FindDeclaration(*Member, K::name);
+          Symbols.push_back({Field ? SymbolType::Field : SymbolType::Method,
+                             Member->text, Type, Detail, Module, Definition,
+                             ClassScope, Public,
+                             DocumentationAt(Member->Loc.Offset), Node->text});
+        }
+      }
     }
 
-    for (const auto &Node : Parsed.root->children) {
-      if (Node->kind != K::ast_function)
-        continue;
+    const auto CollectFunction = [&](const lex::Node *Node,
+                                     const lex::Node *Owner) {
       const lex::Node *Body = nullptr;
       for (const auto &Child : Node->children)
         if (Child->kind == K::ast_block)
           Body = Child.get();
       if (!Body)
-        continue;
+        return;
       const Span FunctionScope{Body->Loc.Offset, Body->Loc.Len};
+      if (Owner)
+        Symbols.push_back({SymbolType::Parameter, "this", "*" + Owner->text,
+                           "this: *" + Owner->text, Module,
+                           FindDeclaration(*Owner, K::keyword_class),
+                           FunctionScope});
       for (const auto &Child : Node->children) {
         if (Child->kind != K::ast_parameter || Child->children.empty())
           continue;
@@ -358,6 +472,16 @@ struct Document {
              FunctionScope});
       }
       CollectBlock(*Body, FunctionScope);
+    };
+    for (const auto &Node : Parsed.root->children) {
+      if (Node->kind == K::ast_function)
+        CollectFunction(Node.get(), nullptr);
+      if (Node->kind == K::ast_class)
+        for (const auto &Member : Node->children)
+          if (Member->kind == K::ast_function ||
+              Member->kind == K::ast_constructor ||
+              Member->kind == K::ast_destructor)
+            CollectFunction(Member.get(), Node.get());
     }
   }
 
@@ -391,8 +515,9 @@ class Server {
                             std::size_t *Index = nullptr) const {
     for (std::size_t I = 0; I < Doc.Parsed.tokens.size(); ++I) {
       const auto &Token = Doc.Parsed.tokens[I];
-      if (Token.kind == lex::TokenKind::name && Offset >= Token.Loc.Offset &&
-          Offset <= Token.Loc.End()) {
+      if ((Token.kind == lex::TokenKind::name ||
+           Token.kind == lex::TokenKind::keyword_this) &&
+          Offset >= Token.Loc.Offset && Offset <= Token.Loc.End()) {
         if (Index)
           *Index = I;
         return &Token;
@@ -407,7 +532,9 @@ class Server {
         std::string(Doc.Spelling(Doc.Parsed.tokens[TokenIndex]))};
     while (TokenIndex >= 2 &&
            Doc.Parsed.tokens[TokenIndex - 1].kind == lex::TokenKind::punc_dot &&
-           Doc.Parsed.tokens[TokenIndex - 2].kind == lex::TokenKind::name) {
+           (Doc.Parsed.tokens[TokenIndex - 2].kind == lex::TokenKind::name ||
+            Doc.Parsed.tokens[TokenIndex - 2].kind ==
+                lex::TokenKind::keyword_this)) {
       Parts.push_back(
           std::string(Doc.Spelling(Doc.Parsed.tokens[TokenIndex - 2])));
       TokenIndex -= 2;
@@ -422,6 +549,47 @@ class Server {
     return {Qualifier, Parts.back()};
   }
 
+  std::pair<const Document *, const Symbol *>
+  FindMember(const Document &Current, std::string Type,
+             std::string_view Name) const {
+    if (Type.starts_with("*"))
+      Type.erase(Type.begin());
+    for (const auto &[Path, Doc] : Documents)
+      for (const auto &Member : Doc.Symbols) {
+        if (Member.Owner.empty() || Member.Name != Name)
+          continue;
+        const auto Qualified =
+            Doc.Module.empty() ? Member.Owner : Doc.Module + "." + Member.Owner;
+        if ((Type == Qualified || (&Doc == &Current && Type == Member.Owner)) &&
+            (Doc.Module == Current.Module || Member.Public))
+          return {&Doc, &Member};
+      }
+    return {};
+  }
+
+  std::string ReceiverType(const Document &Doc, std::string_view Qualifier,
+                           std::size_t Offset) const {
+    const auto Dot = Qualifier.find('.');
+    const auto *Root = Doc.FindVisible(Qualifier.substr(0, Dot), Offset);
+    if (!Root)
+      return {};
+    std::string Type = Root->Type;
+    std::size_t Start = Dot;
+    while (Start != std::string_view::npos) {
+      ++Start;
+      const auto End = Qualifier.find('.', Start);
+      const auto [Owner, Member] =
+          FindMember(Doc, Type, Qualifier.substr(Start, End - Start));
+      if (!Member)
+        return {};
+      Type = Member->Type;
+      if (Type.find('.') == std::string::npos && !Owner->Module.empty())
+        Type = Owner->Module + "." + Type;
+      Start = End;
+    }
+    return Type;
+  }
+
   std::pair<const Document *, const Symbol *> Resolve(const URIForFile &Uri,
                                                       Position Position) const {
     const auto It = Documents.find(Uri.file().str());
@@ -434,6 +602,11 @@ class Server {
     if (!Token)
       return {};
     const auto [Qualifier, Name] = QualifiedName(Doc, TokenIndex);
+    if (!Qualifier.empty()) {
+      const auto Type = ReceiverType(Doc, Qualifier, Offset);
+      if (!Type.empty())
+        return FindMember(Doc, Type, Name);
+    }
     if (Qualifier.empty()) {
       if (const auto *Local = Doc.FindVisible(Name, Offset))
         return {&Doc, Local};
@@ -442,7 +615,9 @@ class Server {
     const Symbol *Fallback = nullptr;
     for (const auto &[Path, CandidateDoc] : Documents) {
       for (const auto &Candidate : CandidateDoc.Symbols) {
-        if (Candidate.Name != Name || Candidate.Kind == SymbolType::Field)
+        if (Candidate.Name != Name || !Candidate.Owner.empty() ||
+            Candidate.Kind == SymbolType::Variable ||
+            Candidate.Kind == SymbolType::Parameter)
           continue;
         if (!Qualifier.empty() && Candidate.Module != Qualifier)
           continue;
@@ -572,7 +747,43 @@ public:
       Item.detail = Detail.str();
       Result.items.push_back(std::move(Item));
     };
+    std::size_t Start = Offset;
+    while (Start > 0) {
+      const char C = Current.Parsed.source[Start - 1];
+      if (!(std::isalnum(static_cast<unsigned char>(C)) || C == '_' ||
+            C == '.'))
+        break;
+      --Start;
+    }
+    const auto Prefix =
+        std::string_view(Current.Parsed.source).substr(Start, Offset - Start);
+    const auto Dot = Prefix.rfind('.');
+    if (Dot != std::string_view::npos) {
+      const auto Type = ReceiverType(Current, Prefix.substr(0, Dot), Offset);
+      if (!Type.empty()) {
+        for (const auto &[Path, Doc] : Documents)
+          for (const auto &Member : Doc.Symbols) {
+            if (Member.Owner.empty() || Member.Name == "init" ||
+                Member.Name == "deinit")
+              continue;
+            const auto [Owner, Found] = FindMember(Current, Type, Member.Name);
+            if (Found == &Member)
+              Add(Member.Name,
+                  Member.Kind == SymbolType::Field ? CompletionItemKind::Field
+                                                   : CompletionItemKind::Method,
+                  Member.Detail);
+          }
+        return Result;
+      }
+    }
     for (const auto &Symbol : Current.Symbols) {
+      if (!Symbol.Owner.empty() && Offset >= Symbol.Scope.Offset &&
+          Offset <= Symbol.Scope.Offset + Symbol.Scope.Length &&
+          Symbol.Name != "init" && Symbol.Name != "deinit")
+        Add(Symbol.Name,
+            Symbol.Kind == SymbolType::Field ? CompletionItemKind::Field
+                                             : CompletionItemKind::Method,
+            Symbol.Detail);
       if ((Symbol.Kind == SymbolType::Variable ||
            Symbol.Kind == SymbolType::Parameter) &&
           Symbol.Definition.Offset <= Offset && Offset >= Symbol.Scope.Offset &&
@@ -585,16 +796,17 @@ public:
           continue;
         if (Symbol.Kind == SymbolType::Function)
           Add(Symbol.Name, CompletionItemKind::Function, Symbol.Detail);
-        else if (Symbol.Kind == SymbolType::Struct)
-          Add(Symbol.Name, CompletionItemKind::Struct, Symbol.Detail);
+        else if (Symbol.Kind == SymbolType::Class)
+          Add(Symbol.Name, CompletionItemKind::Class, Symbol.Detail);
       }
     for (const auto Keyword :
-         {"fn", "struct", "let", "pub", "if", "else", "while", "return",
-          "break", "continue", "asm", "true", "false", "module", "import"})
+         {"fn", "class", "init", "deinit", "this", "let", "pub", "if", "else",
+          "while", "return", "break", "continue", "asm", "true", "false",
+          "module", "import"})
       Add(Keyword, CompletionItemKind::Keyword, "Kelyra keyword");
     for (const auto Type :
          {"i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64",
-          "u128", "usize", "f32", "f64", "f128", "bool", "char"})
+          "u128", "usize", "f32", "f64", "f128", "bool", "char", "void"})
       Add(Type, CompletionItemKind::Class, "Kelyra type");
     return Result;
   }

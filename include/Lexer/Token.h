@@ -17,7 +17,8 @@ enum class TokenKind {
   keyword_let,              // let
   keyword_var,              // var
   keyword_fn,               // fn
-  keyword_struct,           // struct
+  keyword_class,            // class
+  keyword_this,             // this
   keyword_annotation,       // annotation
   keyword_if,               // if
   keyword_else,             // else
@@ -76,11 +77,16 @@ enum class TokenKind {
   ast_annotation_argument,  // AST annotation argument
   ast_function,             // AST function declaration
   ast_parameter,            // AST function parameter
-  ast_struct,               // AST struct declaration
-  ast_field,                // AST struct field
+  ast_class,                // AST class declaration
+  ast_field,                // AST class field
+  ast_constructor,          // AST class constructor
+  ast_destructor,           // AST class destructor
   ast_type,                 // AST named type
   ast_pointer_type,         // AST *type
   ast_array_type,           // AST type[length]
+  ast_result_types,         // AST (return types)
+  ast_function_type,        // AST fn(types) -> result
+  ast_binding_list,         // AST let (names)
   ast_block,                // AST {...}
   ast_let,                  // AST let declaration
   ast_assign,               // AST assignment

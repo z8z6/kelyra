@@ -1,7 +1,13 @@
+annotation Vertex();
+
 @Vertex
-struct Pair {
-  first: i32,
-  second: i32,
+class Pair {
+  first: i32;
+  second: i32;
+  init(first: i32, second: i32) {
+    this.first = first;
+    this.second = second;
+  }
 }
 
 fn sum(values: i32[4], count: i32) -> i32 {

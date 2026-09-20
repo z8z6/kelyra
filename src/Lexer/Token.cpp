@@ -23,8 +23,10 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "var";
   case TokenKind::keyword_fn:
     return "fn";
-  case TokenKind::keyword_struct:
-    return "struct";
+  case TokenKind::keyword_class:
+    return "class";
+  case TokenKind::keyword_this:
+    return "this";
   case TokenKind::keyword_annotation:
     return "annotation";
   case TokenKind::keyword_if:
@@ -141,16 +143,26 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Function";
   case TokenKind::ast_parameter:
     return "Parameter";
-  case TokenKind::ast_struct:
-    return "Struct";
+  case TokenKind::ast_class:
+    return "Class";
   case TokenKind::ast_field:
     return "Field";
+  case TokenKind::ast_constructor:
+    return "Constructor";
+  case TokenKind::ast_destructor:
+    return "Destructor";
   case TokenKind::ast_type:
     return "Type";
   case TokenKind::ast_pointer_type:
     return "PointerType";
   case TokenKind::ast_array_type:
     return "ArrayType";
+  case TokenKind::ast_result_types:
+    return "ResultTypes";
+  case TokenKind::ast_function_type:
+    return "FunctionType";
+  case TokenKind::ast_binding_list:
+    return "BindingList";
   case TokenKind::ast_block:
     return "Block";
   case TokenKind::ast_let:

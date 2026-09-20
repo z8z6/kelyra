@@ -26,6 +26,11 @@ class IRGen {
   struct Loop {
     mlir::Block *Break;
     mlir::Block *Continue;
+    std::size_t CleanupDepth;
+  };
+  struct Cleanup {
+    const sema::ClassInfo *Class;
+    mlir::Value Address;
   };
 
   mlir::MLIRContext &Context;
@@ -35,6 +40,9 @@ class IRGen {
   mlir::Block *FunctionEntry = nullptr;
   std::vector<std::unordered_map<std::string, Variable>> Scopes;
   std::vector<Loop> Loops;
+  std::vector<std::vector<Cleanup>> Cleanups;
+  const sema::ClassInfo *CurrentClass = nullptr;
+  const sema::ClassInfo *ActiveDestructor = nullptr;
   unsigned GlobalStringCount = 0;
 
   mlir::Location GetLocation(const lex::Location &Loc);
@@ -63,7 +71,15 @@ class IRGen {
   void EmitWhenStatement(const lex::Node &Statement);
   void EmitWhileStatement(const lex::Node &Statement);
   void EmitStatement(const lex::Node &Statement);
-  void EmitFunction(const lex::Node &Function);
+  void EmitFunction(const lex::Node &Function,
+                    const sema::ClassInfo *Owner = nullptr);
+  void EmitConstruction(const lex::Node &Expression, mlir::Value Address);
+  void EmitCleanups(std::size_t KeepDepth, mlir::Location Loc);
+  void EmitFieldDestructors(const sema::ClassInfo &Class, mlir::Value Address,
+                            mlir::Location Loc);
+  void EmitDefaultDestructor(const sema::ClassInfo &Class);
+  mlir::Value FieldAddress(const sema::ClassInfo &Class, mlir::Value Address,
+                           std::size_t Index, mlir::Location Loc);
 
 public:
   IRGen(mlir::MLIRContext &Context, const sema::Sema &Analysis,

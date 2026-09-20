@@ -1,6 +1,8 @@
 #include "Lexer/Formatter.h"
 
+#include <algorithm>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 using namespace kelyra::lex;
@@ -97,9 +99,107 @@ bool StartsWord(TokenKind Kind) {
          Kind == TokenKind::string ||
          (Kind >= TokenKind::keyword_let && Kind <= TokenKind::keyword_pub);
 }
+
+std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
+  struct Import {
+    std::size_t Begin;
+    std::size_t StatementBegin;
+    std::size_t StatementEnd;
+    std::size_t End;
+    std::string Module;
+    std::string Identity;
+    bool Plain;
+    bool Wildcard;
+
+    bool Decorated() const {
+      return Begin != StatementBegin || End != StatementEnd;
+    }
+  };
+
+  std::vector<Import> Imports;
+  for (std::size_t Index = 0; Index < Parsed.tokens.size(); ++Index) {
+    if (Parsed.tokens[Index].kind != TokenKind::keyword_import)
+      continue;
+
+    Import Current{Index, Index, Index, Index, {}, {}, true, false};
+    while (Current.Begin > 0 &&
+           Parsed.tokens[Current.Begin - 1].kind == TokenKind::comment) {
+      const auto Comment = Current.Begin - 1;
+      if (Comment > 0 &&
+          Parsed.tokens[Comment - 1].kind == TokenKind::punc_semicolon &&
+          Parsed.tokens[Comment - 1].Loc.Line ==
+              Parsed.tokens[Comment].Loc.Line)
+        break;
+      Current.Begin = Comment;
+    }
+    for (++Index; Index < Parsed.tokens.size(); ++Index) {
+      const auto &Token = Parsed.tokens[Index];
+      if (Token.kind == TokenKind::punc_semicolon) {
+        Current.StatementEnd = Current.End = Index;
+        if (Index + 1 < Parsed.tokens.size() &&
+            Parsed.tokens[Index + 1].kind == TokenKind::comment &&
+            Parsed.tokens[Index + 1].Loc.Line == Token.Loc.Line)
+          Current.End = Index + 1;
+        break;
+      }
+      if (Token.kind == TokenKind::comment)
+        continue;
+      const auto Text = std::string_view(Parsed.source)
+                            .substr(Token.Loc.Offset, Token.Loc.Len);
+      Current.Identity += Text;
+      Current.Identity += '\x1f';
+      if (Token.kind == TokenKind::string)
+        Current.Plain = false;
+      else
+        Current.Module += Text;
+    }
+    Current.Wildcard = Current.Module.ends_with(".*");
+    Imports.push_back(std::move(Current));
+  }
+  if (Imports.size() < 2)
+    return Parsed.tokens;
+
+  const auto FirstIndex = Imports.front().Begin;
+  std::vector<bool> IsImportToken(Parsed.tokens.size());
+  for (const auto &Import : Imports)
+    for (std::size_t Index = Import.Begin; Index <= Import.End; ++Index)
+      IsImportToken[Index] = true;
+
+  std::unordered_set<std::string> Wildcards;
+  for (const auto &Import : Imports)
+    if (Import.Wildcard)
+      Wildcards.insert(Import.Module.substr(0, Import.Module.size() - 2));
+
+  std::unordered_set<std::string> Seen;
+  std::erase_if(Imports, [&](const Import &Import) {
+    const bool Duplicate = !Seen.insert(Import.Identity).second;
+    return !Import.Decorated() &&
+           (Duplicate || (Import.Plain && !Import.Wildcard &&
+                          Wildcards.contains(Import.Module)));
+  });
+  std::stable_sort(Imports.begin(), Imports.end(),
+                   [](const Import &Left, const Import &Right) {
+                     return Left.Module < Right.Module ||
+                            (Left.Module == Right.Module &&
+                             Left.Identity < Right.Identity);
+                   });
+
+  std::vector<Token> Tokens;
+  Tokens.reserve(Parsed.tokens.size());
+  Tokens.insert(Tokens.end(), Parsed.tokens.begin(),
+                Parsed.tokens.begin() + FirstIndex);
+  for (const auto &Import : Imports)
+    Tokens.insert(Tokens.end(), Parsed.tokens.begin() + Import.Begin,
+                  Parsed.tokens.begin() + Import.End + 1);
+  for (std::size_t Index = FirstIndex; Index < Parsed.tokens.size(); ++Index)
+    if (!IsImportToken[Index])
+      Tokens.push_back(Parsed.tokens[Index]);
+  return Tokens;
+}
 } // namespace
 
 std::string kelyra::lex::Format(const ParseResult &Parsed) {
+  const auto Tokens = NormalizeImports(Parsed);
   Writer Output;
   std::vector<bool> StructBraces;
   std::vector<bool> AsmBraces;
@@ -107,9 +207,15 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
   TokenKind Previous = TokenKind::end;
   bool Annotation = false;
   bool AsmChain = false;
+  bool BlankAfterComment = false;
+  bool ModuleDeclaration = false;
+  const bool HasImports =
+      std::any_of(Tokens.begin(), Tokens.end(), [](const Token &Token) {
+        return Token.kind == TokenKind::keyword_import;
+      });
 
-  for (std::size_t Index = 0; Index < Parsed.tokens.size(); ++Index) {
-    const auto &Token = Parsed.tokens[Index];
+  for (std::size_t Index = 0; Index < Tokens.size(); ++Index) {
+    const auto &Token = Tokens[Index];
     if (Token.kind == TokenKind::end)
       break;
     const auto Text =
@@ -119,7 +225,8 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       if (!Output.IsLineStart())
         Output.Space();
       Output.Write(Text);
-      Output.NewLine();
+      Output.NewLine(BlankAfterComment);
+      BlankAfterComment = false;
       Previous = Token.kind;
       continue;
     }
@@ -132,8 +239,8 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       Output.PushIndent();
       bool IsStruct = false;
       for (std::size_t I = Index; I > 0; --I) {
-        const auto Kind = Parsed.tokens[I - 1].kind;
-        if (Kind == TokenKind::keyword_struct) {
+        const auto Kind = Tokens[I - 1].kind;
+        if (Kind == TokenKind::keyword_class) {
           IsStruct = true;
           break;
         }
@@ -155,9 +262,8 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
         StructBraces.pop_back();
       if (!AsmBraces.empty())
         AsmBraces.pop_back();
-      const auto Next = Index + 1 < Parsed.tokens.size()
-                            ? Parsed.tokens[Index + 1].kind
-                            : TokenKind::end;
+      const auto Next =
+          Index + 1 < Tokens.size() ? Tokens[Index + 1].kind : TokenKind::end;
       if (Next == TokenKind::keyword_else)
         Output.Space();
       else if (WasAsm && Next == TokenKind::punc_dot) {
@@ -169,14 +275,27 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
     }
     case TokenKind::punc_semicolon: {
       Output.Write(Text);
-      const auto Next = Index + 1 < Parsed.tokens.size()
-                            ? Parsed.tokens[Index + 1].kind
-                            : TokenKind::end;
+      std::size_t NextIndex = Index + 1;
+      const bool InlineComment = NextIndex < Tokens.size() &&
+                                 Tokens[NextIndex].kind == TokenKind::comment &&
+                                 Tokens[NextIndex].Loc.Line == Token.Loc.Line;
+      while (NextIndex < Tokens.size() &&
+             Tokens[NextIndex].kind == TokenKind::comment)
+        ++NextIndex;
+      const auto Next =
+          NextIndex < Tokens.size() ? Tokens[NextIndex].kind : TokenKind::end;
       const bool TopLevel = StructBraces.empty();
       const bool EndOfImports = TopLevel && Next != TokenKind::keyword_import &&
                                 Next != TokenKind::keyword_module &&
                                 Next != TokenKind::end;
-      Output.NewLine(EndOfImports);
+      const bool Blank = EndOfImports || (ModuleDeclaration && HasImports);
+      if (InlineComment) {
+        Output.Space();
+        BlankAfterComment = Blank;
+      } else {
+        Output.NewLine(Blank);
+      }
+      ModuleDeclaration = false;
       AsmChain = false;
       break;
     }
@@ -202,9 +321,8 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
           Output.NewLine();
           Annotation = false;
         }
-        const auto Next = Index + 1 < Parsed.tokens.size()
-                              ? Parsed.tokens[Index + 1].kind
-                              : TokenKind::end;
+        const auto Next =
+            Index + 1 < Tokens.size() ? Tokens[Index + 1].kind : TokenKind::end;
         if (AsmChain && Next == TokenKind::punc_dot)
           Output.NewLine();
       }
@@ -232,8 +350,10 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       Output.RawLines(Text);
       break;
     default:
+      if (Token.kind == TokenKind::keyword_module)
+        ModuleDeclaration = true;
       if (IsOperator(Token.kind)) {
-        const bool Unary = IsUnary(Parsed.tokens, Index);
+        const bool Unary = IsUnary(Tokens, Index);
         if (Unary &&
             (StartsWord(Previous) || Previous == TokenKind::punc_right_paren ||
              Previous == TokenKind::punc_right_bracket))
@@ -249,9 +369,8 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
              Previous == TokenKind::punc_right_bracket))
           Output.Space();
         Output.Write(Text);
-        const auto Next = Index + 1 < Parsed.tokens.size()
-                              ? Parsed.tokens[Index + 1].kind
-                              : TokenKind::end;
+        const auto Next =
+            Index + 1 < Tokens.size() ? Tokens[Index + 1].kind : TokenKind::end;
         if (Annotation && Token.kind == TokenKind::name &&
             Next != TokenKind::punc_dot && Next != TokenKind::punc_left_paren) {
           Output.NewLine();

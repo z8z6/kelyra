@@ -15,11 +15,28 @@ using namespace kelyra;
 using K = lex::TokenKind;
 
 mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
+  if (const auto *Symbol = Analysis.GetFunctionValue(Expression)) {
+    const auto &Type = Analysis.GetType(Expression);
+    llvm::SmallVector<mlir::Type> Parameters;
+    llvm::SmallVector<mlir::Type> Results;
+    for (const auto &Parameter : Type.Parameters)
+      Parameters.push_back(GetType(Parameter));
+    if (!Type.Results.front().IsVoid())
+      Results.push_back(GetType(Type.Results.front()));
+    const auto Loc = GetLocation(Expression.Loc);
+    auto Function = mlir::func::ConstantOp::create(
+        Builder, Loc, Builder.getFunctionType(Parameters, Results),
+        mlir::FlatSymbolRefAttr::get(&Context, *Symbol));
+    return mlir::UnrealizedConversionCastOp::create(Builder, Loc, GetType(Type),
+                                                    Function.getResult())
+        .getResult(0);
+  }
   using K = lex::TokenKind;
   using Handler = mlir::Value (IRGen::*)(const lex::Node &);
   static const std::unordered_map<K, Handler> Handlers = {
       {K::ast_name, &IRGen::EmitNameExpression},
       {K::ast_index, &IRGen::EmitIndexExpression},
+      {K::ast_member, &IRGen::EmitIndexExpression},
       {K::ast_call, &IRGen::EmitCallExpression},
       {K::ast_literal, &IRGen::EmitLiteralExpression},
       {K::ast_group, &IRGen::EmitGroupExpression},
@@ -36,6 +53,9 @@ mlir::Value codegen::IRGen::EmitNameExpression(const lex::Node &Expression) {
   const auto Loc = GetLocation(Expression.Loc);
   const auto &SemanticType = Analysis.GetType(Expression);
   const auto Type = GetType(SemanticType);
+  if (Analysis.GetField(Expression))
+    return mlir::LLVM::LoadOp::create(Builder, Loc, Type,
+                                      EmitAddress(Expression));
   auto *Variable = FindVariable(Expression.text);
   if (!Variable->Address)
     return Variable->DirectValue;
@@ -53,8 +73,35 @@ mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
 mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
   const auto Loc = GetLocation(Expression.Loc);
   const auto &SemanticType = Analysis.GetType(Expression);
-  const auto Type = GetType(SemanticType);
+  const auto Type =
+      SemanticType.IsVoid() ? mlir::Type() : GetType(SemanticType);
   llvm::SmallVector<mlir::Value> Arguments;
+  if (Analysis.IsIndirectCall(Expression)) {
+    const auto &Callee = *Expression.children.front();
+    const auto &Signature = Analysis.GetType(Callee);
+    llvm::SmallVector<mlir::Type> Parameters;
+    for (const auto &Parameter : Signature.Parameters)
+      Parameters.push_back(GetType(Parameter));
+    Arguments.push_back(EmitExpression(Callee));
+    for (std::size_t I = 1; I < Expression.children.size(); ++I)
+      Arguments.push_back(EmitExpression(*Expression.children[I]));
+    auto FunctionType = mlir::LLVM::LLVMFunctionType::get(
+        Type ? Type : mlir::LLVM::LLVMVoidType::get(&Context), Parameters);
+    auto Call =
+        mlir::LLVM::CallOp::create(Builder, Loc, FunctionType, Arguments);
+    return Type ? Call.getResult() : mlir::Value();
+  }
+  if (Analysis.IsMethodCall(Expression)) {
+    const auto &Callee = *Expression.children.front();
+    if (Callee.kind == K::ast_member) {
+      const auto &Base = *Callee.children.front();
+      Arguments.push_back(Analysis.GetType(Base).IsPointer()
+                              ? EmitExpression(Base)
+                              : EmitAddress(Base));
+    } else {
+      Arguments.push_back(FindVariable("this")->DirectValue);
+    }
+  }
   const auto *Wrapper = Analysis.GetCWrapper(Expression);
   mlir::Value ResultAddress;
   if (Wrapper && Wrapper->ReturnByAddress) {
@@ -84,9 +131,12 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
                                Arguments);
     return mlir::LLVM::LoadOp::create(Builder, Loc, Type, ResultAddress);
   }
-  return mlir::func::CallOp::create(Builder, Loc, Callee, mlir::TypeRange{Type},
-                                    Arguments)
-      .getResult(0);
+  llvm::SmallVector<mlir::Type> Results;
+  if (Type)
+    Results.push_back(Type);
+  auto Call =
+      mlir::func::CallOp::create(Builder, Loc, Callee, Results, Arguments);
+  return Type ? Call.getResult(0) : mlir::Value();
 }
 
 mlir::Value codegen::IRGen::EmitLiteralExpression(const lex::Node &Expression) {

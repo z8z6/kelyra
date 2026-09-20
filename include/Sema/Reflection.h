@@ -35,15 +35,26 @@ struct AnnotationInstance {
 enum class MetaKind {
   Module,
   Function,
-  Struct,
+  Class,
   Field,
   Parameter,
   Type,
   Annotation,
   AnnotationParameter,
+  Method,
+  Constructor,
+  Destructor,
 };
 
-enum class MetaTypeKind { None, Builtin, Pointer, Array, Record };
+enum class MetaTypeKind {
+  None,
+  Builtin,
+  Pointer,
+  Array,
+  Record,
+  Results,
+  Function
+};
 
 struct MetaDeclaration {
   MetaId Id = InvalidMetaId;
@@ -59,6 +70,7 @@ struct MetaDeclaration {
   std::vector<AnnotationInstance> Annotations;
   MetaTypeKind TypeKind = MetaTypeKind::None;
   unsigned BitWidth = 0;
+  unsigned Alignment = 0;
   unsigned PointerDepth = 0;
   std::vector<std::uint64_t> Dimensions;
 };

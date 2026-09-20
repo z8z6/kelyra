@@ -105,6 +105,29 @@ send(
 labels = {item["label"] for item in receive(5)["items"]}
 assert {"add", "value", "while", "i32"} <= labels
 
+class_source = """class Counter {
+  count: i32;
+  init(count: i32) { this.count = count; }
+  fn get() -> i32 { return count; }
+}
+fn use() -> i32 {
+  let counter = Counter(7);
+  return counter.get();
+}
+"""
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": uri, "languageId": "kelyra", "version": 2, "text": class_source}}})
+send({"jsonrpc": "2.0", "id": 10, "method": "textDocument/completion", "params": {
+    "textDocument": {"uri": uri}, "position": {"line": 7, "character": 17}}})
+members = {item["label"] for item in receive(10)["items"]}
+assert {"count", "get"} <= members and "init" not in members
+send({"jsonrpc": "2.0", "id": 11, "method": "textDocument/definition", "params": {
+    "textDocument": {"uri": uri}, "position": {"line": 7, "character": 18}}})
+assert receive(11)[0]["range"]["start"] == {"line": 3, "character": 5}
+send({"jsonrpc": "2.0", "id": 12, "method": "textDocument/hover", "params": {
+    "textDocument": {"uri": uri}, "position": {"line": 2, "character": 26}}})
+assert "count: i32" in receive(12)["contents"]["value"]
+
 send({"jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": None})
 receive(6)
 send({"jsonrpc": "2.0", "method": "exit", "params": None})

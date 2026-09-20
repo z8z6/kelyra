@@ -56,17 +56,18 @@ TEST(Frontend, ExpressionAst) {
 
 TEST(Frontend, Format) {
   auto Parsed = lexer.parse(
-      "module app.main; import math.vector; @Vertex struct Pair{left:i32,"
-      "right:i32[4],} pub fn main()->i32{let x:*c.Pair=c.make(1,);let value=1;"
+      "module app.main; import math.vector; @Vertex class Pair{left:i32;"
+      "right:i32[4];} pub fn main()->i32{let x:*c.Pair=c.make(1,);let value=1;"
       "let pointer:*i32=&value;*pointer=*pointer+1;if !x{"
       "return -1;}else{return 0;}} // end\n");
   ASSERT_TRUE(Parsed.ok());
   const std::string Expected = "module app.main;\n"
+                               "\n"
                                "import math.vector;\n\n"
                                "@Vertex\n"
-                               "struct Pair {\n"
-                               "  left: i32,\n"
-                               "  right: i32[4],\n"
+                               "class Pair {\n"
+                               "  left: i32;\n"
+                               "  right: i32[4];\n"
                                "}\n\n"
                                "pub fn main() -> i32 {\n"
                                "  let x: *c.Pair = c.make(1,);\n"
@@ -84,6 +85,81 @@ TEST(Frontend, Format) {
   auto Formatted = lexer.parse(Expected);
   ASSERT_TRUE(Formatted.ok());
   EXPECT_EQ(Format(Formatted), Expected) << "formatting is idempotent";
+}
+
+TEST(Frontend, ClassAndMultipleReturnRoundTrip) {
+  const std::string Source = R"(
+@tag pub class Pair {
+  @tag pub left: i32;
+  pub init(left: i32) { this.left = left; }
+  @tag pub fn values() -> (i32, bool) { return left, true; }
+  deinit() { return; }
+}
+fn use() -> void { let pair = Pair(1); let (value, ok) = pair.values(); }
+fn factory() -> fn(i32) -> (i32, bool) { return convert; }
+fn accept(callback: fn()) -> void { callback(); }
+)";
+  auto Parsed = lexer.parse(Source);
+  ASSERT_TRUE(Parsed.ok());
+  spans(*Parsed.root, Source.size());
+  const auto Formatted = Format(Parsed);
+  auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(lexer.dumpAst(*Parsed.root), lexer.dumpAst(*Again.root));
+  EXPECT_EQ(Format(Again), Formatted);
+  EXPECT_FALSE(lexer.parse("struct Pair { left: i32 }").ok());
+}
+
+TEST(Frontend, FormatImports) {
+  auto Parsed = lexer.parse(
+      "module app.main; import zebra; import alpha.part; import zebra; "
+      "import alpha.part.*; import middle; fn main() { return; }");
+  ASSERT_TRUE(Parsed.ok());
+  const std::string Expected = "module app.main;\n"
+                               "\n"
+                               "import alpha.part.*;\n"
+                               "import middle;\n"
+                               "import zebra;\n\n"
+                               "fn main() {\n"
+                               "  return;\n"
+                               "}\n";
+  EXPECT_EQ(Format(Parsed), Expected);
+  auto Formatted = lexer.parse(Expected);
+  ASSERT_TRUE(Formatted.ok());
+  EXPECT_EQ(Format(Formatted), Expected) << "formatting is idempotent";
+}
+
+TEST(Frontend, FormatImportsKeepsCommentsAttached) {
+  auto Parsed = lexer.parse("module app.main;\n"
+                            "// zebra docs\n"
+                            "import zebra; // zebra tail\n"
+                            "// alpha docs\n"
+                            "import alpha;\n"
+                            "fn main() { return; }");
+  ASSERT_TRUE(Parsed.ok());
+  const std::string Expected = "module app.main;\n\n"
+                               "// alpha docs\n"
+                               "import alpha;\n"
+                               "// zebra docs\n"
+                               "import zebra; // zebra tail\n\n"
+                               "fn main() {\n"
+                               "  return;\n"
+                               "}\n";
+  EXPECT_EQ(Format(Parsed), Expected);
+  auto Formatted = lexer.parse(Expected);
+  ASSERT_TRUE(Formatted.ok());
+  EXPECT_EQ(Format(Formatted), Expected) << "formatting is idempotent";
+}
+
+TEST(Frontend, FormatCImportsByHeader) {
+  auto Parsed = lexer.parse(
+      "import c \"zebra.h\"; import c \"alpha.h\"; fn main() { return; }");
+  ASSERT_TRUE(Parsed.ok());
+  EXPECT_EQ(Format(Parsed), "import c \"alpha.h\";\n"
+                            "import c \"zebra.h\";\n\n"
+                            "fn main() {\n"
+                            "  return;\n"
+                            "}\n");
 }
 
 TEST(Frontend, ExpressionValidation) {
@@ -124,7 +200,7 @@ TEST(Frontend, TokensAndComments) {
 
 TEST(Frontend, TokenKinds) {
   auto result = lexer.parseExpression(
-      "name 1 \"s\" let fn struct annotation if else while return break "
+      "name 1 \"s\" let fn class annotation if else while return break "
       "continue "
       "true false meta when parallel extern defer module import pub -> = + - "
       "* / % == != < <= > >= && || ! & ( ) { } [ ] , : ; . @");
@@ -133,7 +209,7 @@ TEST(Frontend, TokenKinds) {
                                            TokenKind::string,
                                            TokenKind::keyword_let,
                                            TokenKind::keyword_fn,
-                                           TokenKind::keyword_struct,
+                                           TokenKind::keyword_class,
                                            TokenKind::keyword_annotation,
                                            TokenKind::keyword_if,
                                            TokenKind::keyword_else,
@@ -282,7 +358,7 @@ TEST(Frontend, TokenLocations) {
 TEST(Frontend, ModuleAst) {
   const std::string source = R"(
 @Vertex
-struct Pair { left: i32, right: i32[4], }
+class Pair { left: i32; right: i32[4]; }
 fn choose(x: i32, y: i32,) -> i32 {
   let z: i32 = x + y;
   let inferred = false;
@@ -324,7 +400,7 @@ fn empty() { return; }
 
 TEST(Frontend, RejectInvalidModules) {
   for (const std::string invalid :
-       {"let x = 1;", "fn f(x) {}", "fn f() { let x; }", "struct S { x i32 }",
+       {"let x = 1;", "fn f(x) {}", "fn f() { let x; }", "class S { x i32 }",
         "fn f() { 1 = 2; }", "fn f() { a = b = c; }", "fn f() { return 1 }",
         "fn f() { if true return; }", "fn f() {", "fn f(x: i32[1.5]) {}",
         "fn f() { break 1; }", "fn f() { let fn = 1; }", "@ fn f() {}",

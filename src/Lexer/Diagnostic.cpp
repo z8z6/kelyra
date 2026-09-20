@@ -32,7 +32,7 @@ constexpr std::array DiagnosticInfos = {
     DiagnosticInfo{"K0002", "expected '}' before declaration"},
     DiagnosticInfo{"K0002", "expected type annotation or initializer"},
     DiagnosticInfo{"K0002", "invalid assignment target"},
-    DiagnosticInfo{"K0002", "expected 'fn', 'struct', or 'annotation'"},
+    DiagnosticInfo{"K0002", "expected 'fn', 'class', or 'annotation'"},
     DiagnosticInfo{"K0002", "expected end of expression"},
     DiagnosticInfo{"K0004", "duplicate function"},
     DiagnosticInfo{"K0004", "duplicate parameter"},
@@ -59,6 +59,22 @@ constexpr std::array DiagnosticInfos = {
     DiagnosticInfo{"K0004", "duplicate module"},
     DiagnosticInfo{"K0004", "unknown imported module"},
     DiagnosticInfo{"K0004", "declaration is private to another module"},
+    DiagnosticInfo{
+        "K0004",
+        "invalid class or duplicate member; exactly one init is required"},
+    DiagnosticInfo{"K0004", "initialize every field once in declaration order "
+                            "at the start of init"},
+    DiagnosticInfo{"K0004", "cannot read an uninitialized field or use this "
+                            "before initialization completes"},
+    DiagnosticInfo{
+        "K0004",
+        "class values require direct construction; copying, assignment, arrays "
+        "and value parameters/returns are unsupported"},
+    DiagnosticInfo{"K0004",
+                   "init and deinit cannot be called as ordinary methods"},
+    DiagnosticInfo{
+        "K0004",
+        "recursive class value layout; use a pointer to break the cycle"},
 };
 
 static_assert(DiagnosticInfos.size() ==

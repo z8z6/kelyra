@@ -1,0 +1,64 @@
+#include "CodeGen/IRGen.h"
+
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+
+using namespace kelyra;
+
+mlir::Value codegen::IRGen::FieldAddress(const sema::ClassInfo &Class,
+                                         mlir::Value Address, std::size_t Index,
+                                         mlir::Location Loc) {
+  sema::Type Type{sema::BuiltinType::Class, {}};
+  Type.ClassName = Class.QualifiedName;
+  llvm::SmallVector<mlir::LLVM::GEPArg> Indices{
+      0, static_cast<int32_t>(Class.Fields[Index].LayoutIndex)};
+  return mlir::LLVM::GEPOp::create(Builder, Loc,
+                                   mlir::LLVM::LLVMPointerType::get(&Context),
+                                   GetType(Type), Address, Indices);
+}
+
+void codegen::IRGen::EmitConstruction(const lex::Node &Expression,
+                                      mlir::Value Address) {
+  llvm::SmallVector<mlir::Value> Arguments{Address};
+  for (std::size_t I = 1; I < Expression.children.size(); ++I)
+    Arguments.push_back(EmitExpression(*Expression.children[I]));
+  mlir::func::CallOp::create(Builder, GetLocation(Expression.Loc),
+                             Analysis.GetCallee(Expression), mlir::TypeRange{},
+                             Arguments);
+}
+
+void codegen::IRGen::EmitCleanups(std::size_t KeepDepth, mlir::Location Loc) {
+  for (auto I = Cleanups.size(); I > KeepDepth; --I)
+    for (auto It = Cleanups[I - 1].rbegin(); It != Cleanups[I - 1].rend(); ++It)
+      mlir::func::CallOp::create(Builder, Loc, It->Class->DestructorSymbol,
+                                 mlir::TypeRange{},
+                                 mlir::ValueRange{It->Address});
+}
+
+void codegen::IRGen::EmitFieldDestructors(const sema::ClassInfo &Class,
+                                          mlir::Value Address,
+                                          mlir::Location Loc) {
+  for (std::size_t I = Class.Fields.size(); I > 0; --I) {
+    const auto &Field = Class.Fields[I - 1];
+    if (!Field.Value.IsClass())
+      continue;
+    const auto *Child = Analysis.GetClass(Field.Value);
+    auto ChildAddress = FieldAddress(Class, Address, I - 1, Loc);
+    mlir::func::CallOp::create(Builder, Loc, Child->DestructorSymbol,
+                               mlir::TypeRange{},
+                               mlir::ValueRange{ChildAddress});
+  }
+}
+
+void codegen::IRGen::EmitDefaultDestructor(const sema::ClassInfo &Class) {
+  const auto Loc = GetLocation(Class.Node->Loc);
+  auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
+  auto Function =
+      mlir::func::FuncOp::create(Builder, Loc, Class.DestructorSymbol,
+                                 Builder.getFunctionType({Pointer}, {}));
+  Function.setPrivate();
+  auto *Entry = Function.addEntryBlock();
+  Builder.setInsertionPointToStart(Entry);
+  EmitFieldDestructors(Class, Entry->getArgument(0), Loc);
+  mlir::func::ReturnOp::create(Builder, Loc);
+}

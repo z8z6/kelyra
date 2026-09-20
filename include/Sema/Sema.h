@@ -39,11 +39,39 @@ struct CWrapper {
   bool ReturnByAddress = false;
 };
 
+struct ClassFieldInfo {
+  const lex::Node *Node = nullptr;
+  std::string Name;
+  Type Value{BuiltinType::I32, {}};
+  bool Public = false;
+  std::uint64_t Offset = 0;
+  unsigned LayoutIndex = 0;
+};
+
+struct ClassInfo {
+  const lex::Node *Node = nullptr;
+  std::string Module;
+  std::string Name;
+  std::string QualifiedName;
+  std::vector<ClassFieldInfo> Fields;
+  const lex::Node *Constructor = nullptr;
+  const lex::Node *Destructor = nullptr;
+  std::string ConstructorSymbol;
+  std::string DestructorSymbol;
+  bool Public = false;
+  std::uint64_t Size = 0;
+  unsigned Alignment = 1;
+};
+
 class Sema {
   enum AnnotationTarget : unsigned {
     AnnotationFunction = 1u << 0,
-    AnnotationStruct = 1u << 1,
+    AnnotationClass = 1u << 1,
     AnnotationDeclaration = 1u << 2,
+    AnnotationField = 1u << 3,
+    AnnotationMethod = 1u << 4,
+    AnnotationConstructor = 1u << 5,
+    AnnotationDestructor = 1u << 6,
   };
 
   enum class AnnotationRetention { Source, Compile };
@@ -58,8 +86,10 @@ class Sema {
     const lex::Node *Node = nullptr;
     std::string Module;
     std::vector<AnnotationParameter> Parameters;
-    unsigned Targets =
-        AnnotationFunction | AnnotationStruct | AnnotationDeclaration;
+    unsigned Targets = AnnotationFunction | AnnotationClass |
+                       AnnotationDeclaration | AnnotationField |
+                       AnnotationMethod | AnnotationConstructor |
+                       AnnotationDestructor;
     AnnotationRetention Retention = AnnotationRetention::Compile;
     bool Public = false;
     bool Repeatable = false;
@@ -70,9 +100,10 @@ class Sema {
     std::string Module;
     std::string Symbol;
     std::vector<Type> Parameters;
-    Type Return{BuiltinType::I32, {}};
+    Type Return{BuiltinType::Void, {}};
     bool Public = false;
     bool Variadic = false;
+    std::string OwnerClass;
     const ExternalFunction *External = nullptr;
   };
 
@@ -80,12 +111,19 @@ class Sema {
   ReflectionDatabase Reflection;
   std::unordered_map<const lex::Node *, Type> Types;
   std::unordered_map<std::string, FunctionInfo> Functions;
+  std::unordered_map<std::string, ClassInfo> Classes;
   std::unordered_map<std::string, AnnotationInfo> AnnotationDeclarations;
   std::unordered_map<const lex::Node *, std::vector<AnnotationInstance>>
       AnnotationInstances;
   std::unordered_map<const lex::Node *, std::string> Symbols;
   std::unordered_map<const lex::Node *, std::string> Callees;
   std::unordered_map<const lex::Node *, std::size_t> CWrapperCalls;
+  std::unordered_map<const lex::Node *, std::string> ConstructorCalls;
+  std::unordered_map<const lex::Node *, std::pair<std::string, std::size_t>>
+      FieldReferences;
+  std::unordered_set<const lex::Node *> MethodCalls;
+  std::unordered_map<const lex::Node *, std::string> FunctionValues;
+  std::unordered_set<const lex::Node *> IndirectCalls;
   std::unordered_map<const lex::Node *, const lex::Node *> WhenBranches;
   std::unordered_map<std::string, std::unordered_set<std::string>> Imports;
   std::unordered_map<std::string, Type> ExternalTypes;
@@ -94,6 +132,20 @@ class Sema {
   std::vector<std::unordered_map<std::string, Type>> Scopes;
   std::optional<Type> ReturnType;
   std::string CurrentModule;
+  std::string CurrentClass;
+  const lex::Node *CurrentConstructor = nullptr;
+  const lex::Node *ConstructionContext = nullptr;
+  const lex::Node *InitializingTarget = nullptr;
+  std::size_t InitializedFields = 0;
+  bool CheckingFieldBase = false;
+  bool InDestructor = false;
+
+  void CheckClassLayouts();
+  std::optional<Type> CheckFunctionType(const lex::Node &Node);
+  std::optional<Type> CheckFunctionValue(const lex::Node &Node,
+                                         std::optional<Type> Expected);
+  std::optional<Type> CheckIndirectCall(const lex::Node &Node,
+                                        std::optional<Type> Expected);
 
   void Error(const lex::Node &Node, lex::DiagnosticKind Kind);
   void RegisterAnnotation(const lex::Node &Declaration,
@@ -119,6 +171,8 @@ class Sema {
                                            std::optional<Type> Expected, bool);
   std::optional<Type> CheckIndexExpression(const lex::Node &Expression,
                                            std::optional<Type> Expected, bool);
+  std::optional<Type> CheckMemberExpression(const lex::Node &Expression,
+                                            std::optional<Type> Expected, bool);
   std::optional<Type> CheckCallExpression(const lex::Node &Expression,
                                           std::optional<Type> Expected, bool);
   std::optional<Type> CheckUnaryExpression(const lex::Node &Expression,
@@ -128,6 +182,7 @@ class Sema {
   std::optional<Type> CheckMetaExpression(const lex::Node &Expression,
                                           std::optional<Type> Expected, bool);
   void CheckFunction(const lex::Node &Function);
+  void CheckClassMember(const lex::Node &Member, const ClassInfo &Class);
   void CheckBlock(const lex::Node &Block, unsigned LoopDepth = 0);
   void CheckBlockStatement(const lex::Node &Statement, unsigned LoopDepth);
   void CheckLetStatement(const lex::Node &Statement, unsigned LoopDepth);
@@ -173,6 +228,24 @@ public:
   }
   const CWrapper *GetCWrapper(const lex::Node &Node) const;
   const std::vector<CWrapper> &GetCWrappers() const { return CWrappers; }
+  const ClassInfo *GetClass(std::string_view Name) const;
+  const ClassInfo *GetClass(const Type &Value) const;
+  const ClassFieldInfo *GetField(const lex::Node &Node) const;
+  std::size_t GetFieldIndex(const lex::Node &Node) const;
+  bool IsMethodCall(const lex::Node &Node) const {
+    return MethodCalls.contains(&Node);
+  }
+  const std::string *GetFunctionValue(const lex::Node &Node) const {
+    const auto It = FunctionValues.find(&Node);
+    return It == FunctionValues.end() ? nullptr : &It->second;
+  }
+  bool IsIndirectCall(const lex::Node &Node) const {
+    return IndirectCalls.contains(&Node);
+  }
+  const ClassInfo *GetConstructorCall(const lex::Node &Node) const;
+  const std::unordered_map<std::string, ClassInfo> &GetClasses() const {
+    return Classes;
+  }
   const std::vector<AnnotationInstance> &
   GetAnnotations(const lex::Node &Node) const;
   const lex::Node *GetWhenBranch(const lex::Node &Node) const {

@@ -75,6 +75,24 @@ void sema::Sema::CheckBlockStatement(const lex::Node &Statement,
 
 void sema::Sema::CheckLetStatement(const lex::Node &Statement, unsigned) {
   const lex::Node *Name = Statement.children.front().get();
+  if (Name->kind == lex::TokenKind::ast_binding_list) {
+    auto Result = CheckExpression(*Statement.children.back());
+    if (!Result)
+      return;
+    if (!Result->IsResults() ||
+        Result->Results.size() != Name->children.size()) {
+      Error(Statement, lex::DiagnosticKind::TypeMismatch);
+      return;
+    }
+    for (std::size_t I = 0; I < Name->children.size(); ++I) {
+      const auto &Binding = *Name->children[I];
+      if (!Scopes.back().emplace(Binding.text, Result->Results[I]).second)
+        Error(Binding, lex::DiagnosticKind::DuplicateParameter);
+      Types[&Binding] = Result->Results[I];
+    }
+    Types[&Statement] = *Result;
+    return;
+  }
   const lex::Node *TypeNode = nullptr;
   const lex::Node *Initializer = nullptr;
   if (Statement.children.size() > 1) {
@@ -88,15 +106,24 @@ void sema::Sema::CheckLetStatement(const lex::Node &Statement, unsigned) {
     }
   }
   auto Declared = TypeNode ? CheckType(*TypeNode) : std::nullopt;
+  ConstructionContext = Initializer;
   auto Initial = Initializer ? CheckExpression(*Initializer, Declared)
                              : std::optional<Type>();
+  ConstructionContext = nullptr;
   const auto Result = Declared ? Declared : Initial;
+  if (Result && (Result->IsVoid() || Result->IsResults() ||
+                 (Result->IsClass() &&
+                  (!Initializer || !GetConstructorCall(*Initializer))))) {
+    Error(Statement, lex::DiagnosticKind::ClassValueOperation);
+    return;
+  }
   if (Result && !Result->IsRecord() && GetBitWidth(*Result) > 128) {
     Error(Statement, lex::DiagnosticKind::UnsupportedType);
     return;
   }
   if (Name && Result) {
-    Scopes.back()[Name->text] = *Result;
+    if (!Scopes.back().emplace(Name->text, *Result).second)
+      Error(*Name, lex::DiagnosticKind::DuplicateParameter);
     Types[Name] = *Result;
     Types[&Statement] = *Result;
   }
@@ -108,6 +135,19 @@ void sema::Sema::CheckAssignStatement(const lex::Node &Statement, unsigned) {
     return;
   }
   auto Target = CheckExpression(*Statement.children[0]);
+  if (GetFunctionValue(*Statement.children[0])) {
+    Error(Statement, lex::DiagnosticKind::InvalidAssignmentTarget);
+    return;
+  }
+  if (Statement.children[0]->kind == lex::TokenKind::ast_name &&
+      Statement.children[0]->text == "this") {
+    Error(Statement, lex::DiagnosticKind::InvalidAssignmentTarget);
+    return;
+  }
+  if (Target && (Target->IsClass() || Target->IsVoid())) {
+    Error(Statement, lex::DiagnosticKind::ClassValueOperation);
+    return;
+  }
   if (Target && !Target->IsRecord() && GetBitWidth(*Target) > 128)
     Error(Statement, lex::DiagnosticKind::UnsupportedType);
   else if (Target)
@@ -123,6 +163,18 @@ void sema::Sema::CheckExpressionStatement(const lex::Node &Statement,
 }
 
 void sema::Sema::CheckReturnStatement(const lex::Node &Statement, unsigned) {
+  if (ReturnType && ReturnType->IsResults() && Statement.children.size() > 1) {
+    if (Statement.children.size() != ReturnType->Results.size()) {
+      Error(Statement, lex::DiagnosticKind::TypeMismatch);
+      return;
+    }
+    for (std::size_t I = 0; I < Statement.children.size(); ++I)
+      CheckExpression(*Statement.children[I], ReturnType->Results[I]);
+    Types[&Statement] = *ReturnType;
+    return;
+  }
+  if (!ReturnType && Statement.children.empty())
+    return;
   if (!ReturnType || Statement.children.size() != 1) {
     Error(Statement, lex::DiagnosticKind::MissingReturn);
     return;
@@ -332,7 +384,8 @@ void sema::Sema::CheckAsmStatement(const lex::Node &Statement, unsigned) {
         Invalid = true;
         continue;
       }
-      if (Type->IsArray() || Type->IsRecord() || GetBitWidth(*Type) > 128) {
+      if (Type->IsArray() || Type->IsRecord() || Type->IsClass() ||
+          Type->IsFunction() || GetBitWidth(*Type) > 128) {
         Error(*Child, lex::DiagnosticKind::InvalidInlineAssembly);
         Invalid = true;
         continue;

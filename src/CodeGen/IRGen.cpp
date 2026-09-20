@@ -4,6 +4,7 @@
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -58,7 +59,8 @@ namespace {
 bool IsTypeNode(lex::TokenKind Kind) {
   using K = lex::TokenKind;
   return Kind == K::ast_type || Kind == K::ast_pointer_type ||
-         Kind == K::ast_array_type;
+         Kind == K::ast_array_type || Kind == K::ast_result_types ||
+         Kind == K::ast_function_type;
 }
 
 bool HasTerminator(mlir::Block *Block) {
@@ -118,8 +120,44 @@ mlir::Location codegen::IRGen::GetLocation(const lex::Location &Loc) {
 
 mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
   using T = sema::BuiltinType;
-  if (Type.IsPointer())
+  if (Type.IsResults()) {
+    llvm::SmallVector<mlir::Type> Results;
+    for (const auto &Result : Type.Results)
+      Results.push_back(GetType(Result));
+    return mlir::LLVM::LLVMStructType::getLiteral(&Context, Results);
+  }
+  if (Type.IsArray()) {
+    auto Element = Type;
+    Element.Dimensions.clear();
+    auto Result = GetType(Element);
+    for (auto Dimension = Type.Dimensions.rbegin();
+         Dimension != Type.Dimensions.rend(); ++Dimension)
+      Result = mlir::LLVM::LLVMArrayType::get(Result, *Dimension);
+    return Result;
+  }
+  if (Type.IsPointer() || Type.IsFunction())
     return mlir::LLVM::LLVMPointerType::get(&Context);
+  if (Type.IsClass()) {
+    llvm::SmallVector<mlir::Type> Fields;
+    const auto &Class = *Analysis.GetClass(Type);
+    std::uint64_t Offset = 0;
+    for (const auto &Field : Class.Fields) {
+      if (Offset < Field.Offset)
+        Fields.push_back(mlir::LLVM::LLVMArrayType::get(Builder.getI8Type(),
+                                                        Field.Offset - Offset));
+      Fields.push_back(GetType(Field.Value));
+      std::uint64_t Size = Field.Value.IsClass()
+                               ? Analysis.GetClass(Field.Value)->Size
+                               : (sema::GetBitWidth(Field.Value) + 7) / 8;
+      for (auto Dimension : Field.Value.Dimensions)
+        Size *= Dimension;
+      Offset = Field.Offset + Size;
+    }
+    if (Offset < Class.Size)
+      Fields.push_back(mlir::LLVM::LLVMArrayType::get(Builder.getI8Type(),
+                                                      Class.Size - Offset));
+    return mlir::LLVM::LLVMStructType::getLiteral(&Context, Fields, true);
+  }
   if (Type.IsRecord())
     return mlir::LLVM::LLVMArrayType::get(Builder.getI8Type(),
                                           (sema::GetBitWidth(Type) + 7) / 8);
@@ -178,11 +216,26 @@ mlir::Value codegen::IRGen::CreateAlloca(const sema::Type &Type,
   auto One = mlir::arith::ConstantIntOp::create(Builder, Loc, 1, 64);
   return mlir::LLVM::AllocaOp::create(
       Builder, Loc, mlir::LLVM::LLVMPointerType::get(&Context), GetType(Type),
-      One, Type.Alignment);
+      One,
+      Type.IsClass() ? Analysis.GetClass(Type)->Alignment : Type.Alignment);
 }
 
 mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
   using K = lex::TokenKind;
+  if (Analysis.GetField(Expression)) {
+    mlir::Value Address;
+    const sema::ClassInfo *Owner = CurrentClass;
+    if (Expression.kind == K::ast_member) {
+      const auto &Base = *Expression.children.front();
+      const auto &BaseType = Analysis.GetType(Base);
+      Owner = Analysis.GetClass(BaseType);
+      Address = BaseType.IsPointer() ? EmitExpression(Base) : EmitAddress(Base);
+    } else {
+      Address = FindVariable("this")->DirectValue;
+    }
+    return FieldAddress(*Owner, Address, Analysis.GetFieldIndex(Expression),
+                        GetLocation(Expression.Loc));
+  }
   if (Expression.kind == K::ast_name)
     return FindVariable(Expression.text)->Address;
   if (Expression.kind == K::ast_group)
@@ -235,7 +288,8 @@ mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
                                    GetType(BaseType), BaseAddress, Indices);
 }
 
-void codegen::IRGen::EmitFunction(const lex::Node &Function) {
+void codegen::IRGen::EmitFunction(const lex::Node &Function,
+                                  const sema::ClassInfo *Owner) {
   using K = lex::TokenKind;
   llvm::SmallVector<const lex::Node *> Parameters;
   const lex::Node *ReturnType = nullptr;
@@ -243,17 +297,21 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function) {
   for (const auto &Child : Function.children) {
     if (Child->kind == K::ast_parameter)
       Parameters.push_back(Child.get());
-    else if (IsTypeNode(Child->kind))
+    else if (IsTypeNode(Child->kind) && !Analysis.GetType(*Child).IsVoid())
       ReturnType = Child.get();
     else if (Child->kind == K::ast_block)
       Body = Child.get();
   }
 
   llvm::SmallVector<mlir::Type> ParameterTypes;
+  if (Owner)
+    ParameterTypes.push_back(mlir::LLVM::LLVMPointerType::get(&Context));
   for (const auto *Parameter : Parameters)
     ParameterTypes.push_back(GetType(Analysis.GetType(*Parameter)));
-  auto FunctionType = Builder.getFunctionType(
-      ParameterTypes, {GetType(Analysis.GetType(*ReturnType))});
+  llvm::SmallVector<mlir::Type> Results;
+  if (ReturnType)
+    Results.push_back(GetType(Analysis.GetType(*ReturnType)));
+  auto FunctionType = Builder.getFunctionType(ParameterTypes, Results);
   auto Func =
       mlir::func::FuncOp::create(Builder, GetLocation(Function.Loc),
                                  Analysis.GetSymbol(Function), FunctionType);
@@ -264,21 +322,43 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function) {
   Builder.setInsertionPointToStart(Entry);
   Scopes.clear();
   Scopes.emplace_back();
+  Cleanups.clear();
+  Loops.clear();
+  CurrentClass = Owner;
+  ActiveDestructor = Function.kind == K::ast_destructor ? Owner : nullptr;
+  const unsigned Offset = Owner ? 1 : 0;
+  if (Owner) {
+    sema::Type Receiver{sema::BuiltinType::Class, {}};
+    Receiver.ClassName = Owner->QualifiedName;
+    Receiver.PointerDepth = 1;
+    Scopes.back().emplace("this",
+                          Variable{Receiver, {}, Entry->getArgument(0)});
+  }
   for (std::size_t I = 0; I < Parameters.size(); ++I) {
     const auto Type = Analysis.GetType(*Parameters[I]);
     if (!Type.IsRecord() && sema::GetBitWidth(Type) > 128) {
       Scopes.back().emplace(Parameters[I]->text,
-                            Variable{Type, {}, Entry->getArgument(I)});
+                            Variable{Type, {}, Entry->getArgument(I + Offset)});
       continue;
     }
     auto Address = CreateAlloca(Type, GetLocation(Parameters[I]->Loc));
     mlir::LLVM::StoreOp::create(Builder, GetLocation(Parameters[I]->Loc),
-                                Entry->getArgument(I), Address);
+                                Entry->getArgument(I + Offset), Address);
     Scopes.back().emplace(Parameters[I]->text, Variable{Type, Address, {}});
   }
   EmitBlock(*Body);
-  if (!HasTerminator(Builder.getInsertionBlock()))
-    mlir::LLVM::UnreachableOp::create(Builder, GetLocation(Body->Loc));
+  if (!HasTerminator(Builder.getInsertionBlock())) {
+    if (ReturnType)
+      mlir::LLVM::UnreachableOp::create(Builder, GetLocation(Body->Loc));
+    else {
+      if (ActiveDestructor)
+        EmitFieldDestructors(*ActiveDestructor, Entry->getArgument(0),
+                             GetLocation(Body->Loc));
+      mlir::func::ReturnOp::create(Builder, GetLocation(Body->Loc));
+    }
+  }
+  CurrentClass = nullptr;
+  ActiveDestructor = nullptr;
 }
 
 mlir::OwningOpRef<mlir::ModuleOp>
@@ -301,9 +381,12 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
     llvm::SmallVector<mlir::Type> Parameters;
     for (const auto &Parameter : External.Parameters)
       Parameters.push_back(GetType(Parameter));
+    llvm::SmallVector<mlir::Type> Results;
+    if (!External.Return.IsVoid())
+      Results.push_back(GetType(External.Return));
     auto Function = mlir::func::FuncOp::create(
         Builder, Builder.getUnknownLoc(), External.Name,
-        Builder.getFunctionType(Parameters, {GetType(External.Return)}));
+        Builder.getFunctionType(Parameters, Results));
     Function.setPrivate();
   }
   for (const auto &Wrapper : Analysis.GetCWrappers()) {
@@ -311,7 +394,7 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
     for (const auto &Parameter : Wrapper.Parameters)
       Parameters.push_back(GetType(Parameter));
     llvm::SmallVector<mlir::Type> Results;
-    if (!Wrapper.ReturnByAddress)
+    if (!Wrapper.ReturnByAddress && !Wrapper.Return.IsVoid())
       Results.push_back(GetType(Wrapper.Return));
     auto Function = mlir::func::FuncOp::create(
         Builder, Builder.getUnknownLoc(), Wrapper.Name,
@@ -320,6 +403,25 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
   }
   for (const auto *Module : Modules) {
     for (const auto &Child : Module->children) {
+      if (Child->kind == K::ast_class) {
+        const sema::ClassInfo *Class = nullptr;
+        for (const auto &[Name, Candidate] : Analysis.GetClasses())
+          if (Candidate.Node == Child.get())
+            Class = &Candidate;
+        assert(Class);
+        for (const auto &Member : Child->children)
+          if (Member->kind == K::ast_function ||
+              Member->kind == K::ast_constructor ||
+              Member->kind == K::ast_destructor) {
+            Builder.setInsertionPointToEnd(Result.getBody());
+            EmitFunction(*Member, Class);
+          }
+        if (!Class->Destructor) {
+          Builder.setInsertionPointToEnd(Result.getBody());
+          EmitDefaultDestructor(*Class);
+        }
+        continue;
+      }
       if (Child->kind != K::ast_function)
         continue;
       Builder.setInsertionPointToEnd(Result.getBody());
@@ -337,6 +439,7 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
   Passes.addPass(mlir::createConvertFuncToLLVMPass());
   Passes.addPass(mlir::createArithToLLVMConversionPass());
   Passes.addPass(mlir::createConvertControlFlowToLLVMPass());
+  Passes.addPass(mlir::createReconcileUnrealizedCastsPass());
   if (OptLevel == 0) {
     mlir::LLVM::DIScopeForLLVMFuncOpPassOptions DebugOptions;
     DebugOptions.emissionKind = mlir::LLVM::DIEmissionKind::Full;

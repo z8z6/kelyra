@@ -72,7 +72,13 @@ enum class DiagnosticKind {
   DuplicateModule,        // Module name is already defined.
   UnknownModule,          // Imported module cannot be resolved.
   PrivateDeclaration,     // Declaration is private to another module.
-  Count,                  // Number of diagnostic kinds.
+  InvalidClass,
+  InvalidInitialization,
+  UninitializedField,
+  ClassValueOperation,
+  InvalidLifecycleCall,
+  RecursiveClass,
+  Count, // Number of diagnostic kinds.
 };
 
 struct Diagnostic {

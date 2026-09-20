@@ -53,6 +53,24 @@ TEST(CLI, Help) {
   run({"--help"}, 0, "--safe-level", "");
 }
 
+TEST(CLI, ClassConstructionAndRAII) {
+  for (const auto Optimization : {"-O0", "-O3"}) {
+    llvm::SmallString<128> executablePath;
+    ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("kelyra-raii", "exe",
+                                                    executablePath));
+    llvm::FileRemover removeExecutable(executablePath);
+    run({Optimization, "--emit-exe", "--c-source=" KELYRA_TEST_DIR "/c/trace.c",
+         "-o", executablePath, KELYRA_TEST_DIR "/class_raii.kly"},
+        0, "", "");
+    llvm::SmallVector<llvm::StringRef> args{executablePath};
+    std::string error;
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(executablePath, args, std::nullopt, {},
+                                        10, 0, &error),
+              0)
+        << error;
+  }
+}
+
 TEST(CLI, DumpAst) {
   run({"--dump-ast", KELYRA_SOURCE_DIR "/examples/basic.kly"}, 0,
       "Function \"sum\"", "");

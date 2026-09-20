@@ -18,7 +18,8 @@ namespace {
 bool IsTypeNode(lex::TokenKind Kind) {
   using K = lex::TokenKind;
   return Kind == K::ast_type || Kind == K::ast_pointer_type ||
-         Kind == K::ast_array_type;
+         Kind == K::ast_array_type || Kind == K::ast_result_types ||
+         Kind == K::ast_function_type;
 }
 
 bool HasTerminator(mlir::Block *Block) {
@@ -29,11 +30,15 @@ bool HasTerminator(mlir::Block *Block) {
 
 void codegen::IRGen::EmitBlock(const lex::Node &Block) {
   Scopes.emplace_back();
+  Cleanups.emplace_back();
   for (const auto &Statement : Block.children) {
     if (HasTerminator(Builder.getInsertionBlock()))
       break;
     EmitStatement(*Statement);
   }
+  if (!HasTerminator(Builder.getInsertionBlock()))
+    EmitCleanups(Cleanups.size() - 1, GetLocation(Block.Loc));
+  Cleanups.pop_back();
   Scopes.pop_back();
 }
 
@@ -67,6 +72,18 @@ void codegen::IRGen::EmitBlockStatement(const lex::Node &Statement) {
 void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
   const auto Loc = GetLocation(Statement.Loc);
   const auto &Name = *Statement.children[0];
+  if (Name.kind == K::ast_binding_list) {
+    auto Results = EmitExpression(*Statement.children.back());
+    for (std::size_t I = 0; I < Name.children.size(); ++I) {
+      const auto &Binding = *Name.children[I];
+      const auto &Type = Analysis.GetType(Binding);
+      auto Address = CreateAlloca(Type, Loc);
+      auto Value = mlir::LLVM::ExtractValueOp::create(Builder, Loc, Results, I);
+      mlir::LLVM::StoreOp::create(Builder, Loc, Value, Address);
+      Scopes.back().emplace(Binding.text, Variable{Type, Address, {}});
+    }
+    return;
+  }
   const auto Type = Analysis.GetType(Statement);
   auto Address = CreateAlloca(Type, Loc);
   const bool HasType =
@@ -74,6 +91,12 @@ void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
   const lex::Node *Initializer = Statement.children.size() > (HasType ? 2u : 1u)
                                      ? Statement.children.back().get()
                                      : nullptr;
+  if (Type.IsClass()) {
+    EmitConstruction(*Initializer, Address);
+    Scopes.back().emplace(Name.text, Variable{Type, Address, {}});
+    Cleanups.back().push_back({Analysis.GetClass(Type), Address});
+    return;
+  }
   auto Value =
       Initializer
           ? EmitExpression(*Initializer)
@@ -86,6 +109,10 @@ void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
 void codegen::IRGen::EmitAssignStatement(const lex::Node &Statement) {
   const auto Loc = GetLocation(Statement.Loc);
   auto Address = EmitAddress(*Statement.children[0]);
+  if (Analysis.GetConstructorCall(*Statement.children[1])) {
+    EmitConstruction(*Statement.children[1], Address);
+    return;
+  }
   auto Value = EmitExpression(*Statement.children[1]);
   mlir::LLVM::StoreOp::create(Builder, Loc, Value, Address);
   return;
@@ -255,19 +282,34 @@ void codegen::IRGen::EmitAsmStatement(const lex::Node &Statement) {
 
 void codegen::IRGen::EmitReturnStatement(const lex::Node &Statement) {
   const auto Loc = GetLocation(Statement.Loc);
-  mlir::func::ReturnOp::create(Builder, Loc,
-                               EmitExpression(*Statement.children.front()));
+  llvm::SmallVector<mlir::Value> Results;
+  if (Statement.children.size() > 1) {
+    mlir::Value Values = mlir::LLVM::UndefOp::create(
+        Builder, Loc, GetType(Analysis.GetType(Statement)));
+    for (std::size_t I = 0; I < Statement.children.size(); ++I)
+      Values = mlir::LLVM::InsertValueOp::create(
+          Builder, Loc, Values, EmitExpression(*Statement.children[I]), I);
+    Results.push_back(Values);
+  } else if (!Statement.children.empty())
+    Results.push_back(EmitExpression(*Statement.children.front()));
+  EmitCleanups(0, Loc);
+  if (ActiveDestructor)
+    EmitFieldDestructors(*ActiveDestructor, FindVariable("this")->DirectValue,
+                         Loc);
+  mlir::func::ReturnOp::create(Builder, Loc, Results);
   return;
 }
 
 void codegen::IRGen::EmitBreakStatement(const lex::Node &Statement) {
   const auto Loc = GetLocation(Statement.Loc);
+  EmitCleanups(Loops.back().CleanupDepth, Loc);
   mlir::cf::BranchOp::create(Builder, Loc, Loops.back().Break);
   return;
 }
 
 void codegen::IRGen::EmitContinueStatement(const lex::Node &Statement) {
   const auto Loc = GetLocation(Statement.Loc);
+  EmitCleanups(Loops.back().CleanupDepth, Loc);
   mlir::cf::BranchOp::create(Builder, Loc, Loops.back().Continue);
   return;
 }
@@ -328,7 +370,7 @@ void codegen::IRGen::EmitWhileStatement(const lex::Node &Statement) {
   mlir::cf::CondBranchOp::create(Builder, Loc, Condition, Body, After);
 
   Builder.setInsertionPointToStart(Body);
-  Loops.push_back({After, Header});
+  Loops.push_back({After, Header, Cleanups.size()});
   EmitBlock(*Statement.children[1]);
   Loops.pop_back();
   if (!HasTerminator(Builder.getInsertionBlock()))

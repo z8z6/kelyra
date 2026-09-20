@@ -11,6 +11,36 @@
 
 using namespace kelyra;
 
+TEST(IRGen, MultipleReturnsAndClassCleanup) {
+  auto Parsed = lex::Lexer().parse(R"(
+class Resource { init() {} deinit() {} }
+fn done() -> void { return; }
+fn pair() -> (i32, bool) { let resource = Resource(); return 42, true; }
+fn forward() -> (i32, bool) { return pair(); }
+fn factory() -> fn() -> (i32, bool) { return forward; }
+fn use() { let (value, ok) = factory()(); done(); }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  mlir::MLIRContext Context;
+  codegen::IRGen Generator(Context, Analysis);
+  auto Module = Generator.Generate(*Parsed.root);
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*Module)));
+  std::string Output;
+  llvm::raw_string_ostream OS(Output);
+  Module->print(OS);
+  const auto Pair = Output.find("func.func private @pair");
+  ASSERT_NE(Pair, std::string::npos);
+  const auto Construction = Output.find("llvm.insertvalue", Pair);
+  const auto Cleanup = Output.find(
+      "call @" + Analysis.GetClass("Resource")->DestructorSymbol, Pair);
+  const auto Return = Output.find("return ", Pair);
+  EXPECT_LT(Construction, Cleanup);
+  EXPECT_LT(Cleanup, Return);
+  EXPECT_NE(Output.find("llvm.extractvalue"), std::string::npos);
+}
+
 TEST(IRGen, IntegerFunction) {
   lex::Lexer Lexer;
   auto Parsed = Lexer.parse(

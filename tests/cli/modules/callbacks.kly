@@ -1,0 +1,9 @@
+module modules.callbacks;
+
+pub fn factory() -> fn(i32) -> i32 {
+  return increment;
+}
+
+fn increment(value: i32) -> i32 {
+  return value + 1;
+}

@@ -129,6 +129,11 @@ sema::Sema::ParseAnnotationValue(const lex::Node &Expression,
       std::optional<Type> Resolved;
       if (const auto Element = ParseBuiltinType(*Name))
         Resolved = Type{*Element, {}};
+      else {
+        lex::Node TypeNode{K::ast_type, Target->Loc, *Name, {}, 1};
+        Resolved = CheckType(TypeNode);
+        Types.erase(&TypeNode);
+      }
       if (!Resolved)
         return std::nullopt;
       const auto Id = GetOrCreateMetaType(*Resolved);
@@ -220,10 +225,18 @@ void sema::Sema::CheckAnnotationDefinition(const lex::Node &Declaration) {
         const auto &Target = Argument->children.front()->text;
         if (Target == "function")
           Info.Targets |= AnnotationFunction;
-        else if (Target == "struct")
-          Info.Targets |= AnnotationStruct;
+        else if (Target == "class")
+          Info.Targets |= AnnotationClass;
         else if (Target == "annotation")
           Info.Targets |= AnnotationDeclaration;
+        else if (Target == "field")
+          Info.Targets |= AnnotationField;
+        else if (Target == "method")
+          Info.Targets |= AnnotationMethod;
+        else if (Target == "constructor")
+          Info.Targets |= AnnotationConstructor;
+        else if (Target == "destructor")
+          Info.Targets |= AnnotationDestructor;
         else
           Error(*Argument, lex::DiagnosticKind::InvalidAnnotation);
       }
@@ -267,9 +280,15 @@ sema::Sema::ResolveAnnotation(const lex::Node &Annotation) const {
 void sema::Sema::CheckAnnotations(const lex::Node &Target) {
   using K = lex::TokenKind;
   const unsigned TargetKind =
-      Target.kind == K::ast_function ? AnnotationFunction
-      : Target.kind == K::ast_struct ? AnnotationStruct
-                                     : AnnotationDeclaration;
+      Target.kind == K::ast_function
+          ? (Reflection.Get(*Reflection.GetId(Target)).Kind == MetaKind::Method
+                 ? AnnotationMethod
+                 : AnnotationFunction)
+      : Target.kind == K::ast_field       ? AnnotationField
+      : Target.kind == K::ast_constructor ? AnnotationConstructor
+      : Target.kind == K::ast_destructor  ? AnnotationDestructor
+      : Target.kind == K::ast_class       ? AnnotationClass
+                                          : AnnotationDeclaration;
   std::unordered_set<const lex::Node *> Seen;
   for (const auto &Annotation : Target.children) {
     if (Annotation->kind != K::ast_annotation)

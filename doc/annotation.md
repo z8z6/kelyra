@@ -35,7 +35,7 @@ fn create_user() -> i32 {
 
 ```ebnf
 declaration = { annotation }, [ "pub" ],
-              ( function | struct | annotation-declaration ) ;
+              ( function | class | annotation-declaration ) ;
 
 annotation = "@", qualified-name,
              [ "(", [ annotation-arguments ], ")" ] ;
@@ -120,11 +120,11 @@ IRGen 只读取 Sema 产生的强类型属性，不重新解析注解 AST。
 限制注解允许附着的位置：
 
 ```kelyra
-@target(function, struct)
+@target(function, class)
 annotation serializable();
 ```
 
-目标集合预留 `module`、`function`、`struct`、`field`、`parameter`、`local`、`statement`、`expression` 和 `annotation`。首个实现阶段支持 `function`、`struct` 和 `annotation`。
+当前支持 `function`、`class`、`field`、`method`、`constructor`、`destructor` 和 `annotation`。`module`、`parameter`、`local`、`statement` 和 `expression` 留待后续实现。
 
 ### `@repeatable`
 

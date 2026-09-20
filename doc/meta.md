@@ -52,7 +52,10 @@ using MetaId = std::uint32_t;
 enum class MetaKind {
   Module,
   Function,
-  Struct,
+  Class,
+  Method,
+  Constructor,
+  Destructor,
   Field,
   Parameter,
   Type,
@@ -60,7 +63,7 @@ enum class MetaKind {
 };
 ```
 
-所有记录包含名称、限定名、所属模块、可见性、源码位置和注解实例。函数记录还包含参数及返回类型；结构体记录包含字段、大小和对齐；类型记录包含种类、位宽、指向类型、元素类型和数组长度。
+所有记录包含名称、限定名、所属模块、可见性、源码位置和注解实例。函数记录还包含参数及返回类型；class 记录包含字段、方法、大小和对齐；类型记录包含种类、位宽、指向类型、元素类型和数组长度。
 
 公开查询通过只读 `ReflectionDatabase` 完成：
 
@@ -93,7 +96,7 @@ return_type
 symbol
 ```
 
-结构体额外提供：
+class 的规划视图额外提供：
 
 ```text
 fields
@@ -111,6 +114,10 @@ pointee
 element
 array_length
 ```
+
+多返回值的类型记录使用 `MetaTypeKind::Results`，`Children` 按返回顺序引用各项类型。
+无返回值函数（省略返回类型或 `-> void`）统一记录为 `void`。
+函数值类型使用 `MetaTypeKind::Function`，`Children` 是参数类型，`Type` 是返回类型。
 
 ## 编译阶段
 
@@ -170,4 +177,6 @@ when meta(handler).has_annotation(route) && meta(handler).is_public {
 - [x] 编译期限定与跨模块可见性检查。
 - [x] `when` 编译期求值和死分支裁剪。
 
-结构体完整布局、AST 修改、局部变量/语句反射、运行时 ABI 和用户处理器留待相应语言阶段实现。
+class、字段、方法、构造/析构记录及内部布局已实现；这些布局信息通过宿主数据库查询，尚未开放语言层的 `size` 等属性。
+
+AST 修改、局部变量/语句反射、运行时 ABI 和用户处理器留待相应语言阶段实现。

@@ -18,6 +18,8 @@ std::optional<sema::Type> ConvertType(clang::ASTContext &Context,
                                       clang::QualType Type) {
   using C = clang::BuiltinType;
   using K = sema::BuiltinType;
+  if (Type->isVoidType())
+    return sema::Type{K::Void, {}};
   const auto Spelling = Type.getAsString();
   if (Type->isPointerType()) {
     const auto Pointee = Type->getPointeeType();

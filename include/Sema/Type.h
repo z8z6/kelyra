@@ -51,6 +51,10 @@ enum class BuiltinType {
   CBool,
   CWChar,
   CRecord,
+  Class,
+  Void,
+  Results,
+  Function,
   Count,
 };
 
@@ -62,11 +66,20 @@ struct Type {
   unsigned PointerDepth = 0;
   std::string CName;
   std::string CSpelling;
+  std::string ClassName;
+  std::vector<Type> Results;
+  std::vector<Type> Parameters;
 
   bool IsArray() const { return !Dimensions.empty(); }
   bool IsPointer() const { return PointerDepth != 0; }
   bool IsRecord() const {
     return Element == BuiltinType::CRecord && !IsPointer();
+  }
+  bool IsClass() const { return Element == BuiltinType::Class && !IsPointer(); }
+  bool IsVoid() const { return Element == BuiltinType::Void && !IsPointer(); }
+  bool IsResults() const { return Element == BuiltinType::Results; }
+  bool IsFunction() const {
+    return Element == BuiltinType::Function && !IsPointer();
   }
 
   Type Indexed() const {
@@ -77,7 +90,9 @@ struct Type {
 
   bool operator==(const Type &Other) const {
     return Element == Other.Element && Dimensions == Other.Dimensions &&
-           PointerDepth == Other.PointerDepth && CName == Other.CName;
+           PointerDepth == Other.PointerDepth && CName == Other.CName &&
+           ClassName == Other.ClassName && Results == Other.Results &&
+           Parameters == Other.Parameters;
   }
 };
 
@@ -124,6 +139,10 @@ inline constexpr std::array BuiltinTypeInfos = {
     BuiltinTypeInfo{"c.bool", TypeClass::Bool, 8},
     BuiltinTypeInfo{"c.wchar", TypeClass::SignedInteger, sizeof(wchar_t) * 8},
     BuiltinTypeInfo{"", TypeClass::Aggregate, 0},
+    BuiltinTypeInfo{"", TypeClass::Aggregate, 0},
+    BuiltinTypeInfo{"void", TypeClass::Aggregate, 0},
+    BuiltinTypeInfo{"", TypeClass::Aggregate, 0},
+    BuiltinTypeInfo{"", TypeClass::Aggregate, sizeof(void *) * 8},
 };
 static_assert(BuiltinTypeInfos.size() ==
               static_cast<std::size_t>(BuiltinType::Count));
@@ -138,6 +157,8 @@ inline unsigned GetBitWidth(const Type &Type) {
 }
 
 inline std::optional<BuiltinType> ParseBuiltinType(std::string_view Name) {
+  if (Name.empty())
+    return std::nullopt;
   for (std::size_t I = 0; I < BuiltinTypeInfos.size(); ++I)
     if (BuiltinTypeInfos[I].Name == Name)
       return static_cast<BuiltinType>(I);

@@ -11,7 +11,8 @@ namespace kelyra::sema::detail {
 inline bool IsTypeNode(lex::TokenKind Kind) {
   using K = lex::TokenKind;
   return Kind == K::ast_type || Kind == K::ast_pointer_type ||
-         Kind == K::ast_array_type;
+         Kind == K::ast_array_type || Kind == K::ast_result_types ||
+         Kind == K::ast_function_type;
 }
 
 inline std::string_view IntegerLimit(BuiltinType Type, bool Negated) {
@@ -84,6 +85,8 @@ inline std::string CSpelling(const Type &Type) {
     return Type.CSpelling;
   using T = BuiltinType;
   switch (Type.Element) {
+  case T::Void:
+    return "void";
   case T::I8:
     return "signed char";
   case T::I16:

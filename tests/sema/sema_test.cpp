@@ -9,6 +9,233 @@
 
 using namespace kelyra;
 
+TEST(Sema, FunctionValues) {
+  auto Parsed = lex::Lexer().parse(R"(
+fn increment(value: i32) -> i32 { return value + 1; }
+fn choose() -> fn(i32) -> i32 { return increment; }
+fn apply(callback: fn(i32) -> i32) -> i32 { return callback(1); }
+fn use() -> i32 { let callback: fn(i32) -> i32 = choose(); return callback(4) + choose()(5); }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  for (const auto Source : {
+           "fn f() -> fn() -> i32 { return 1; }",
+           "fn f() -> i32 { return 1; } fn g() -> fn(i32) -> i32 { return f; }",
+           "fn f() -> i32 { return 1; } fn g() { let value = f; value(1); }",
+           "fn f() -> i32 { return 1; } fn g() { f = f; }",
+           "fn f() -> i32 { return 1; } fn g() { let value = &f; }",
+           "fn f() -> i32 { return 1; } fn g() -> bool { return f == f; }",
+           "fn g(callback: fn(void)) {}",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Invalid = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Invalid.ok());
+    EXPECT_FALSE(Analysis.Check(*Invalid.root));
+  }
+}
+
+TEST(Sema, FunctionValuesRespectImports) {
+  auto Library = lex::Lexer().parse(
+      "module library; pub fn visible() -> i32 { return 1; } "
+      "fn hidden() -> i32 { return 2; }");
+  ASSERT_TRUE(Library.ok());
+  for (const auto Name :
+       {"library.visible", "visible", "library.hidden", "hidden"}) {
+    auto Main =
+        lex::Lexer().parse(std::string("module app; import library.*; fn "
+                                       "factory() -> fn() -> i32 { return ") +
+                           Name + "; }");
+    ASSERT_TRUE(Main.ok());
+    sema::Sema Analysis;
+    EXPECT_EQ(Analysis.CheckModules(
+                  {{Main.root.get(), true}, {Library.root.get(), false}}),
+              std::string_view(Name).ends_with("visible"));
+  }
+}
+
+TEST(Sema, VoidAndMultipleReturns) {
+  auto Parsed = lex::Lexer().parse(R"(
+fn explicit() -> void { return; }
+fn implicit() { explicit(); }
+fn pair() -> (i32, bool) { return 7, true; }
+fn forward() -> (i32, bool) { return pair(); }
+fn use() -> i32 { let (value, ok) = forward(); if ok { return value; } return 0; }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  const auto &Reflection = Analysis.GetReflection();
+  auto Pair = Reflection.Find("pair", sema::MetaKind::Function);
+  ASSERT_TRUE(Pair);
+  const auto &Results = Reflection.Get(Reflection.Get(*Pair).Type);
+  EXPECT_EQ(Results.TypeKind, sema::MetaTypeKind::Results);
+  EXPECT_EQ(Results.Children.size(), 2u);
+  for (const auto Source : {
+           "fn f() -> void { return 1; }",
+           "fn f(value: void) {}",
+           "fn f() { let x: void; }",
+           "fn f() { let x: void[2]; }",
+           "fn f() { let x: *void; }",
+           "fn f() -> (i32, void) { return 1, 2; }",
+           "fn f() -> (i32, bool) { return 1; }",
+           "fn f() -> (i32, bool) { return 1, 2; }",
+           "fn f() -> (i32, bool) { return 1, true, 2; }",
+           "fn f() -> (i32, bool) { return 1, true; } fn g() { let x = f(); }",
+           "fn f() -> (i32, bool) { return 1, true; } fn g() { let (x, y, z) = "
+           "f(); }",
+           "fn f() -> (i32, bool) { return 1, true; } fn g() { let (x, x) = "
+           "f(); }",
+           "fn f() -> (i32, bool) { return 1, true; } fn g() -> bool { return "
+           "f() == f(); }",
+           "fn f(x: (i32, bool)) {}",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Invalid = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Invalid.ok());
+    EXPECT_FALSE(Analysis.Check(*Invalid.root));
+  }
+}
+
+TEST(Sema, ClassLayoutPadding) {
+  auto Parsed = lex::Lexer().parse(R"(
+class Mixed {
+  flag: bool; number: i64; tail: u8;
+  init() { flag = true; number = 42; tail = 7; }
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  const auto *Class = Analysis.GetClass("Mixed");
+  ASSERT_NE(Class, nullptr);
+  EXPECT_EQ(Class->Size, 24u);
+  EXPECT_EQ(Class->Alignment, 8u);
+  EXPECT_EQ(Class->Fields[1].Offset, 8u);
+  EXPECT_EQ(Class->Fields[2].Offset, 16u);
+}
+
+TEST(Sema, ClassesThisAndMetadata) {
+  auto Parsed = lex::Lexer().parse(R"(
+@target(class) annotation resource();
+@target(method) annotation query();
+@resource
+class Value {
+  number: i32;
+  init(number: i32) { this.number = number; }
+  @query fn get() -> i32 { return read(); }
+  fn read() -> i32 { return number; }
+  fn set(number: i32) { this.number = number; }
+  deinit() { return; }
+}
+fn use() -> i32 {
+  let value = Value(7);
+  let pointer: *Value = &value;
+  pointer.set(8);
+  return (*pointer).get();
+}
+annotation typed(value: meta.type);
+@typed(Value) fn annotated() {}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  const auto &Reflection = Analysis.GetReflection();
+  ASSERT_TRUE(Reflection.Find("Value", sema::MetaKind::Class));
+  EXPECT_TRUE(Reflection.Find("Value.number", sema::MetaKind::Field));
+  EXPECT_TRUE(Reflection.Find("Value.get", sema::MetaKind::Method));
+  EXPECT_TRUE(Reflection.Find("Value.init", sema::MetaKind::Constructor));
+  EXPECT_TRUE(Reflection.Find("Value.deinit", sema::MetaKind::Destructor));
+}
+
+TEST(Sema, RejectInvalidClassLifetimes) {
+  for (const auto Source : {
+           "class A {}",
+           "class A { init() {} init() {} }",
+           "class A { init() {} deinit(x: i32) {} }",
+           "class A { init() {} pub deinit() {} }",
+           "class A { x: i32; init() {} }",
+           "class A { x: i32; y: i32; init() { y = 1; x = 2; } }",
+           "class A { x: i32; init(x: i32) { x = x; } }",
+           "class A { x: i32; init() { x = x; } }",
+           "class A { x: i32; init() { x = this.x; } }",
+           "class A { x: i32; init() { x = read(); } fn read() -> i32 { return "
+           "x; } }",
+           "class A { x: i32; init() { x = leak(this); } } fn leak(p: *A) -> "
+           "i32 { return 0; }",
+           "class A { x: A; init() { x = A(); } }",
+           "class A { b: B; init() { b = B(); } } class B { a: A; init() { a = "
+           "A(); } }",
+           "class A { init() {} } fn f() { let a: A; }",
+           "class A { init() {} } fn f() { A(); }",
+           "class A { init() {} } fn f() { let a = A(); let b = a; }",
+           "class A { init() {} } fn f() { let a = A(); a = A(); }",
+           "class A { init() {} } fn f() { let a = A(); a.deinit(); }",
+           "class A { init() {} } fn f() { let a = A(); a.init(); }",
+           "class A { init() {} } fn f(a: A) {}",
+           "class A { init() {} } fn f() -> A { return A(); }",
+           "class A { init() {} } fn f() { let a: A[2]; }",
+           "class A { init() {} } fn A() {}",
+           "class A { init() {} fn f() {} fn g() { f(); } } fn f() {}",
+           "class A { x: i32; x: i32; init() { x = 1; x = 2; } }",
+           "class A { init() {} fn init() {} }",
+           "fn f() {} fn g() { let value = f(); }",
+           "fn f() { return 1; }",
+           "class A { init() {} fn f() { this = this; } }",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Parsed = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Parsed.ok());
+    sema::Sema Analysis;
+    EXPECT_FALSE(Analysis.Check(*Parsed.root));
+    EXPECT_FALSE(Analysis.GetDiagnostics().empty());
+  }
+}
+
+TEST(Sema, ClassModuleVisibility) {
+  auto Library = lex::Lexer().parse(R"(
+module library;
+pub class Item {
+  secret: i32;
+  pub value: i32;
+  pub init(value: i32) { secret = value; this.value = value; }
+  pub fn get() -> i32 { return secret; }
+  fn hidden() {}
+}
+class Hidden { pub init() {} }
+pub class PrivateInit { init() {} }
+)");
+  ASSERT_TRUE(Library.ok());
+  for (const auto Body : {
+           "let a = library.Item(1); return a.get();",
+           "let a = library.Item(1); return a.value;",
+           "let a: library.Item = library.Item(1); return a.get();",
+       }) {
+    auto Main = lex::Lexer().parse(
+        std::string("module app; import library; fn main() -> i32 {") + Body +
+        "}");
+    ASSERT_TRUE(Main.ok());
+    sema::Sema Analysis;
+    EXPECT_TRUE(Analysis.CheckModules(
+        {{Main.root.get(), true}, {Library.root.get(), false}}));
+  }
+  for (const auto Body : {
+           "let a = library.Item(1); return a.secret;",
+           "let a = library.Item(1); a.hidden(); return 0;",
+           "let a = library.Hidden(); return 0;",
+           "let a = library.PrivateInit(); return 0;",
+           "let a = Item(1); return 0;",
+       }) {
+    auto Main = lex::Lexer().parse(
+        std::string("module app; import library.*; fn main() -> i32 {") + Body +
+        "}");
+    ASSERT_TRUE(Main.ok());
+    sema::Sema Analysis;
+    EXPECT_FALSE(Analysis.CheckModules(
+        {{Main.root.get(), true}, {Library.root.get(), false}}));
+  }
+}
+
 TEST(Sema, BuiltinTypes) {
   constexpr std::array Names = {
       "i8",      "i16",    "i32",        "i64",     "i128",      "isize",
