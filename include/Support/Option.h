@@ -26,6 +26,10 @@ public:
   inline static llvm::cl::opt<unsigned> SafeLevel{
       "safe-level", llvm::cl::desc("Safety level (0 disables checks)"),
       llvm::cl::init(0), llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<bool> Progress{
+      "progress",
+      llvm::cl::desc("Report build stages and source files on stderr"),
+      llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::list<std::string> CSources{
       "c-source", llvm::cl::desc("C source file compiled and linked by Clang"),
       llvm::cl::ZeroOrMore, llvm::cl::cat(KelyraCategory)};

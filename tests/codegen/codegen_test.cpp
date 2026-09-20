@@ -11,6 +11,31 @@
 
 using namespace kelyra;
 
+TEST(IRGen, LocalVariableDebugMetadata) {
+  auto Parsed = lex::Lexer().parse(
+      "fn inspect(parameter: i32) -> i32 { let value = parameter; "
+      "{ let value = 9; } return value; }",
+      "debug.kly");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  for (bool Debug : {true, false}) {
+    mlir::MLIRContext Context;
+    codegen::IRGen Generator(Context, Analysis, 0, Debug);
+    auto Module = Generator.Generate(*Parsed.root);
+    ASSERT_TRUE(mlir::succeeded(mlir::verify(*Module)));
+    std::string Output;
+    llvm::raw_string_ostream OS(Output);
+    Module->print(OS);
+    EXPECT_EQ(Output.find("llvm.intr.dbg.declare") != std::string::npos, Debug);
+    if (Debug) {
+      EXPECT_NE(Output.find("di_local_variable"), std::string::npos);
+      EXPECT_NE(Output.find("di_lexical_block"), std::string::npos);
+      EXPECT_NE(Output.find("name = \"parameter\""), std::string::npos);
+    }
+  }
+}
+
 TEST(IRGen, MultipleReturnsAndClassCleanup) {
   auto Parsed = lex::Lexer().parse(R"(
 class Resource { init() {} deinit() {} }

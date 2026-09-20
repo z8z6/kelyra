@@ -41,6 +41,9 @@ class ModuleLoader {
 
   bool Load(const std::filesystem::path &Path, std::string Expected,
             bool IsEntry) {
+    if (Option::Progress)
+      std::cerr << "  [parse " << Modules.size() + 1 << "] " << Path.string()
+                << '\n';
     std::ifstream Input(Path, std::ios::binary);
     if (!Input) {
       std::cerr << "cannot open source file: " << Path.string() << '\n';
@@ -183,6 +186,9 @@ int main(int argc, char **argv) {
     const auto &Entry = Modules.front();
     std::vector<std::string> CArguments(Option::CArguments.begin(),
                                         Option::CArguments.end());
+    if (Option::Progress)
+      for (const auto &Header : Loader.GetCHeaders())
+        std::cerr << "  [C header] " << Header << '\n';
     auto CDeclarations =
         cimport::ImportHeaders(Loader.GetCHeaders(), CArguments);
     if (!CDeclarations.Ok()) {
@@ -200,6 +206,8 @@ int main(int argc, char **argv) {
         Inputs.push_back({Module.Parsed.root.get(), Module.IsEntry});
         Asts.push_back(Module.Parsed.root.get());
       }
+      if (Option::Progress)
+        std::cerr << "  [check] " << Modules.size() << " Kelyra module(s)\n";
       const bool Valid = analysis.CheckModules(Inputs, CDeclarations.Functions,
                                                CDeclarations.Types) &&
                          (!Option::EmitExecutable ||
@@ -210,13 +218,23 @@ int main(int argc, char **argv) {
         return 1;
       }
       mlir::MLIRContext context;
-      codegen::IRGen generator(context, analysis, Option::SafeLevel);
+      if (Option::Progress)
+        std::cerr << "  [codegen] Generating native code\n";
+      codegen::IRGen generator(context, analysis, Option::SafeLevel,
+                               Option::OptLevel == 0);
       auto module = generator.Generate(Asts);
       std::string CWrapperSource;
       for (const auto &Wrapper : analysis.GetCWrappers())
         CWrapperSource += Wrapper.Source;
       if (mlir::failed(mlir::verify(*module)))
         return 1;
+      if (Option::Progress && (Option::EmitObject || Option::EmitExecutable)) {
+        for (const auto &Source : Option::CSources)
+          std::cerr << "  [C source] " << Source << '\n';
+        std::cerr << (Option::EmitExecutable ? "  [compile/link] "
+                                             : "  [object] ")
+                  << Option::OutputFile << '\n';
+      }
       if (Option::EmitMlir) {
         module->print(outs());
         outs() << '\n';

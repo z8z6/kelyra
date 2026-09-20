@@ -29,6 +29,10 @@ bool HasTerminator(mlir::Block *Block) {
 } // namespace
 
 void codegen::IRGen::EmitBlock(const lex::Node &Block) {
+  const auto ParentDebugScope = DebugScope;
+  if (DebugScope)
+    DebugScope = mlir::LLVM::DILexicalBlockAttr::get(
+        DebugScope, GetDebugFile(Block.Loc), Block.Loc.Line, Block.Loc.Column);
   Scopes.emplace_back();
   Cleanups.emplace_back();
   for (const auto &Statement : Block.children) {
@@ -40,6 +44,7 @@ void codegen::IRGen::EmitBlock(const lex::Node &Block) {
     EmitCleanups(Cleanups.size() - 1, GetLocation(Block.Loc));
   Cleanups.pop_back();
   Scopes.pop_back();
+  DebugScope = ParentDebugScope;
 }
 
 void codegen::IRGen::EmitStatement(const lex::Node &Statement) {
@@ -81,6 +86,7 @@ void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
       auto Value = mlir::LLVM::ExtractValueOp::create(Builder, Loc, Results, I);
       mlir::LLVM::StoreOp::create(Builder, Loc, Value, Address);
       Scopes.back().emplace(Binding.text, Variable{Type, Address, {}});
+      EmitDebugVariable(Binding.text, Binding.Loc, Type, Address);
     }
     return;
   }
@@ -95,6 +101,7 @@ void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
     EmitConstruction(*Initializer, Address);
     Scopes.back().emplace(Name.text, Variable{Type, Address, {}});
     Cleanups.back().push_back({Analysis.GetClass(Type), Address});
+    EmitDebugVariable(Name.text, Name.Loc, Type, Address);
     return;
   }
   auto Value =
@@ -103,6 +110,7 @@ void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
           : mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Type)).getRes();
   mlir::LLVM::StoreOp::create(Builder, Loc, Value, Address);
   Scopes.back().emplace(Name.text, Variable{Type, Address, {}});
+  EmitDebugVariable(Name.text, Name.Loc, Type, Address);
   return;
 }
 

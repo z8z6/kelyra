@@ -1,4 +1,4 @@
-add_library(kelyra_codegen Class.cpp Expression.cpp IRGen.cpp Statement.cpp)
+add_library(kelyra_codegen Class.cpp Debug.cpp Expression.cpp IRGen.cpp Statement.cpp)
 get_directory_property(KELYRA_LLVM_NATIVE_ARCH
   DIRECTORY "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm"
   DEFINITION LLVM_NATIVE_ARCH

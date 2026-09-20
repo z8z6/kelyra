@@ -3,6 +3,7 @@
 #include "Lexer/Lexer.h"
 #include "Sema/Sema.h"
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OwningOpRef.h"
@@ -36,6 +37,9 @@ class IRGen {
   mlir::MLIRContext &Context;
   const sema::Sema &Analysis;
   unsigned SafeLevel;
+  bool DebugInfo;
+  mlir::LLVM::DIScopeAttr DebugScope;
+  std::unordered_map<std::string, mlir::LLVM::DITypeAttr> DebugClasses;
   mlir::OpBuilder Builder;
   mlir::Block *FunctionEntry = nullptr;
   std::vector<std::unordered_map<std::string, Variable>> Scopes;
@@ -46,6 +50,12 @@ class IRGen {
   unsigned GlobalStringCount = 0;
 
   mlir::Location GetLocation(const lex::Location &Loc);
+  mlir::LLVM::DIFileAttr GetDebugFile(const lex::Location &Loc);
+  mlir::LLVM::DITypeAttr GetDebugType(const sema::Type &Type);
+  void BeginDebugFunction(mlir::Operation *Function, const lex::Node &Node);
+  void EmitDebugVariable(std::string_view Name, const lex::Location &Loc,
+                         const sema::Type &Type, mlir::Value Storage,
+                         unsigned Argument = 0, bool DirectValue = false);
   mlir::Type GetType(const sema::Type &Type);
   Variable *FindVariable(std::string_view Name);
   mlir::Value CreateAlloca(const sema::Type &Type, mlir::Location Loc);
@@ -83,7 +93,7 @@ class IRGen {
 
 public:
   IRGen(mlir::MLIRContext &Context, const sema::Sema &Analysis,
-        unsigned SafeLevel = 0);
+        unsigned SafeLevel = 0, bool DebugInfo = true);
   mlir::OwningOpRef<mlir::ModuleOp> Generate(const lex::Node &Module);
   mlir::OwningOpRef<mlir::ModuleOp>
   Generate(llvm::ArrayRef<const lex::Node *> Modules);

@@ -102,20 +102,20 @@ void Optimize(llvm::Module &Module, llvm::TargetMachine &TargetMachine,
 } // namespace
 
 codegen::IRGen::IRGen(mlir::MLIRContext &Context, const sema::Sema &Analysis,
-                      unsigned SafeLevel)
+                      unsigned SafeLevel, bool DebugInfo)
     : Context(Context), Analysis(Analysis), SafeLevel(SafeLevel),
-      Builder(&Context) {
+      DebugInfo(DebugInfo), Builder(&Context) {
   Context.loadDialect<ir::KelyraDialect, mlir::arith::ArithDialect,
                       mlir::cf::ControlFlowDialect, mlir::func::FuncDialect,
                       mlir::LLVM::LLVMDialect>();
 }
 
 mlir::Location codegen::IRGen::GetLocation(const lex::Location &Loc) {
-  if (Loc.File.empty())
-    return Builder.getUnknownLoc();
-  return mlir::FileLineColLoc::get(
-      &Context, llvm::StringRef(Loc.File.data(), Loc.File.size()), Loc.Line,
+  mlir::Location Result = mlir::FileLineColLoc::get(
+      &Context, Loc.File.empty() ? "<unknown>" : Loc.File, Loc.Line,
       Loc.Column);
+  return DebugScope ? mlir::FusedLoc::get(&Context, {Result}, DebugScope)
+                    : Result;
 }
 
 mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
@@ -315,6 +315,8 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
   auto Func =
       mlir::func::FuncOp::create(Builder, GetLocation(Function.Loc),
                                  Analysis.GetSymbol(Function), FunctionType);
+  CurrentClass = Owner;
+  BeginDebugFunction(Func, Function);
   if (!Analysis.IsPublic(Function) && Function.text != "main")
     Func.setPrivate();
   auto *Entry = Func.addEntryBlock();
@@ -333,18 +335,28 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
     Receiver.PointerDepth = 1;
     Scopes.back().emplace("this",
                           Variable{Receiver, {}, Entry->getArgument(0)});
+    if (DebugInfo) {
+      auto Address = CreateAlloca(Receiver, GetLocation(Function.Loc));
+      mlir::LLVM::StoreOp::create(Builder, GetLocation(Function.Loc),
+                                  Entry->getArgument(0), Address);
+      EmitDebugVariable("this", Function.Loc, Receiver, Address, 1);
+    }
   }
   for (std::size_t I = 0; I < Parameters.size(); ++I) {
     const auto Type = Analysis.GetType(*Parameters[I]);
     if (!Type.IsRecord() && sema::GetBitWidth(Type) > 128) {
       Scopes.back().emplace(Parameters[I]->text,
                             Variable{Type, {}, Entry->getArgument(I + Offset)});
+      EmitDebugVariable(Parameters[I]->text, Parameters[I]->Loc, Type,
+                        Entry->getArgument(I + Offset), I + Offset + 1, true);
       continue;
     }
     auto Address = CreateAlloca(Type, GetLocation(Parameters[I]->Loc));
     mlir::LLVM::StoreOp::create(Builder, GetLocation(Parameters[I]->Loc),
                                 Entry->getArgument(I + Offset), Address);
     Scopes.back().emplace(Parameters[I]->text, Variable{Type, Address, {}});
+    EmitDebugVariable(Parameters[I]->text, Parameters[I]->Loc, Type, Address,
+                      I + Offset + 1);
   }
   EmitBlock(*Body);
   if (!HasTerminator(Builder.getInsertionBlock())) {
@@ -359,6 +371,7 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
   }
   CurrentClass = nullptr;
   ActiveDestructor = nullptr;
+  DebugScope = {};
 }
 
 mlir::OwningOpRef<mlir::ModuleOp>

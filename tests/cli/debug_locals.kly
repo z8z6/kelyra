@@ -1,0 +1,44 @@
+fn marker() {
+}
+
+class Record {
+  number: i32;
+  next: *Record;
+  init(number: i32, next: *Record) {
+    this.number = number;
+    this.next = next;
+  }
+  fn inspect() {
+    marker();
+  }
+}
+
+fn pair() -> (i32, bool) {
+  return 8, true;
+}
+
+fn increment(value: i32) -> i32 {
+  return value + 1;
+}
+
+fn inspect(parameter: i32) -> i32 {
+  let value = parameter + 2;
+  let pointer = &value;
+  let array: i32[2];
+  array[0] = 7;
+  let next: *Record;
+  let object = Record(9, next);
+  let callback = increment;
+  let(number, ok) = pair();
+  {
+    let value = 99;
+    marker();
+  }
+  marker();
+  object.inspect();
+  return value;
+}
+
+fn main() -> i32 {
+  return inspect(40);
+}

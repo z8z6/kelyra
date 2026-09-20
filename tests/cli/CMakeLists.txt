@@ -14,3 +14,12 @@ target_compile_definitions(kelyra_cli_tests PRIVATE
 )
 add_dependencies(kelyra_cli_tests kelyra)
 gtest_discover_tests(kelyra_cli_tests)
+
+find_program(KELYRA_GDB gdb)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(KELYRA_GDB AND Python3_Interpreter_FOUND)
+  add_test(NAME kelyra.gdb.locals
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/debug_test.py"
+      $<TARGET_FILE:kelyra> "${KELYRA_GDB}")
+  set_tests_properties(kelyra.gdb.locals PROPERTIES SKIP_RETURN_CODE 77)
+endif()

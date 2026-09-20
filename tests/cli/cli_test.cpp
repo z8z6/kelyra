@@ -53,6 +53,13 @@ TEST(CLI, Help) {
   run({"--help"}, 0, "--safe-level", "");
 }
 
+TEST(CLI, ReportCompilationProgress) {
+  run({"--progress", "--emit-mlir", KELYRA_TEST_DIR "/modules/main.kly"}, 0,
+      "func.func", "[codegen]");
+  run({"--progress", "--check", KELYRA_TEST_DIR "/modules/main.kly"}, 0, "",
+      "vector.kly");
+}
+
 TEST(CLI, ClassConstructionAndRAII) {
   for (const auto Optimization : {"-O0", "-O3"}) {
     llvm::SmallString<128> executablePath;
