@@ -149,6 +149,8 @@ struct Document {
   int64_t Version = 0;
   lex::ParseResult Parsed;
   std::string Module;
+  std::vector<std::string> Imports;
+  std::vector<std::string> WildcardImports;
   std::vector<Symbol> Symbols;
 
   std::string_view Spelling(const lex::Token &Token) const {
@@ -363,13 +365,23 @@ struct Document {
   void Rebuild(std::string Source) {
     Parsed = lex::Lexer().parse(std::move(Source), Path);
     Module.clear();
+    Imports.clear();
+    WildcardImports.clear();
     Symbols.clear();
     if (!Parsed.root)
       return;
     using K = lex::TokenKind;
-    for (const auto &Node : Parsed.root->children)
+    for (const auto &Node : Parsed.root->children) {
       if (Node->kind == K::ast_module_decl)
         Module = Node->text;
+      else if (Node->kind == K::ast_import && Node->text != "c") {
+        if (Node->text.ends_with(".*"))
+          WildcardImports.push_back(
+              Node->text.substr(0, Node->text.size() - 2));
+        else
+          Imports.push_back(Node->text);
+      }
+    }
 
     const Span FileScope{0, Parsed.source.size()};
     for (const auto &Node : Parsed.root->children) {
@@ -494,6 +506,155 @@ struct Document {
 class Server {
   std::map<std::string, Document> Documents;
 
+  // The compiler resolves modules against the enclosing Kelp workspace, so the
+  // server mirrors the manifests: workspace members, cached dependency clones
+  // under `.kelp/dependencies`, and local path dependencies. Only these keys
+  // of a manifest matter here, so a full TOML parser is not needed.
+  struct ProjectManifest {
+    bool Workspace = false;
+    std::vector<std::string> Members;
+    std::vector<std::string> Paths;
+  };
+
+  static std::string Trim(std::string_view Text) {
+    while (!Text.empty() &&
+           std::isspace(static_cast<unsigned char>(Text.front())))
+      Text.remove_prefix(1);
+    while (!Text.empty() &&
+           std::isspace(static_cast<unsigned char>(Text.back())))
+      Text.remove_suffix(1);
+    return std::string(Text);
+  }
+
+  // Quoted values on one line, with comments outside quotes removed first.
+  static std::vector<std::string> QuotedValues(std::string_view Line) {
+    std::string Code;
+    bool Quoted = false;
+    for (const char Character : Line) {
+      if (Character == '"')
+        Quoted = !Quoted;
+      if (Character == '#' && !Quoted)
+        break;
+      Code += Character;
+    }
+    std::vector<std::string> Values;
+    for (std::size_t Index = 0; Index < Code.size(); ++Index) {
+      if (Code[Index] != '"')
+        continue;
+      const auto End = Code.find('"', Index + 1);
+      if (End == std::string::npos)
+        break;
+      Values.push_back(Code.substr(Index + 1, End - Index - 1));
+      Index = End;
+    }
+    return Values;
+  }
+
+  static ProjectManifest ReadManifest(const std::filesystem::path &Path) {
+    ProjectManifest Result;
+    std::ifstream Input(Path);
+    if (!Input)
+      return Result;
+    std::string Section;
+    std::string Line;
+    while (std::getline(Input, Line)) {
+      // Only a line that starts with `[` opens a section: array values such as
+      // `members = ["app"]` contain brackets too.
+      const auto First = Line.find_first_not_of(" \t");
+      if (First != std::string::npos && Line[First] == '[') {
+        const auto Close = Line.find(']', First);
+        if (Close != std::string::npos) {
+          Section =
+              Trim(std::string_view(Line).substr(First + 1, Close - First - 1));
+          if (Section == "workspace")
+            Result.Workspace = true;
+          continue;
+        }
+      }
+      const auto Equals = Line.find('=');
+      if (Equals == std::string::npos || Section.empty())
+        continue;
+      const auto Key = Trim(std::string_view(Line).substr(0, Equals));
+      const auto Values = QuotedValues(Line);
+      if (Values.empty())
+        continue;
+      if (Section == "workspace" && Key == "members")
+        Result.Members = Values;
+      else if (Section.starts_with("dependencies.") && Key == "path")
+        Result.Paths.push_back(Values.front());
+    }
+    return Result;
+  }
+
+  // The outermost ancestor that declares `[workspace]`, matching Kelp's shared
+  // dependency cache location.
+  static std::filesystem::path
+  WorkspaceRoot(const std::filesystem::path &Root) {
+    std::filesystem::path Result = Root;
+    std::error_code Error;
+    for (auto Current = Root;
+         !Current.empty() && Current != Current.root_path();
+         Current = Current.parent_path()) {
+      const auto Manifest = Current / "kelp.toml";
+      if (!std::filesystem::exists(Manifest, Error)) {
+        Error.clear();
+        continue;
+      }
+      if (ReadManifest(Manifest).Workspace)
+        Result = Current;
+    }
+    return Result;
+  }
+
+  void Index(const std::filesystem::path &Path) {
+    std::ifstream Input(Path, std::ios::binary);
+    std::string Source((std::istreambuf_iterator<char>(Input)), {});
+    auto Uri = URIForFile::fromFile(
+        std::filesystem::absolute(Path).lexically_normal().string());
+    if (Input && Uri)
+      Set(*Uri, std::move(Source), 0);
+    else if (!Uri)
+      consumeError(Uri.takeError());
+  }
+
+  void IndexSources(const std::filesystem::path &Directory) {
+    std::error_code Error;
+    std::filesystem::directory_iterator It(
+        Directory, std::filesystem::directory_options::skip_permission_denied,
+        Error);
+    if (Error)
+      return;
+    for (const auto &Entry : It) {
+      std::error_code KindError;
+      const auto Name = Entry.path().filename().string();
+      if (Entry.is_directory(KindError)) {
+        if (Name == ".git" || Name == "build" || Name == "node_modules")
+          continue;
+        // Only the shared dependency cache under `.kelp` holds sources.
+        IndexSources(Name == ".kelp" ? Entry.path() / "dependencies"
+                                     : Entry.path());
+        continue;
+      }
+      if (Entry.path().extension() == ".kly")
+        Index(Entry.path());
+    }
+  }
+
+  void LoadProject(const std::filesystem::path &Directory,
+                   std::set<std::string> &Visited) {
+    std::error_code Error;
+    const auto Key =
+        std::filesystem::weakly_canonical(Directory, Error).string();
+    if (Error || !Visited.insert(Key).second)
+      return;
+    IndexSources(Directory);
+    const auto Manifest = ReadManifest(Directory / "kelp.toml");
+    for (const auto &Member : Manifest.Members)
+      LoadProject((Directory / Member).lexically_normal(), Visited);
+    for (const auto &Path : Manifest.Paths)
+      LoadProject((Directory / Path).lexically_normal(), Visited);
+  }
+
   Document *Get(const URIForFile &Uri) {
     const auto It = Documents.find(Uri.file().str());
     return It == Documents.end() ? nullptr : &It->second;
@@ -613,6 +774,8 @@ class Server {
     }
     const Document *FallbackDoc = nullptr;
     const Symbol *Fallback = nullptr;
+    const Document *ImportedDoc = nullptr;
+    const Symbol *Imported = nullptr;
     for (const auto &[Path, CandidateDoc] : Documents) {
       for (const auto &Candidate : CandidateDoc.Symbols) {
         if (Candidate.Name != Name || !Candidate.Owner.empty() ||
@@ -623,12 +786,26 @@ class Server {
           continue;
         if (&CandidateDoc == &Doc)
           return {&CandidateDoc, &Candidate};
-        if (Candidate.Public && !Fallback) {
+        if (!Candidate.Public)
+          continue;
+        // A name from an imported module beats any other public symbol now
+        // that dependency sources are indexed too.
+        if (Qualifier.empty() && !Imported &&
+            (std::find(Doc.Imports.begin(), Doc.Imports.end(),
+                       Candidate.Module) != Doc.Imports.end() ||
+             std::find(Doc.WildcardImports.begin(), Doc.WildcardImports.end(),
+                       Candidate.Module) != Doc.WildcardImports.end())) {
+          ImportedDoc = &CandidateDoc;
+          Imported = &Candidate;
+        }
+        if (!Fallback) {
           FallbackDoc = &CandidateDoc;
           Fallback = &Candidate;
         }
       }
     }
+    if (Imported)
+      return {ImportedDoc, Imported};
     return {FallbackDoc, Fallback};
   }
 
@@ -646,34 +823,11 @@ public:
     }
     if (Root.empty())
       return;
-    std::error_code Error;
-    std::filesystem::recursive_directory_iterator It(
-        Root, std::filesystem::directory_options::skip_permission_denied,
-        Error);
-    for (const std::filesystem::recursive_directory_iterator End; It != End;
-         It.increment(Error)) {
-      if (Error) {
-        Error.clear();
-        continue;
-      }
-      if (It->is_directory()) {
-        const auto Name = It->path().filename().string();
-        if (Name == ".git" || Name == "build" || Name == ".kelp" ||
-            Name == "node_modules")
-          It.disable_recursion_pending();
-        continue;
-      }
-      if (It->path().extension() != ".kly")
-        continue;
-      std::ifstream Input(It->path(), std::ios::binary);
-      std::string Source((std::istreambuf_iterator<char>(Input)), {});
-      auto Uri = URIForFile::fromFile(
-          std::filesystem::absolute(It->path()).lexically_normal().string());
-      if (Input && Uri)
-        Set(*Uri, std::move(Source), 0);
-      else if (!Uri)
-        consumeError(Uri.takeError());
-    }
+    // Members, cached clones, and local path dependencies all contribute
+    // modules the compiler can see, so index everything the manifests reach.
+    std::set<std::string> Visited;
+    LoadProject(WorkspaceRoot(Root), Visited);
+    LoadProject(Root, Visited);
   }
 
   std::vector<Diagnostic> Open(const TextDocumentItem &Item) {
@@ -807,7 +961,8 @@ public:
         return std::nullopt;
       Found = Constructor;
     }
-    if (Found->Kind != SymbolType::Function && Found->Kind != SymbolType::Method)
+    if (Found->Kind != SymbolType::Function &&
+        Found->Kind != SymbolType::Method)
       return std::nullopt;
     const auto &Detail = Found->Detail;
     const auto OpenParen = Detail.find('(');
@@ -831,8 +986,7 @@ public:
       }
       if (Character != ',' || ParameterDepth != 0)
         continue;
-      std::string_view Text =
-          std::string_view(Detail).substr(Start, I - Start);
+      std::string_view Text = std::string_view(Detail).substr(Start, I - Start);
       while (!Text.empty() &&
              std::isspace(static_cast<unsigned char>(Text.front())))
         Text.remove_prefix(1);
@@ -880,11 +1034,11 @@ public:
     };
     for (const auto &Child : Doc.Parsed.root->children) {
       if (Child->kind == lex::TokenKind::ast_function) {
-        Result.push_back(Make(*Child, SymbolKind::Function,
-                              lex::TokenKind::keyword_fn));
+        Result.push_back(
+            Make(*Child, SymbolKind::Function, lex::TokenKind::keyword_fn));
       } else if (Child->kind == lex::TokenKind::ast_class) {
-        auto Class = Make(*Child, SymbolKind::Class,
-                          lex::TokenKind::keyword_class);
+        auto Class =
+            Make(*Child, SymbolKind::Class, lex::TokenKind::keyword_class);
         for (const auto &Member : Child->children) {
           if (Member->kind == lex::TokenKind::ast_field)
             Class.children.push_back(

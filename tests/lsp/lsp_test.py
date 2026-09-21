@@ -1,7 +1,35 @@
 import json
+import pathlib
+import shutil
 import subprocess
 import sys
+import tempfile
 
+# A workspace whose modules reach outside the opened folder: a local path
+# dependency next to the workspace and a cached dependency clone under .kelp.
+fixture = pathlib.Path(tempfile.mkdtemp(prefix="kelyra-lsp-"))
+workspace = fixture / "ws"
+demo = fixture / "libs/demo"
+cached = workspace / ".kelp/dependencies/cached"
+for directory in [workspace / "app/src", demo / "src", cached / "src"]:
+    directory.mkdir(parents=True)
+(workspace / "kelp.toml").write_text('[workspace]\nmembers = ["app"]\n')
+(workspace / "app/kelp.toml").write_text(
+    '[project]\nname = "app"\nentry = "src/main.kly"\n\n'
+    '[dependencies.demo]\npath = "../../libs/demo"\n'
+)
+(demo / "kelp.toml").write_text('[project]\nname = "demo"\nentry = "src/demo_api.kly"\n')
+(demo / "src/demo_api.kly").write_text(
+    "module demo_api;\n\n// Helper from a local path dependency.\n"
+    "pub fn demo_helper(value: i32) -> i32 { return value; }\n"
+)
+(cached / "kelp.toml").write_text(
+    '[project]\nname = "cached"\nentry = "src/cached_api.kly"\n'
+)
+(cached / "src/cached_api.kly").write_text(
+    "module cached_api;\n\n// Helper from the shared dependency cache.\n"
+    "pub fn cached_helper(value: i32) -> i32 { return value; }\n"
+)
 
 process = subprocess.Popen(
     [sys.argv[1], "--stdio"],
@@ -32,7 +60,14 @@ def receive(request_id):
             return message["result"]
 
 
-send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}})
+send(
+    {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {"capabilities": {}, "rootUri": workspace.as_uri()},
+    }
+)
 capabilities = receive(1)["capabilities"]
 assert capabilities["hoverProvider"]
 assert capabilities["signatureHelpProvider"]["triggerCharacters"] == ["(", ","]
@@ -186,8 +221,45 @@ constructor_help = receive(14)
 assert constructor_help["signatures"][0]["label"] == "init(count: i32)"
 assert constructor_help["activeParameter"] == 0
 
+# Modules from a path dependency and the dependency cache resolve to their own
+# sources, both through a wildcard import and through a qualified name.
+app_source = """module app.main;
+
+import demo_api.*;
+import cached_api.*;
+
+fn call_demo() -> i32 {
+  let first: i32 = demo_helper(1);
+  let second: i32 = cached_api.cached_helper(2);
+  return first + second;
+}
+"""
+app_uri = (workspace / "app/src/main.kly").as_uri()
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": app_uri, "languageId": "kelyra", "version": 1, "text": app_source}}})
+
+
+def app_position(needle):
+    for index, line in enumerate(app_source.split("\n")):
+        if needle in line:
+            return {"line": index, "character": line.index(needle) + 2}
+    raise AssertionError(needle)
+
+
+send({"jsonrpc": "2.0", "id": 15, "method": "textDocument/definition", "params": {
+    "textDocument": {"uri": app_uri}, "position": app_position("demo_helper")}})
+assert receive(15)[0]["uri"] == (demo / "src/demo_api.kly").as_uri()
+send({"jsonrpc": "2.0", "id": 16, "method": "textDocument/definition", "params": {
+    "textDocument": {"uri": app_uri}, "position": app_position("cached_helper")}})
+assert receive(16)[0]["uri"] == (cached / "src/cached_api.kly").as_uri()
+send({"jsonrpc": "2.0", "id": 17, "method": "textDocument/hover", "params": {
+    "textDocument": {"uri": app_uri}, "position": app_position("demo_helper")}})
+hover = receive(17)["contents"]["value"]
+assert "demo_helper" in hover and "local path dependency" in hover
+
 send({"jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": None})
 receive(6)
 send({"jsonrpc": "2.0", "method": "exit", "params": None})
 process.stdin.close()
 assert process.wait(timeout=5) == 0, process.stderr.read().decode()
+shutil.rmtree(fixture, ignore_errors=True)
