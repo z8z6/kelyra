@@ -1,0 +1,15 @@
+import c "memory.h";
+
+// Kelyra pointers cross the C boundary: `*u8` matches `unsigned char *` and
+// `usize` matches `size_t`.
+pub fn main() -> i32 {
+  let size: usize = 4;
+  let buffer: *u8 = c.memory_new(size);
+  c.memory_store(buffer, 0, 41);
+  let value: u8 = c.memory_load(buffer, 0);
+  c.memory_free(buffer);
+  if value != 41 {
+    return 1;
+  }
+  return 0;
+}

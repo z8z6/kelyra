@@ -187,9 +187,29 @@ inline bool IsCInteropCompatible(const Type &Left, const Type &Right) {
   const auto IsCType = [](BuiltinType Value) {
     return Value >= BuiltinType::CChar && Value < BuiltinType::CRecord;
   };
-  return !Left.IsArray() && !Right.IsArray() && !Left.IsPointer() &&
-         !Right.IsPointer() &&
-         IsCType(Left.Element) != IsCType(Right.Element) &&
+  if (Left.IsArray() || Right.IsArray())
+    return false;
+  if (Left.IsPointer() || Right.IsPointer()) {
+    if (!Left.IsPointer() || !Right.IsPointer() ||
+        Left.PointerDepth != Right.PointerDepth)
+      return false;
+    if (Left.PointerDepth > 1) {
+      Type LeftPointee = Left;
+      Type RightPointee = Right;
+      --LeftPointee.PointerDepth;
+      --RightPointee.PointerDepth;
+      return IsCInteropCompatible(LeftPointee, RightPointee);
+    }
+    // A Kelyra pointer to a scalar may cross the C boundary when the pointee
+    // matches the C element in signedness and width.
+    return IsCType(Left.Element) != IsCType(Right.Element) &&
+           IsNumeric(Left.Element) && IsNumeric(Right.Element) &&
+           GetBuiltinTypeInfo(Left.Element).Class ==
+               GetBuiltinTypeInfo(Right.Element).Class &&
+           GetBuiltinTypeInfo(Left.Element).BitWidth ==
+               GetBuiltinTypeInfo(Right.Element).BitWidth;
+  }
+  return IsCType(Left.Element) != IsCType(Right.Element) &&
          IsNumeric(Left.Element) && IsNumeric(Right.Element) &&
          GetBuiltinTypeInfo(Left.Element).Class ==
              GetBuiltinTypeInfo(Right.Element).Class &&
