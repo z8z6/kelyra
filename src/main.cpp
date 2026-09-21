@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -34,10 +35,29 @@ class ModuleLoader {
   enum class State { Loading, Loaded };
 
   std::filesystem::path Root;
+  std::vector<std::filesystem::path> ModulePaths;
   lex::Lexer Lexer;
   std::deque<SourceModule> Modules;
   std::unordered_map<std::string, State> States;
   std::vector<std::string> CHeaders;
+
+  std::optional<std::filesystem::path>
+  FindModule(const std::string &Name) const {
+    std::string Relative = Name;
+    std::replace(Relative.begin(), Relative.end(), '.', '/');
+    Relative += ".kly";
+    const std::filesystem::path RelativePath(Relative);
+    std::error_code Error;
+    const auto EntryCandidate = Root / RelativePath;
+    if (std::filesystem::is_regular_file(EntryCandidate, Error))
+      return EntryCandidate;
+    for (const auto &ModulePath : ModulePaths) {
+      const auto Candidate = ModulePath / RelativePath;
+      if (std::filesystem::is_regular_file(Candidate, Error))
+        return Candidate;
+    }
+    return std::nullopt;
+  }
 
   bool Load(const std::filesystem::path &Path, std::string Expected,
             bool IsEntry) {
@@ -119,9 +139,13 @@ class ModuleLoader {
         }
         continue;
       }
-      auto Relative = Imported;
-      std::replace(Relative.begin(), Relative.end(), '.', '/');
-      if (!Load(Root / (Relative + ".kly"), Imported, false))
+      const auto Found = FindModule(Imported);
+      if (!Found) {
+        std::cerr << Module.Path << ": error: cannot find module '" << Imported
+                  << "'\n";
+        return false;
+      }
+      if (!Load(*Found, Imported, false))
         return false;
     }
     if (!Name.empty())
@@ -130,6 +154,10 @@ class ModuleLoader {
   }
 
 public:
+  void AddModulePath(const std::string &Path) {
+    ModulePaths.push_back(std::filesystem::absolute(Path).lexically_normal());
+  }
+
   bool LoadEntry(const std::string &Path) {
     const auto Entry = std::filesystem::absolute(Path).lexically_normal();
     Root = Entry.parent_path();
@@ -146,7 +174,7 @@ int main(int argc, char **argv) {
   if (!cl::ParseCommandLineOptions(argc, argv, "Kelyra compiler\n", &errs())) {
     errs() << "usage: kelyra [--dump-ast|--check|--emit-mlir|--emit-obj|"
               "--emit-exe] [-O0|-O1|-O2|-O3] [--safe-level=<n>] "
-              "[--c-source=<file>] [--c-arg=<arg>] "
+              "[--c-source=<file>] [--c-arg=<arg>] [--module-path=<dir>] "
               "[-o <file>] <file>\n";
     return 2;
   }
@@ -161,7 +189,7 @@ int main(int argc, char **argv) {
   if (Option::InputFile.getValue().empty() && Actions != 0) {
     errs() << "usage: kelyra [--dump-ast|--check|--emit-mlir|--emit-obj|"
               "--emit-exe] [-O0|-O1|-O2|-O3] [--safe-level=<n>] "
-              "[--c-source=<file>] [--c-arg=<arg>] "
+              "[--c-source=<file>] [--c-arg=<arg>] [--module-path=<dir>] "
               "[-o <file>] <file>\n";
     return 2;
   }
@@ -170,7 +198,7 @@ int main(int argc, char **argv) {
     if (Actions != 1) {
       std::cerr << "usage: kelyra [--dump-ast|--check|--emit-mlir|--emit-obj|"
                    "--emit-exe] [-O0|-O1|-O2|-O3] [--safe-level=<n>] "
-                   "[--c-source=<file>] [--c-arg=<arg>] "
+                   "[--c-source=<file>] [--c-arg=<arg>] [--module-path=<dir>] "
                    "[-o <file>] <file>\n";
       return 2;
     }
@@ -180,6 +208,8 @@ int main(int argc, char **argv) {
       return 2;
     }
     ModuleLoader Loader;
+    for (const auto &ModulePath : Option::ModulePaths)
+      Loader.AddModulePath(ModulePath);
     if (!Loader.LoadEntry(filename))
       return 1;
     const auto &Modules = Loader.GetModules();

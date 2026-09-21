@@ -36,6 +36,11 @@ public:
   inline static llvm::cl::list<std::string> CArguments{
       "c-arg", llvm::cl::desc("Argument passed to Clang for C imports"),
       llvm::cl::ZeroOrMore, llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::list<std::string> ModulePaths{
+      "module-path",
+      llvm::cl::desc("Directory searched for imported modules after the entry "
+                     "directory; may be repeated"),
+      llvm::cl::ZeroOrMore, llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> LexDumpAst{
       "dump-ast", llvm::cl::desc("Print the parsed AST"),
       llvm::cl::cat(KelyraCategory)};

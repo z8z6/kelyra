@@ -196,6 +196,27 @@ TEST(CLI, EmitExecutableWithWildcardImport) {
       << error;
 }
 
+TEST(CLI, EmitExecutableWithModulePath) {
+  llvm::SmallString<128> executablePath;
+  llvm::sys::fs::createUniquePath("kelyra-module-path-%%%%%%%%", executablePath,
+                                  true);
+  llvm::FileRemover removeExecutable(executablePath);
+  run({"--emit-exe", "--module-path=" KELYRA_TEST_DIR "/module_path", "-o",
+       executablePath, KELYRA_TEST_DIR "/module_path_main.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> args{executablePath};
+  std::string error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(executablePath, args, std::nullopt, {},
+                                      10, 0, &error),
+            42)
+      << error;
+}
+
+TEST(CLI, RejectModuleOutsideSearchPath) {
+  run({"--check", KELYRA_TEST_DIR "/module_path_main.kly"}, 1, "",
+      "cannot find module 'external.util'");
+}
+
 TEST(CLI, CallCFunction) {
   llvm::SmallString<128> executablePath;
   llvm::sys::fs::createUniquePath("kelyra-c-call-%%%%%%%%", executablePath,
