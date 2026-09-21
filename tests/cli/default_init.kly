@@ -1,0 +1,24 @@
+class Empty {}
+
+class Point {
+  x: i32;
+  y: i32;
+}
+
+class Marker {
+  value: i32;
+  init() { value = 7; }
+}
+
+// Holder declares no init: its fields are default constructed in order.
+class Holder {
+  point: Point;
+  marker: Marker;
+}
+
+fn main() -> i32 {
+  let empty = Empty();
+  let point = Point();
+  let holder = Holder();
+  return point.x + point.y + holder.marker.value;
+}

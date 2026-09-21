@@ -50,6 +50,42 @@ void codegen::IRGen::EmitFieldDestructors(const sema::ClassInfo &Class,
   }
 }
 
+void codegen::IRGen::EmitDefaultConstructor(const sema::ClassInfo &Class) {
+  const auto Loc = GetLocation(Class.Node->Loc);
+  auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
+  auto Function =
+      mlir::func::FuncOp::create(Builder, Loc, Class.ConstructorSymbol,
+                                 Builder.getFunctionType({Pointer}, {}));
+  if (!Class.Public)
+    Function.setPrivate();
+  auto *Entry = Function.addEntryBlock();
+  Builder.setInsertionPointToStart(Entry);
+  for (std::size_t I = 0; I < Class.Fields.size(); ++I) {
+    const auto &Field = Class.Fields[I];
+    const auto Address = FieldAddress(Class, Entry->getArgument(0), I, Loc);
+    if (Field.Value.IsClass()) {
+      const auto *Child = Analysis.GetClass(Field.Value);
+      mlir::func::CallOp::create(Builder, Loc, Child->ConstructorSymbol,
+                                 mlir::TypeRange{}, mlir::ValueRange{Address});
+    } else {
+      auto Zero = mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Field.Value))
+                      .getRes();
+      mlir::LLVM::StoreOp::create(Builder, Loc, Zero, Address);
+    }
+  }
+  mlir::func::ReturnOp::create(Builder, Loc);
+}
+
+void codegen::IRGen::EmitDefaultConstructorDeclaration(
+    const sema::ClassInfo &Class) {
+  auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
+  auto Function = mlir::func::FuncOp::create(
+      Builder, GetLocation(Class.Node->Loc), Class.ConstructorSymbol,
+      Builder.getFunctionType({Pointer}, {}));
+  if (!Class.Public)
+    Function.setPrivate();
+}
+
 void codegen::IRGen::EmitDefaultDestructor(const sema::ClassInfo &Class) {
   const auto Loc = GetLocation(Class.Node->Loc);
   auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);

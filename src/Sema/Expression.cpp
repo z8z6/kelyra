@@ -290,26 +290,32 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
       return std::nullopt;
     }
     const auto Function = Functions.find(Key + ".init");
-    if (Function == Functions.end())
-      return std::nullopt;
+    const bool Explicit = Function != Functions.end();
     if (!Imported(Class->Module) ||
         (Class->Module != CurrentModule &&
-         (!Class->Public || !Function->second.Public))) {
+         (!Class->Public || (Explicit && !Function->second.Public)))) {
       Error(Expression, lex::DiagnosticKind::PrivateDeclaration);
       return std::nullopt;
     }
     const auto ArgumentCount = Expression.children.size() - 1;
-    if (ArgumentCount + 1 != Function->second.Parameters.size()) {
+    if (Explicit) {
+      if (ArgumentCount + 1 != Function->second.Parameters.size()) {
+        Error(Expression, lex::DiagnosticKind::TypeMismatch);
+        return std::nullopt;
+      }
+      for (std::size_t I = 0; I < ArgumentCount; ++I)
+        CheckExpression(*Expression.children[I + 1],
+                        Function->second.Parameters[I + 1]);
+    } else if (ArgumentCount != 0) {
+      // The generated default constructor takes no arguments.
       Error(Expression, lex::DiagnosticKind::TypeMismatch);
       return std::nullopt;
     }
-    for (std::size_t I = 0; I < ArgumentCount; ++I)
-      CheckExpression(*Expression.children[I + 1],
-                      Function->second.Parameters[I + 1]);
     Type Result{BuiltinType::Class, {}};
     Result.ClassName = Class->QualifiedName;
     ConstructorCalls[&Expression] = Result.ClassName;
-    Callees[&Expression] = Function->second.Symbol;
+    Callees[&Expression] =
+        Explicit ? Function->second.Symbol : Class->ConstructorSymbol;
     return FinishExpression(Expression, Result, Expected);
   }
 

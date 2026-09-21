@@ -61,7 +61,7 @@ constexpr std::array DiagnosticInfos = {
     DiagnosticInfo{"K0004", "declaration is private to another module"},
     DiagnosticInfo{
         "K0004",
-        "invalid class or duplicate member; exactly one init is required"},
+        "invalid class or duplicate member; at most one init is allowed"},
     DiagnosticInfo{"K0004", "initialize every field once in declaration order "
                             "at the start of init"},
     DiagnosticInfo{"K0004", "cannot read an uninitialized field or use this "
@@ -75,6 +75,9 @@ constexpr std::array DiagnosticInfos = {
     DiagnosticInfo{
         "K0004",
         "recursive class value layout; use a pointer to break the cycle"},
+    DiagnosticInfo{"K0004",
+                   "field class has no default constructor; declare init "
+                   "explicitly"},
 };
 
 static_assert(DiagnosticInfos.size() ==

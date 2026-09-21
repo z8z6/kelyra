@@ -312,6 +312,21 @@ TEST(CLI, RejectPrivateModuleFunction) {
       "declaration is private to another module");
 }
 
+TEST(CLI, GeneratedDefaultConstructor) {
+  llvm::SmallString<128> executablePath;
+  llvm::sys::fs::createUniquePath("kelyra-default-init-%%%%%%%%",
+                                  executablePath, true);
+  llvm::FileRemover removeExecutable(executablePath);
+  run({"--emit-exe", "-o", executablePath, KELYRA_TEST_DIR "/default_init.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> args{executablePath};
+  std::string error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(executablePath, args, std::nullopt, {},
+                                      10, 0, &error),
+            7)
+      << error;
+}
+
 TEST(CLI, BridgePointerAndSizeToCTypes) {
   llvm::SmallString<128> executablePath;
   llvm::sys::fs::createUniquePath("kelyra-memory-%%%%%%%%", executablePath,

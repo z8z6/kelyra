@@ -150,7 +150,6 @@ annotation typed(value: meta.type);
 
 TEST(Sema, RejectInvalidClassLifetimes) {
   for (const auto Source : {
-           "class A {}",
            "class A { init() {} init() {} }",
            "class A { init() {} deinit(x: i32) {} }",
            "class A { init() {} pub deinit() {} }",
@@ -190,6 +189,56 @@ TEST(Sema, RejectInvalidClassLifetimes) {
     EXPECT_FALSE(Analysis.Check(*Parsed.root));
     EXPECT_FALSE(Analysis.GetDiagnostics().empty());
   }
+}
+
+TEST(Sema, ClassDefaultConstructor) {
+  lex::Lexer Lexer;
+  auto Parsed = Lexer.parse(R"(
+class Empty {}
+class Pair { first: i32; second: bool; }
+class Zero { value: i32; init() { value = 7; } }
+class Nested { pair: Pair; zero: Zero; }
+fn use() -> i32 {
+  let a = Empty();
+  let b = Pair();
+  let c = Zero();
+  let d = Nested();
+  return d.zero.value + b.first;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  for (const auto Name : {"Empty", "Pair", "Zero", "Nested"}) {
+    const auto *Class = Analysis.GetClass(Name);
+    ASSERT_NE(Class, nullptr) << Name;
+    EXPECT_TRUE(Class->DefaultConstructible) << Name;
+  }
+  for (const auto Source : {
+           // A field class without a zero-argument constructor cannot be
+           // default constructed.
+           "class Inner { n: i32; init(n: i32) { this.n = n; } } "
+           "class Outer { inner: Inner; }",
+           // The generated constructor takes no arguments.
+           "class Empty {} fn f() -> i32 { let a = Empty(1); return 0; }",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Invalid = Lexer.parse(Source);
+    ASSERT_TRUE(Invalid.ok());
+    sema::Sema Other;
+    EXPECT_FALSE(Other.Check(*Invalid.root));
+  }
+  // A generated constructor may not reach a non-public field constructor in
+  // another module.
+  auto Library = Lexer.parse("module library; pub class Hidden { init() {} }");
+  auto Main = Lexer.parse(
+      "module app; import library; class Outer { hidden: library.Hidden; } "
+      "fn build() -> i32 { let outer = Outer(); return 0; }");
+  ASSERT_TRUE(Library.ok());
+  ASSERT_TRUE(Main.ok());
+  sema::Sema Modules;
+  EXPECT_FALSE(Modules.CheckModules(
+      {{Main.root.get(), true}, {Library.root.get(), false}}));
 }
 
 TEST(Sema, ClassModuleVisibility) {

@@ -25,6 +25,24 @@ void sema::Sema::CheckClassLayouts() {
     for (auto &Field : Class.Fields) {
       if (Field.Value.IsClass() && !Visit(Classes.at(Field.Value.ClassName)))
         return false;
+      // A generated default constructor constructs class fields by calling
+      // their own default constructor, which must exist and be reachable.
+      if (Field.Value.IsClass() && !Class.Constructor) {
+        const auto &Child = Classes.at(Field.Value.ClassName);
+        if (!Child.DefaultConstructible) {
+          Error(*Field.Node, lex::DiagnosticKind::MissingDefaultConstructor);
+          return false;
+        }
+        const auto Constructor = Functions.find(Child.QualifiedName + ".init");
+        const bool ConstructorPublic = Constructor != Functions.end()
+                                           ? Constructor->second.Public
+                                           : Child.Public;
+        if (Child.Module != Class.Module &&
+            (!Child.Public || !ConstructorPublic)) {
+          Error(*Field.Node, lex::DiagnosticKind::PrivateDeclaration);
+          return false;
+        }
+      }
       if (!Field.Value.IsClass() && !Field.Value.IsRecord() &&
           !Field.Value.IsPointer() && GetBitWidth(Field.Value) > 128) {
         Error(*Field.Node, lex::DiagnosticKind::UnsupportedType);

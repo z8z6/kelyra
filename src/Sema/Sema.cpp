@@ -619,11 +619,20 @@ bool sema::Sema::CheckModules(
           }
           RegisterFunction(*Member, Class.QualifiedName);
         }
-        if (!Class.Constructor)
-          Error(*Child, lex::DiagnosticKind::InvalidClass);
-        Class.ConstructorSymbol = Symbols.contains(Class.Constructor)
-                                      ? Symbols.at(Class.Constructor)
-                                      : std::string();
+        if (Class.Constructor) {
+          Class.ConstructorSymbol = Symbols.contains(Class.Constructor)
+                                        ? Symbols.at(Class.Constructor)
+                                        : std::string();
+          Class.DefaultConstructible = std::none_of(
+              Class.Constructor->children.begin(),
+              Class.Constructor->children.end(),
+              [](const auto &Part) { return Part->kind == K::ast_parameter; });
+        } else {
+          // No explicit init: synthesize a default constructor named like an
+          // explicit one so a class without init still constructs.
+          Class.ConstructorSymbol = Mangle(Name, Class.Name + ".init", false);
+          Class.DefaultConstructible = true;
+        }
         if (Class.Destructor)
           Class.DestructorSymbol = Symbols.at(Class.Destructor);
         else

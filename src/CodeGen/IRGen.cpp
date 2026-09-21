@@ -436,6 +436,13 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
             Builder.setInsertionPointToEnd(Result.getBody());
             EmitFunction(*Member, Class, External);
           }
+        if (!Class->Constructor) {
+          Builder.setInsertionPointToEnd(Result.getBody());
+          if (External)
+            EmitDefaultConstructorDeclaration(*Class);
+          else
+            EmitDefaultConstructor(*Class);
+        }
         if (!Class->Destructor) {
           Builder.setInsertionPointToEnd(Result.getBody());
           if (External)

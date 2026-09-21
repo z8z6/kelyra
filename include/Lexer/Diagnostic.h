@@ -78,7 +78,8 @@ enum class DiagnosticKind {
   ClassValueOperation,
   InvalidLifecycleCall,
   RecursiveClass,
-  Count, // Number of diagnostic kinds.
+  MissingDefaultConstructor, // A field cannot be default constructed.
+  Count,                     // Number of diagnostic kinds.
 };
 
 struct Diagnostic {

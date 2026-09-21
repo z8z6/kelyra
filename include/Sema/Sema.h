@@ -59,6 +59,9 @@ struct ClassInfo {
   std::string ConstructorSymbol;
   std::string DestructorSymbol;
   bool Public = false;
+  // True when the class can be constructed with no arguments, either through
+  // an explicit zero-parameter init or the generated default constructor.
+  bool DefaultConstructible = false;
   std::uint64_t Size = 0;
   unsigned Alignment = 1;
 };

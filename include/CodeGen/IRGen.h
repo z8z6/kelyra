@@ -90,6 +90,8 @@ class IRGen {
   void EmitCleanups(std::size_t KeepDepth, mlir::Location Loc);
   void EmitFieldDestructors(const sema::ClassInfo &Class, mlir::Value Address,
                             mlir::Location Loc);
+  void EmitDefaultConstructor(const sema::ClassInfo &Class);
+  void EmitDefaultConstructorDeclaration(const sema::ClassInfo &Class);
   void EmitDefaultDestructor(const sema::ClassInfo &Class);
   void EmitDefaultDestructorDeclaration(const sema::ClassInfo &Class);
   mlir::Value FieldAddress(const sema::ClassInfo &Class, mlir::Value Address,
