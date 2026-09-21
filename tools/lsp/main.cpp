@@ -732,6 +732,179 @@ public:
     return {{Doc->Uri, Doc->ToRange(Found->Definition)}};
   }
 
+  std::optional<SignatureHelp>
+  SignatureAt(const TextDocumentPositionParams &Params) const {
+    const auto It = Documents.find(Params.textDocument.uri.file().str());
+    if (It == Documents.end())
+      return std::nullopt;
+    const auto &Doc = It->second;
+    const auto &Tokens = Doc.Parsed.tokens;
+    const auto Offset = OffsetAt(Doc.Parsed.source, Params.position);
+    std::size_t Cursor = Tokens.size();
+    for (std::size_t I = 0; I < Tokens.size(); ++I)
+      if (Tokens[I].Loc.Offset >= Offset) {
+        Cursor = I;
+        break;
+      }
+    // Find the innermost call parenthesis that is still open at the cursor.
+    std::size_t Open = Tokens.size();
+    int Depth = 0;
+    for (std::size_t I = Cursor; I-- > 0;) {
+      const auto Kind = Tokens[I].kind;
+      if (Kind == lex::TokenKind::punc_right_paren) {
+        ++Depth;
+        continue;
+      }
+      if (Kind != lex::TokenKind::punc_left_paren)
+        continue;
+      if (Depth == 0) {
+        Open = I;
+        break;
+      }
+      --Depth;
+    }
+    if (Open == Tokens.size() || Open == 0)
+      return std::nullopt;
+    const auto &Callee = Tokens[Open - 1];
+    if (Callee.kind != lex::TokenKind::name)
+      return std::nullopt;
+    // The active parameter is the count of top-level commas before the cursor.
+    int Active = 0;
+    int Nested = 0;
+    for (std::size_t I = Open + 1; I < Cursor && I < Tokens.size(); ++I) {
+      switch (Tokens[I].kind) {
+      case lex::TokenKind::punc_left_paren:
+      case lex::TokenKind::punc_left_bracket:
+      case lex::TokenKind::punc_left_brace:
+        ++Nested;
+        break;
+      case lex::TokenKind::punc_right_paren:
+      case lex::TokenKind::punc_right_bracket:
+      case lex::TokenKind::punc_right_brace:
+        --Nested;
+        break;
+      case lex::TokenKind::punc_comma:
+        if (Nested == 0)
+          ++Active;
+        break;
+      default:
+        break;
+      }
+    }
+    auto [Owner, Found] =
+        Resolve(Params.textDocument.uri,
+                PositionAt(Doc.Parsed.source, Callee.Loc.Offset));
+    if (!Found)
+      return std::nullopt;
+    if (Found->Kind == SymbolType::Class) {
+      // A construction call shows the class's constructor signature.
+      const Symbol *Constructor = nullptr;
+      for (const auto &Candidate : Owner->Symbols)
+        if (Candidate.Kind == SymbolType::Method && Candidate.Name == "init" &&
+            Candidate.Owner == Found->Name)
+          Constructor = &Candidate;
+      if (!Constructor)
+        return std::nullopt;
+      Found = Constructor;
+    }
+    if (Found->Kind != SymbolType::Function && Found->Kind != SymbolType::Method)
+      return std::nullopt;
+    const auto &Detail = Found->Detail;
+    const auto OpenParen = Detail.find('(');
+    const auto CloseParen = Detail.rfind(')');
+    if (OpenParen == std::string::npos || CloseParen == std::string::npos ||
+        CloseParen < OpenParen)
+      return std::nullopt;
+    SignatureInformation Information;
+    Information.label = Detail;
+    std::size_t Start = OpenParen + 1;
+    int ParameterDepth = 0;
+    for (std::size_t I = OpenParen + 1; I <= CloseParen; ++I) {
+      const char Character = I < CloseParen ? Detail[I] : ',';
+      if (Character == '(' || Character == '[') {
+        ++ParameterDepth;
+        continue;
+      }
+      if (Character == ')' || Character == ']') {
+        --ParameterDepth;
+        continue;
+      }
+      if (Character != ',' || ParameterDepth != 0)
+        continue;
+      std::string_view Text =
+          std::string_view(Detail).substr(Start, I - Start);
+      while (!Text.empty() &&
+             std::isspace(static_cast<unsigned char>(Text.front())))
+        Text.remove_prefix(1);
+      while (!Text.empty() &&
+             std::isspace(static_cast<unsigned char>(Text.back())))
+        Text.remove_suffix(1);
+      if (!Text.empty()) {
+        ParameterInformation Parameter;
+        Parameter.labelString = std::string(Text);
+        const auto LabelStart =
+            static_cast<unsigned>(Text.data() - Detail.data());
+        Parameter.labelOffsets = std::make_pair(
+            LabelStart, LabelStart + static_cast<unsigned>(Text.size()));
+        Information.parameters.push_back(std::move(Parameter));
+      }
+      Start = I + 1;
+    }
+    SignatureHelp Help;
+    const int Count = static_cast<int>(Information.parameters.size());
+    Help.activeParameter = Count == 0 ? 0 : std::min(Active, Count - 1);
+    Help.signatures.push_back(std::move(Information));
+    return Help;
+  }
+
+  std::vector<DocumentSymbol>
+  DocumentSymbols(const DocumentSymbolParams &Params) const {
+    std::vector<DocumentSymbol> Result;
+    const auto It = Documents.find(Params.textDocument.uri.file().str());
+    if (It == Documents.end() || !It->second.Parsed.root)
+      return Result;
+    const auto &Doc = It->second;
+    std::map<std::size_t, const Symbol *> Details;
+    for (const auto &Symbol : Doc.Symbols)
+      Details.emplace(Symbol.Definition.Offset, &Symbol);
+    const auto Make = [&](const lex::Node &Node, SymbolKind Kind,
+                          lex::TokenKind Keyword) {
+      const auto Definition = Doc.FindDeclaration(Node, Keyword);
+      DocumentSymbol Symbol(Node.text, Kind,
+                            Doc.ToRange({Node.Loc.Offset, Node.Loc.Len}),
+                            Doc.ToRange(Definition));
+      if (const auto Found = Details.find(Definition.Offset);
+          Found != Details.end())
+        Symbol.detail = Found->second->Detail;
+      return Symbol;
+    };
+    for (const auto &Child : Doc.Parsed.root->children) {
+      if (Child->kind == lex::TokenKind::ast_function) {
+        Result.push_back(Make(*Child, SymbolKind::Function,
+                              lex::TokenKind::keyword_fn));
+      } else if (Child->kind == lex::TokenKind::ast_class) {
+        auto Class = Make(*Child, SymbolKind::Class,
+                          lex::TokenKind::keyword_class);
+        for (const auto &Member : Child->children) {
+          if (Member->kind == lex::TokenKind::ast_field)
+            Class.children.push_back(
+                Make(*Member, SymbolKind::Field, lex::TokenKind::name));
+          else if (Member->kind == lex::TokenKind::ast_function)
+            Class.children.push_back(
+                Make(*Member, SymbolKind::Method, lex::TokenKind::keyword_fn));
+          else if (Member->kind == lex::TokenKind::ast_constructor)
+            Class.children.push_back(
+                Make(*Member, SymbolKind::Constructor, lex::TokenKind::name));
+          else if (Member->kind == lex::TokenKind::ast_destructor)
+            Class.children.push_back(
+                Make(*Member, SymbolKind::Method, lex::TokenKind::name));
+        }
+        Result.push_back(std::move(Class));
+      }
+    }
+    return Result;
+  }
+
   CompletionList Complete(const CompletionParams &Params) const {
     CompletionList Result;
     const auto It = Documents.find(Params.textDocument.uri.file().str());
@@ -832,6 +1005,9 @@ public:
         },
         {"hoverProvider", true},
         {"definitionProvider", true},
+        {"documentSymbolProvider", true},
+        {"signatureHelpProvider",
+         json::Object{{"triggerCharacters", json::Array{"(", ","}}}},
         {"completionProvider",
          json::Object{{"resolveProvider", false},
                       {"triggerCharacters", json::Array{"."}}}},
@@ -870,6 +1046,14 @@ public:
                          Callback<std::vector<Location>> Reply) {
     Reply(Language.DefinitionAt(Params));
   }
+  void SignatureHelpRequest(const TextDocumentPositionParams &Params,
+                            Callback<std::optional<SignatureHelp>> Reply) {
+    Reply(Language.SignatureAt(Params));
+  }
+  void DocumentSymbolRequest(const DocumentSymbolParams &Params,
+                             Callback<std::vector<DocumentSymbol>> Reply) {
+    Reply(Language.DocumentSymbols(Params));
+  }
   void CompletionRequest(const CompletionParams &Params,
                          Callback<CompletionList> Reply) {
     Reply(Language.Complete(Params));
@@ -896,6 +1080,10 @@ int main(int Argc, char **Argv) {
   Handler.method("textDocument/hover", &Server, &LSPServer::HoverRequest);
   Handler.method("textDocument/definition", &Server,
                  &LSPServer::DefinitionRequest);
+  Handler.method("textDocument/signatureHelp", &Server,
+                 &LSPServer::SignatureHelpRequest);
+  Handler.method("textDocument/documentSymbol", &Server,
+                 &LSPServer::DocumentSymbolRequest);
   Handler.method("textDocument/completion", &Server,
                  &LSPServer::CompletionRequest);
   Server.PublishDiagnostics =

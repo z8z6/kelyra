@@ -33,7 +33,10 @@ def receive(request_id):
 
 
 send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}})
-assert receive(1)["capabilities"]["hoverProvider"]
+capabilities = receive(1)["capabilities"]
+assert capabilities["hoverProvider"]
+assert capabilities["signatureHelpProvider"]["triggerCharacters"] == ["(", ","]
+assert capabilities["documentSymbolProvider"]
 
 source = """// Adds two numbers.
 fn add(a: i32, b: i32) -> i32 {
@@ -105,6 +108,45 @@ send(
 labels = {item["label"] for item in receive(5)["items"]}
 assert {"add", "value", "while", "i32"} <= labels
 
+send(
+    {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "textDocument/documentSymbol",
+        "params": {"textDocument": {"uri": uri}},
+    }
+)
+symbols = {symbol["name"]: symbol for symbol in receive(7)}
+assert set(symbols) >= {"add", "main"}
+assert symbols["add"]["kind"] == 12  # SymbolKind.Function
+assert symbols["add"]["detail"].startswith("fn add(")
+assert symbols["add"]["selectionRange"]["start"] == {"line": 1, "character": 3}
+
+send(
+    {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "textDocument/signatureHelp",
+        "params": {"textDocument": {"uri": uri}, "position": {"line": 7, "character": 26}},
+    }
+)
+help = receive(8)
+assert help["activeParameter"] == 1
+signature = help["signatures"][0]
+assert signature["label"] == "fn add(a: i32, b: i32) -> i32"
+assert len(signature["parameters"]) == 2
+assert signature["label"][slice(*signature["parameters"][0]["label"])] == "a: i32"
+
+send(
+    {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "textDocument/signatureHelp",
+        "params": {"textDocument": {"uri": uri}, "position": {"line": 7, "character": 24}},
+    }
+)
+assert receive(9)["activeParameter"] == 0
+
 class_source = """class Counter {
   count: i32;
   init(count: i32) { this.count = count; }
@@ -127,6 +169,22 @@ assert receive(11)[0]["range"]["start"] == {"line": 3, "character": 5}
 send({"jsonrpc": "2.0", "id": 12, "method": "textDocument/hover", "params": {
     "textDocument": {"uri": uri}, "position": {"line": 2, "character": 26}}})
 assert "count: i32" in receive(12)["contents"]["value"]
+
+send({"jsonrpc": "2.0", "id": 13, "method": "textDocument/documentSymbol", "params": {
+    "textDocument": {"uri": uri}}})
+class_symbols = {symbol["name"]: symbol for symbol in receive(13)}
+assert class_symbols["Counter"]["kind"] == 5  # SymbolKind.Class
+children = {child["name"]: child for child in class_symbols["Counter"]["children"]}
+assert set(children) >= {"count", "init", "get"}
+assert children["count"]["kind"] == 8  # SymbolKind.Field
+assert children["init"]["kind"] == 9  # SymbolKind.Constructor
+assert children["get"]["kind"] == 6  # SymbolKind.Method
+
+send({"jsonrpc": "2.0", "id": 14, "method": "textDocument/signatureHelp", "params": {
+    "textDocument": {"uri": uri}, "position": {"line": 6, "character": 25}}})
+constructor_help = receive(14)
+assert constructor_help["signatures"][0]["label"] == "init(count: i32)"
+assert constructor_help["activeParameter"] == 0
 
 send({"jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": None})
 receive(6)
