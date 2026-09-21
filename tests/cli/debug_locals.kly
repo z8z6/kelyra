@@ -24,7 +24,7 @@ fn increment(value: i32) -> i32 {
 fn inspect(parameter: i32) -> i32 {
   let value = parameter + 2;
   let pointer = &value;
-  let array: i32[2];
+  let array: [2]i32;
   array[0] = 7;
   let next: *Record;
   let object = Record(9, next);

@@ -100,6 +100,17 @@ bool StartsWord(TokenKind Kind) {
          (Kind >= TokenKind::keyword_let && Kind <= TokenKind::keyword_pub);
 }
 
+void CollectTypeOffsets(const Node &Node,
+                        std::unordered_set<std::size_t> &Pointers,
+                        std::unordered_set<std::size_t> &ArrayElements) {
+  if (Node.kind == TokenKind::ast_pointer_type)
+    Pointers.insert(Node.Loc.Offset);
+  if (Node.kind == TokenKind::ast_array_type && !Node.children.empty())
+    ArrayElements.insert(Node.children.front()->Loc.Offset);
+  for (const auto &Child : Node.children)
+    CollectTypeOffsets(*Child, Pointers, ArrayElements);
+}
+
 std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
   struct Import {
     std::size_t Begin;
@@ -200,6 +211,10 @@ std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
 
 std::string kelyra::lex::Format(const ParseResult &Parsed) {
   const auto Tokens = NormalizeImports(Parsed);
+  std::unordered_set<std::size_t> TypePointers;
+  std::unordered_set<std::size_t> ArrayElements;
+  if (Parsed.root)
+    CollectTypeOffsets(*Parsed.root, TypePointers, ArrayElements);
   Writer Output;
   std::vector<bool> StructBraces;
   std::vector<bool> AsmBraces;
@@ -353,10 +368,12 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       if (Token.kind == TokenKind::keyword_module)
         ModuleDeclaration = true;
       if (IsOperator(Token.kind)) {
-        const bool Unary = IsUnary(Tokens, Index);
+        const bool TypePointer = TypePointers.contains(Token.Loc.Offset);
+        const bool Unary = TypePointer || IsUnary(Tokens, Index);
         if (Unary &&
             (StartsWord(Previous) || Previous == TokenKind::punc_right_paren ||
-             Previous == TokenKind::punc_right_bracket))
+             Previous == TokenKind::punc_right_bracket) &&
+            !TypePointer)
           Output.Space();
         if (!Unary)
           Output.Space();
@@ -366,7 +383,8 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       } else {
         if (StartsWord(Token.kind) &&
             (StartsWord(Previous) || Previous == TokenKind::punc_right_paren ||
-             Previous == TokenKind::punc_right_bracket))
+             (Previous == TokenKind::punc_right_bracket &&
+              !ArrayElements.contains(Token.Loc.Offset))))
           Output.Space();
         Output.Write(Text);
         const auto Next =

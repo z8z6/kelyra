@@ -226,7 +226,7 @@ TEST(IRGen, MultidimensionalArrayAndControlFlow) {
   lex::Lexer Lexer;
   auto Parsed = Lexer.parse(R"(
 fn get() -> i32 {
-  let values: i32[2][3];
+  let values: [2][3]i32;
   let i = 0;
   while i < 2 {
     values[i][1] = i + 6;
@@ -234,6 +234,7 @@ fn get() -> i32 {
   }
   return values[1][1];
 }
+
 )");
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
@@ -260,4 +261,25 @@ fn get() -> i32 {
   EXPECT_NE(Output.find("llvm.getelementptr"), std::string::npos);
   EXPECT_NE(Output.find("cf.assert"), std::string::npos);
   EXPECT_NE(Output.find("cf.cond_br"), std::string::npos);
+}
+
+TEST(IRGen, PointerToArrayAndArrayOfPointers) {
+  auto Parsed = lex::Lexer().parse(R"(
+fn get() -> i32 {
+  let values: [2]i32;
+  let whole: *[2]i32 = &values;
+  (*whole)[1] = 7;
+  let elements: [2]*i32;
+  elements[0] = &values[0];
+  *elements[0] = 5;
+  return values[0] + values[1];
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  mlir::MLIRContext Context;
+  codegen::IRGen Generator(Context, Analysis);
+  auto Module = Generator.Generate(*Parsed.root);
+  EXPECT_TRUE(mlir::succeeded(mlir::verify(*Module)));
 }

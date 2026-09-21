@@ -38,17 +38,19 @@ std::string Mangle(std::string_view Module, std::string_view Name,
 }
 
 std::string MetaTypeName(const sema::Type &Type) {
+  if (Type.IsPointer())
+    return "*" + MetaTypeName(Type.Pointee());
+  if (Type.IsArray())
+    return "[" + std::to_string(Type.ArrayLength()) + "]" +
+           MetaTypeName(Type.Indexed());
   if (Type.Element == sema::BuiltinType::Function) {
-    std::string Name(Type.PointerDepth, '*');
-    Name += "fn(";
+    std::string Name = "fn(";
     for (std::size_t I = 0; I < Type.Parameters.size(); ++I) {
       if (I)
         Name += ", ";
       Name += MetaTypeName(Type.Parameters[I]);
     }
     Name += ") -> " + MetaTypeName(Type.Results.front());
-    for (auto Dimension : Type.Dimensions)
-      Name += "[" + std::to_string(Dimension) + "]";
     return Name;
   }
   if (Type.IsResults()) {
@@ -66,9 +68,6 @@ std::string MetaTypeName(const sema::Type &Type) {
       : Type.CName.empty()
           ? std::string(sema::GetBuiltinTypeInfo(Type.Element).Name)
           : Type.CName;
-  Result.insert(0, Type.PointerDepth, '*');
-  for (const auto Dimension : Type.Dimensions)
-    Result += "[" + std::to_string(Dimension) + "]";
   return Result;
 }
 
@@ -113,6 +112,7 @@ sema::MetaId sema::Sema::GetOrCreateMetaType(const Type &Type) {
                              ? MetaTypeKind::Record
                              : MetaTypeKind::Builtin;
   Declaration.BitWidth = GetBitWidth(Type);
+  Declaration.Alignment = GetAlignment(Type);
   if (Type.IsClass()) {
     Declaration.BitWidth = GetClass(Type)->Size * 8;
     Declaration.Alignment = GetClass(Type)->Alignment;
@@ -131,9 +131,7 @@ sema::MetaId sema::Sema::GetOrCreateMetaType(const Type &Type) {
       Declaration.Children.push_back(GetOrCreateMetaType(Result));
   }
   if (Type.IsPointer()) {
-    auto Pointee = Type;
-    --Pointee.PointerDepth;
-    Declaration.Type = GetOrCreateMetaType(Pointee);
+    Declaration.Type = GetOrCreateMetaType(Type.Pointee());
   } else if (Type.IsArray()) {
     Declaration.Type = GetOrCreateMetaType(Type.Indexed());
   }
@@ -233,14 +231,11 @@ std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
   }
   if (Node.kind == K::ast_pointer_type && Node.children.size() == 1) {
     auto Result = CheckType(*Node.children.front());
-    if (!Result || Result->IsArray() || Result->IsVoid() ||
-        Result->IsResults()) {
+    if (!Result || Result->IsVoid() || Result->IsResults()) {
       Error(Node, lex::DiagnosticKind::UnsupportedType);
       return std::nullopt;
     }
-    ++Result->PointerDepth;
-    Result->BitWidth = sizeof(void *) * 8;
-    Result->Alignment = alignof(void *);
+    Result->AddPointer();
     if (Result->Element != BuiltinType::Class)
       Result->CSpelling = detail::CSpelling(*Result) + " *";
     Types[&Node] = *Result;
@@ -267,7 +262,7 @@ std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
     Error(Node, lex::DiagnosticKind::UnsupportedType);
     return std::nullopt;
   }
-  Result->Dimensions.push_back(Length);
+  Result->AddArray(Length);
   Types[&Node] = *Result;
   return Result;
 }
@@ -494,9 +489,7 @@ bool sema::Sema::CheckModules(
       if (!Owner.empty()) {
         Type Receiver{BuiltinType::Class, {}};
         Receiver.ClassName = Owner;
-        Receiver.PointerDepth = 1;
-        Receiver.BitWidth = sizeof(void *) * 8;
-        Receiver.Alignment = alignof(void *);
+        Receiver.AddPointer();
         Info.Parameters.push_back(std::move(Receiver));
       }
       const auto Kind =

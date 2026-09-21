@@ -2,8 +2,8 @@
 // Returning the count keeps the example independent of an I/O runtime.
 fn main() -> i32 {
   // 棋盘
-  let board: i32[8][8];
-  let next: i32[8];
+  let board: [8][8]i32;
+  let next: [8]i32;
   let row = 0;
   let solutions = 0;
 

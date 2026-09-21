@@ -127,13 +127,8 @@ mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
     return mlir::LLVM::LLVMStructType::getLiteral(&Context, Results);
   }
   if (Type.IsArray()) {
-    auto Element = Type;
-    Element.Dimensions.clear();
-    auto Result = GetType(Element);
-    for (auto Dimension = Type.Dimensions.rbegin();
-         Dimension != Type.Dimensions.rend(); ++Dimension)
-      Result = mlir::LLVM::LLVMArrayType::get(Result, *Dimension);
-    return Result;
+    return mlir::LLVM::LLVMArrayType::get(GetType(Type.Indexed()),
+                                          Type.ArrayLength());
   }
   if (Type.IsPointer() || Type.IsFunction())
     return mlir::LLVM::LLVMPointerType::get(&Context);
@@ -146,11 +141,15 @@ mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
         Fields.push_back(mlir::LLVM::LLVMArrayType::get(Builder.getI8Type(),
                                                         Field.Offset - Offset));
       Fields.push_back(GetType(Field.Value));
-      std::uint64_t Size = Field.Value.IsClass()
-                               ? Analysis.GetClass(Field.Value)->Size
-                               : (sema::GetBitWidth(Field.Value) + 7) / 8;
-      for (auto Dimension : Field.Value.Dimensions)
-        Size *= Dimension;
+      auto Element = Field.Value;
+      std::uint64_t Count = 1;
+      while (Element.IsArray()) {
+        Count *= Element.ArrayLength();
+        Element = Element.Indexed();
+      }
+      const std::uint64_t Size =
+          Count * (Element.IsClass() ? Analysis.GetClass(Element)->Size
+                                     : (sema::GetBitWidth(Element) + 7) / 8);
       Offset = Field.Offset + Size;
     }
     if (Offset < Class.Size)
@@ -194,9 +193,6 @@ mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
       llvm_unreachable("unhandled builtin type");
     }
   }
-  for (auto Dimension = Type.Dimensions.rbegin();
-       Dimension != Type.Dimensions.rend(); ++Dimension)
-    Result = mlir::LLVM::LLVMArrayType::get(Result, *Dimension);
   return Result;
 }
 
@@ -217,7 +213,8 @@ mlir::Value codegen::IRGen::CreateAlloca(const sema::Type &Type,
   return mlir::LLVM::AllocaOp::create(
       Builder, Loc, mlir::LLVM::LLVMPointerType::get(&Context), GetType(Type),
       One,
-      Type.IsClass() ? Analysis.GetClass(Type)->Alignment : Type.Alignment);
+      Type.IsClass() ? Analysis.GetClass(Type)->Alignment
+                     : sema::GetAlignment(Type));
 }
 
 mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
@@ -338,7 +335,7 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
   if (Owner) {
     sema::Type Receiver{sema::BuiltinType::Class, {}};
     Receiver.ClassName = Owner->QualifiedName;
-    Receiver.PointerDepth = 1;
+    Receiver.AddPointer();
     Scopes.back().emplace("this",
                           Variable{Receiver, {}, Entry->getArgument(0)});
     if (DebugInfo) {

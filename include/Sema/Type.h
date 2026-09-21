@@ -58,6 +58,15 @@ enum class BuiltinType {
   Count,
 };
 
+enum class TypeModifierKind { Pointer, Array };
+
+struct TypeModifier {
+  TypeModifierKind Kind;
+  std::uint64_t Length = 0;
+
+  bool operator==(const TypeModifier &) const = default;
+};
+
 struct Type {
   BuiltinType Element;
   std::vector<std::uint64_t> Dimensions;
@@ -69,30 +78,62 @@ struct Type {
   std::string ClassName;
   std::vector<Type> Results;
   std::vector<Type> Parameters;
+  // Outermost first: *[2]i32 is {Pointer, Array(2)}.
+  std::vector<TypeModifier> Modifiers;
 
-  bool IsArray() const { return !Dimensions.empty(); }
-  bool IsPointer() const { return PointerDepth != 0; }
-  bool IsRecord() const {
-    return Element == BuiltinType::CRecord && !IsPointer();
+  bool IsArray() const {
+    return !Modifiers.empty() &&
+           Modifiers.front().Kind == TypeModifierKind::Array;
   }
-  bool IsClass() const { return Element == BuiltinType::Class && !IsPointer(); }
-  bool IsVoid() const { return Element == BuiltinType::Void && !IsPointer(); }
+  bool IsPointer() const {
+    return !Modifiers.empty() &&
+           Modifiers.front().Kind == TypeModifierKind::Pointer;
+  }
+  bool IsRecord() const {
+    return Element == BuiltinType::CRecord && Modifiers.empty();
+  }
+  bool IsClass() const {
+    return Element == BuiltinType::Class && Modifiers.empty();
+  }
+  bool IsVoid() const {
+    return Element == BuiltinType::Void && Modifiers.empty();
+  }
   bool IsResults() const { return Element == BuiltinType::Results; }
   bool IsFunction() const {
-    return Element == BuiltinType::Function && !IsPointer();
+    return Element == BuiltinType::Function && Modifiers.empty();
+  }
+
+  void AddPointer() {
+    Modifiers.insert(Modifiers.begin(), {TypeModifierKind::Pointer});
+    ++PointerDepth;
+  }
+
+  void AddArray(std::uint64_t Length) {
+    Modifiers.insert(Modifiers.begin(), {TypeModifierKind::Array, Length});
+    Dimensions.insert(Dimensions.begin(), Length);
+  }
+
+  Type Pointee() const {
+    Type Result = *this;
+    Result.Modifiers.erase(Result.Modifiers.begin());
+    --Result.PointerDepth;
+    return Result;
   }
 
   Type Indexed() const {
     Type Result = *this;
+    Result.Modifiers.erase(Result.Modifiers.begin());
     Result.Dimensions.erase(Result.Dimensions.begin());
     return Result;
   }
+
+  std::uint64_t ArrayLength() const { return Modifiers.front().Length; }
 
   bool operator==(const Type &Other) const {
     return Element == Other.Element && Dimensions == Other.Dimensions &&
            PointerDepth == Other.PointerDepth && CName == Other.CName &&
            ClassName == Other.ClassName && Results == Other.Results &&
-           Parameters == Other.Parameters;
+           Parameters == Other.Parameters && Modifiers == Other.Modifiers;
   }
 };
 
@@ -152,8 +193,16 @@ inline const BuiltinTypeInfo &GetBuiltinTypeInfo(BuiltinType Type) {
 }
 
 inline unsigned GetBitWidth(const Type &Type) {
-  return Type.BitWidth ? Type.BitWidth
-                       : GetBuiltinTypeInfo(Type.Element).BitWidth;
+  return Type.IsPointer() ? sizeof(void *) * 8
+         : Type.IsArray() ? GetBitWidth(Type.Indexed())
+         : Type.BitWidth  ? Type.BitWidth
+                          : GetBuiltinTypeInfo(Type.Element).BitWidth;
+}
+
+inline unsigned GetAlignment(const Type &Type) {
+  return Type.IsPointer() ? alignof(void *)
+         : Type.IsArray() ? GetAlignment(Type.Indexed())
+                          : Type.Alignment;
 }
 
 inline std::optional<BuiltinType> ParseBuiltinType(std::string_view Name) {
@@ -193,12 +242,10 @@ inline bool IsCInteropCompatible(const Type &Left, const Type &Right) {
     if (!Left.IsPointer() || !Right.IsPointer() ||
         Left.PointerDepth != Right.PointerDepth)
       return false;
+    if (Left.Pointee().IsArray() || Right.Pointee().IsArray())
+      return false;
     if (Left.PointerDepth > 1) {
-      Type LeftPointee = Left;
-      Type RightPointee = Right;
-      --LeftPointee.PointerDepth;
-      --RightPointee.PointerDepth;
-      return IsCInteropCompatible(LeftPointee, RightPointee);
+      return IsCInteropCompatible(Left.Pointee(), Right.Pointee());
     }
     // A Kelyra pointer to a scalar may cross the C boundary when the pointee
     // matches the C element in signedness and width.

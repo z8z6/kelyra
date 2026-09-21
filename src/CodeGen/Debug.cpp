@@ -19,24 +19,16 @@ di::DITypeAttr codegen::IRGen::GetDebugType(const sema::Type &Type) {
   if (Type.IsVoid() || Type.IsResults())
     return di::DINullTypeAttr::get(&Context);
   if (Type.IsArray()) {
-    auto Element = Type;
-    Element.Dimensions.clear();
-    llvm::SmallVector<di::DINodeAttr> Bounds;
-    for (auto Length : Type.Dimensions)
-      Bounds.push_back(
-          di::DISubrangeAttr::get(&Context, Builder.getI64IntegerAttr(Length),
-                                  Builder.getI64IntegerAttr(0), {}, {}));
-    return di::DICompositeTypeAttr::get(
-        &Context, DW_TAG_array_type, {}, {}, 0, {}, GetDebugType(Element),
-        di::DIFlags::Zero, 0, 0, {}, {}, {}, {}, {}, {}, Bounds);
+    llvm::SmallVector<di::DINodeAttr> Bounds{di::DISubrangeAttr::get(
+        &Context, Builder.getI64IntegerAttr(Type.ArrayLength()),
+        Builder.getI64IntegerAttr(0), {}, {})};
+    return di::DICompositeTypeAttr::get(&Context, DW_TAG_array_type, {}, {}, 0,
+                                        {}, GetDebugType(Type.Indexed()),
+                                        di::DIFlags::Zero, 0, 0, {}, {}, {}, {},
+                                        {}, {}, Bounds);
   }
   if (Type.IsPointer()) {
-    auto Pointee = Type;
-    --Pointee.PointerDepth;
-    if (!Pointee.IsPointer()) {
-      Pointee.BitWidth = 0;
-      Pointee.Alignment = 0;
-    }
+    auto Pointee = Type.Pointee();
     return di::DIDerivedTypeAttr::get(&Context, DW_TAG_pointer_type, {}, {}, 0,
                                       {}, GetDebugType(Pointee),
                                       sizeof(void *) * 8, alignof(void *) * 8,
@@ -106,7 +98,7 @@ void codegen::IRGen::BeginDebugFunction(mlir::Operation *Function,
   if (CurrentClass) {
     sema::Type Receiver{sema::BuiltinType::Class, {}};
     Receiver.ClassName = CurrentClass->QualifiedName;
-    Receiver.PointerDepth = 1;
+    Receiver.AddPointer();
     Types.push_back(GetDebugType(Receiver));
   }
   for (const auto &Child : Node.children)

@@ -75,7 +75,7 @@ fn use() -> i32 { let (value, ok) = forward(); if ok { return value; } return 0;
            "fn f() -> void { return 1; }",
            "fn f(value: void) {}",
            "fn f() { let x: void; }",
-           "fn f() { let x: void[2]; }",
+           "fn f() { let x: [2]void; }",
            "fn f() { let x: *void; }",
            "fn f() -> (i32, void) { return 1, 2; }",
            "fn f() -> (i32, bool) { return 1; }",
@@ -173,7 +173,7 @@ TEST(Sema, RejectInvalidClassLifetimes) {
            "class A { init() {} } fn f() { let a = A(); a.init(); }",
            "class A { init() {} } fn f(a: A) {}",
            "class A { init() {} } fn f() -> A { return A(); }",
-           "class A { init() {} } fn f() { let a: A[2]; }",
+           "class A { init() {} } fn f() { let a: [2]A; }",
            "class A { init() {} } fn A() {}",
            "class A { init() {} fn f() {} fn g() { f(); } } fn f() {}",
            "class A { x: i32; x: i32; init() { x = 1; x = 2; } }",
@@ -342,7 +342,7 @@ TEST(Sema, MultidimensionalArray) {
   lex::Lexer Lexer;
   auto Parsed = Lexer.parse(R"(
 fn get() -> i32 {
-  let values: i32[2][3];
+  let values: [2][3]i32;
   values[1][1] = 7;
   return values[1][1];
 }
@@ -350,6 +350,23 @@ fn get() -> i32 {
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
   EXPECT_TRUE(Analysis.Check(*Parsed.root));
+}
+
+TEST(Sema, PointerAndArrayOrderAreDistinct) {
+  auto Parsed = lex::Lexer().parse(R"(
+fn invalid() {
+  let values: [2]i32;
+  let whole: *[2]i32 = &values;
+  let elements: [2]*i32;
+  whole = elements;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  EXPECT_FALSE(Analysis.Check(*Parsed.root));
+  ASSERT_FALSE(Analysis.GetDiagnostics().empty());
+  EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
+            lex::DiagnosticKind::TypeMismatch);
 }
 
 TEST(Sema, ModulesRespectPublicVisibility) {

@@ -32,9 +32,7 @@ std::optional<sema::Type> ConvertType(clang::ASTContext &Context,
     }
     if (!Result || Pointee->isFunctionType())
       return std::nullopt;
-    ++Result->PointerDepth;
-    Result->BitWidth = Context.getTypeSize(Type);
-    Result->Alignment = Context.getTypeAlign(Type) / 8;
+    Result->AddPointer();
     Result->CSpelling = Spelling;
     return Result;
   }

@@ -57,7 +57,7 @@ TEST(Frontend, ExpressionAst) {
 TEST(Frontend, Format) {
   auto Parsed = lexer.parse(
       "module app.main; import math.vector; @Vertex class Pair{left:i32;"
-      "right:i32[4];} pub fn main()->i32{let x:*c.Pair=c.make(1,);let value=1;"
+      "right:[4]i32;} pub fn main()->i32{let x:*c.Pair=c.make(1,);let value=1;"
       "let pointer:*i32=&value;*pointer=*pointer+1;if !x{"
       "return -1;}else{return 0;}} // end\n");
   ASSERT_TRUE(Parsed.ok());
@@ -67,7 +67,7 @@ TEST(Frontend, Format) {
                                "@Vertex\n"
                                "class Pair {\n"
                                "  left: i32;\n"
-                               "  right: i32[4];\n"
+                               "  right: [4]i32;\n"
                                "}\n\n"
                                "pub fn main() -> i32 {\n"
                                "  let x: *c.Pair = c.make(1,);\n"
@@ -85,6 +85,23 @@ TEST(Frontend, Format) {
   auto Formatted = lexer.parse(Expected);
   ASSERT_TRUE(Formatted.ok());
   EXPECT_EQ(Format(Formatted), Expected) << "formatting is idempotent";
+}
+
+TEST(Frontend, PrefixArrayTypes) {
+  const std::string Source =
+      "fn types() { let whole:*[2]i32; let elements:[2]*i32; }";
+  auto Parsed = lexer.parse(Source);
+  ASSERT_TRUE(Parsed.ok());
+  EXPECT_EQ(Format(Parsed), "fn types() {\n"
+                            "  let whole: *[2]i32;\n"
+                            "  let elements: [2]*i32;\n"
+                            "}\n");
+  const auto Ast = lexer.dumpAst(*Parsed.root);
+  EXPECT_NE(Ast.find("(PointerType (ArrayType \"2\" (Type \"i32\")))"),
+            std::string::npos);
+  EXPECT_NE(Ast.find("(ArrayType \"2\" (PointerType (Type \"i32\")))"),
+            std::string::npos);
+  EXPECT_FALSE(lexer.parse("fn old(value: i32[2]) {}").ok());
 }
 
 TEST(Frontend, ClassAndMultipleReturnRoundTrip) {
@@ -358,7 +375,7 @@ TEST(Frontend, TokenLocations) {
 TEST(Frontend, ModuleAst) {
   const std::string source = R"(
 @Vertex
-class Pair { left: i32; right: i32[4]; }
+class Pair { left: i32; right: [4]i32; }
 fn choose(x: i32, y: i32,) -> i32 {
   let z: i32 = x + y;
   let inferred = false;
@@ -402,7 +419,7 @@ TEST(Frontend, RejectInvalidModules) {
   for (const std::string invalid :
        {"let x = 1;", "fn f(x) {}", "fn f() { let x; }", "class S { x i32 }",
         "fn f() { 1 = 2; }", "fn f() { a = b = c; }", "fn f() { return 1 }",
-        "fn f() { if true return; }", "fn f() {", "fn f(x: i32[1.5]) {}",
+        "fn f() { if true return; }", "fn f() {", "fn f(x: [1.5]i32) {}",
         "fn f() { break 1; }", "fn f() { let fn = 1; }", "@ fn f() {}",
         "@Test let x = 1;", "module ; fn f() {}", "import ; fn f() {}"})
     ASSERT_FALSE(lexer.parse(invalid).ok())

@@ -136,8 +136,7 @@ sema::Sema::CheckMemberExpression(const lex::Node &Expression,
     return std::nullopt;
   const auto *Class = GetClass(*Base);
   if (!Class && Base->IsPointer()) {
-    auto Pointee = *Base;
-    --Pointee.PointerDepth;
+    auto Pointee = Base->Pointee();
     Class = GetClass(Pointee);
   }
   if (!Class || Base->PointerDepth > 1 || Base->IsArray()) {
@@ -173,9 +172,7 @@ sema::Sema::CheckLiteralExpression(const lex::Node &Expression,
     return FinishExpression(Expression, {BuiltinType::Bool, {}}, Expected);
   if (!Expression.text.empty() && Expression.text.front() == '"') {
     Type String{BuiltinType::CChar, {}};
-    String.PointerDepth = 1;
-    String.BitWidth = sizeof(void *) * 8;
-    String.Alignment = alignof(void *);
+    String.AddPointer();
     String.CSpelling = "const char *";
     if (Expected &&
         (!Expected->IsPointer() || Expected->Element != BuiltinType::CChar)) {
@@ -448,9 +445,7 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
     if (Wrapper.ReturnByAddress) {
       Source << "void *result";
       Type ResultPointer = Info.Return;
-      ++ResultPointer.PointerDepth;
-      ResultPointer.BitWidth = sizeof(void *) * 8;
-      ResultPointer.Alignment = alignof(void *);
+      ResultPointer.AddPointer();
       Wrapper.Parameters.push_back(std::move(ResultPointer));
       First = false;
     }
@@ -463,9 +458,7 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
       if (ByAddress) {
         Source << "void *arg" << I;
         Type Pointer = Arguments[I];
-        ++Pointer.PointerDepth;
-        Pointer.BitWidth = sizeof(void *) * 8;
-        Pointer.Alignment = alignof(void *);
+        Pointer.AddPointer();
         Wrapper.Parameters.push_back(std::move(Pointer));
       } else {
         Source << detail::CSpelling(Arguments[I]) << " arg" << I;
@@ -521,13 +514,11 @@ sema::Sema::CheckUnaryExpression(const lex::Node &Expression,
       Error(Expression, lex::DiagnosticKind::UnsupportedExpression);
       return std::nullopt;
     }
-    if (!Result || Result->IsArray()) {
+    if (!Result) {
       Error(Expression, lex::DiagnosticKind::UnsupportedExpression);
       return std::nullopt;
     }
-    ++Result->PointerDepth;
-    Result->BitWidth = sizeof(void *) * 8;
-    Result->Alignment = alignof(void *);
+    Result->AddPointer();
     return FinishExpression(Expression, *Result, Expected);
   }
   if (Expression.text == "*") {
@@ -536,16 +527,12 @@ sema::Sema::CheckUnaryExpression(const lex::Node &Expression,
       Error(Expression, lex::DiagnosticKind::UnsupportedExpression);
       return std::nullopt;
     }
-    --Result->PointerDepth;
+    *Result = Result->Pointee();
     if (!Result->IsPointer()) {
       const auto External = ExternalTypes.find("c." + Result->CName);
       if (Result->Element == BuiltinType::CRecord &&
           External != ExternalTypes.end())
         *Result = External->second;
-      else {
-        Result->BitWidth = 0;
-        Result->Alignment = 0;
-      }
     }
     return FinishExpression(Expression, *Result, Expected);
   }

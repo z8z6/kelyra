@@ -1,4 +1,4 @@
 fn main() -> i32 {
-  let values: i32[2][2];
+  let values: [2][2]i32;
   return values[2][0];
 }

@@ -48,23 +48,32 @@ void sema::Sema::CheckClassLayouts() {
         Error(*Field.Node, lex::DiagnosticKind::UnsupportedType);
         return false;
       }
-      std::uint64_t FieldSize = (GetBitWidth(Field.Value) + 7) / 8;
-      unsigned FieldAlignment = Field.Value.Alignment;
-      if (Field.Value.IsClass()) {
-        const auto &Child = Classes.at(Field.Value.ClassName);
+      auto Element = Field.Value;
+      std::uint64_t Count = 1;
+      while (Element.IsArray()) {
+        const auto Dimension = Element.ArrayLength();
+        if (Count > std::numeric_limits<unsigned>::max() / 8 / Dimension) {
+          Error(*Field.Node, lex::DiagnosticKind::UnsupportedType);
+          return false;
+        }
+        Count *= Dimension;
+        Element = Element.Indexed();
+      }
+      std::uint64_t FieldSize = (GetBitWidth(Element) + 7) / 8;
+      unsigned FieldAlignment = GetAlignment(Element);
+      if (Element.IsClass()) {
+        const auto &Child = Classes.at(Element.ClassName);
         FieldSize = Child.Size;
         FieldAlignment = Child.Alignment;
       }
       if (!FieldAlignment)
         FieldAlignment = std::min<std::uint64_t>(
             16, std::bit_ceil(std::max<std::uint64_t>(1, FieldSize)));
-      for (const auto Dimension : Field.Value.Dimensions) {
-        if (FieldSize > std::numeric_limits<unsigned>::max() / 8 / Dimension) {
-          Error(*Field.Node, lex::DiagnosticKind::UnsupportedType);
-          return false;
-        }
-        FieldSize *= Dimension;
+      if (FieldSize > std::numeric_limits<unsigned>::max() / 8 / Count) {
+        Error(*Field.Node, lex::DiagnosticKind::UnsupportedType);
+        return false;
       }
+      FieldSize *= Count;
       if (!FieldSize) {
         Error(*Field.Node, lex::DiagnosticKind::UnsupportedType);
         return false;
@@ -115,9 +124,7 @@ void sema::Sema::CheckClassMember(const lex::Node &Member,
   InDestructor = Member.kind == K::ast_destructor;
   Type Receiver{BuiltinType::Class, {}};
   Receiver.ClassName = Class.QualifiedName;
-  Receiver.PointerDepth = 1;
-  Receiver.BitWidth = sizeof(void *) * 8;
-  Receiver.Alignment = alignof(void *);
+  Receiver.AddPointer();
   Scopes.back().emplace("this", Receiver);
 
   const lex::Node *Body = nullptr;

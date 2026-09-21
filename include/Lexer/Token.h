@@ -83,7 +83,7 @@ enum class TokenKind {
   ast_destructor,           // AST class destructor
   ast_type,                 // AST named type
   ast_pointer_type,         // AST *type
-  ast_array_type,           // AST type[length]
+  ast_array_type,           // AST [length]type
   ast_result_types,         // AST (return types)
   ast_function_type,        // AST fn(types) -> result
   ast_binding_list,         // AST let (names)

@@ -286,6 +286,18 @@ void Lexer::add(Node &parent, Ptr child) {
 
 Lexer::Ptr Lexer::type() {
   Guard guard(*this);
+  if (at("[")) {
+    const auto Loc = take().Loc;
+    auto Array = node(K::ast_array_type, Loc);
+    if (peek().kind != TokenKind::number ||
+        spelling(peek()).find_first_not_of("0123456789") !=
+            std::string_view::npos)
+      fail(peek().Loc, DiagnosticKind::ExpectedIntegerArrayLength);
+    Array->text = spelling(take());
+    expect("]");
+    add(*Array, type());
+    return Array;
+  }
   if (at("fn")) {
     auto result = node(K::ast_function_type, take().Loc);
     expect("(");
@@ -328,19 +340,6 @@ Lexer::Ptr Lexer::type() {
     }
   } else {
     result = qualified(K::ast_type);
-  }
-  while (at("[")) {
-    take();
-    auto array = node(K::ast_array_type, result->Loc);
-    if (peek().kind != TokenKind::number ||
-        spelling(peek()).find_first_not_of("0123456789") !=
-            std::string_view::npos)
-      fail(peek().Loc, DiagnosticKind::ExpectedIntegerArrayLength);
-    array->text = spelling(take());
-    const auto end = expect("]").Loc.End();
-    add(*array, std::move(result));
-    array->Loc.Len = end - array->Loc.Offset;
-    result = std::move(array);
   }
   return result;
 }
