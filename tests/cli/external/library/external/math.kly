@@ -1,0 +1,14 @@
+module external.math;
+
+// Private helper: only the linked library object defines it.
+fn helper(value: i32) -> i32 { return value + 1; }
+
+pub fn answer() -> i32 { return helper(41); }
+
+pub class Counter {
+  value: i32;
+  pub init(value: i32) { this.value = value; }
+  pub fn add(delta: i32) -> void { value = helper(value + delta) - 1; }
+  pub fn get() -> i32 { return value; }
+  deinit() { value = 0; }
+}

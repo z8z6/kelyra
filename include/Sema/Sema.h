@@ -133,6 +133,9 @@ class Sema {
   std::optional<Type> ReturnType;
   std::string CurrentModule;
   std::string CurrentClass;
+  // Distinguishes generated C thunk symbols from another compilation unit so a
+  // linked library and its consumer never collide.
+  std::string SymbolPrefix = "unit";
   const lex::Node *CurrentConstructor = nullptr;
   const lex::Node *ConstructionContext = nullptr;
   const lex::Node *InitializingTarget = nullptr;
@@ -148,6 +151,7 @@ class Sema {
                                         std::optional<Type> Expected);
 
   void Error(const lex::Node &Node, lex::DiagnosticKind Kind);
+  void GenerateSymbolPrefix(const std::vector<ModuleInput> &Modules);
   void RegisterAnnotation(const lex::Node &Declaration,
                           std::string_view Module);
   void CheckAnnotationDefinition(const lex::Node &Declaration);

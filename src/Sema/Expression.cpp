@@ -427,7 +427,8 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
                    [](const Type &Type) { return Type.IsRecord(); }));
   if (NeedsWrapper && Arguments.size() == ArgumentCount) {
     CWrapper Wrapper;
-    Wrapper.Name = "kelyra_c_thunk_" + std::to_string(CWrappers.size());
+    Wrapper.Name = "kelyra_c_thunk_" + SymbolPrefix + "_" +
+                   std::to_string(CWrappers.size());
     Wrapper.Return = Info.Return;
     Wrapper.ReturnByAddress = Info.Return.IsRecord();
     std::ostringstream Source;

@@ -41,6 +41,16 @@ public:
       llvm::cl::desc("Directory searched for imported modules after the entry "
                      "directory; may be repeated"),
       llvm::cl::ZeroOrMore, llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::list<std::string> ExternalPaths{
+      "external-path",
+      llvm::cl::desc("Directory whose modules are linked instead of compiled: "
+                     "only declarations are emitted; may be repeated"),
+      llvm::cl::ZeroOrMore, llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::list<std::string> LinkInputs{
+      "link-input",
+      llvm::cl::desc("Object file or archive linked into the executable; may "
+                     "be repeated"),
+      llvm::cl::ZeroOrMore, llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> LexDumpAst{
       "dump-ast", llvm::cl::desc("Print the parsed AST"),
       llvm::cl::cat(KelyraCategory)};

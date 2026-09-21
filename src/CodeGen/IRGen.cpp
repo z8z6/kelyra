@@ -289,7 +289,8 @@ mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
 }
 
 void codegen::IRGen::EmitFunction(const lex::Node &Function,
-                                  const sema::ClassInfo *Owner) {
+                                  const sema::ClassInfo *Owner,
+                                  bool DeclarationOnly) {
   using K = lex::TokenKind;
   llvm::SmallVector<const lex::Node *> Parameters;
   const lex::Node *ReturnType = nullptr;
@@ -315,6 +316,11 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
   auto Func =
       mlir::func::FuncOp::create(Builder, GetLocation(Function.Loc),
                                  Analysis.GetSymbol(Function), FunctionType);
+  if (DeclarationOnly) {
+    // The definition lives in a linked library; emit only the declaration.
+    Func.setPrivate();
+    return;
+  }
   CurrentClass = Owner;
   BeginDebugFunction(Func, Function);
   if (!Analysis.IsPublic(Function) && Function.text != "main")
@@ -415,6 +421,7 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
     Function.setPrivate();
   }
   for (const auto *Module : Modules) {
+    const bool External = ExternalModules.count(Module) != 0;
     for (const auto &Child : Module->children) {
       if (Child->kind == K::ast_class) {
         const sema::ClassInfo *Class = nullptr;
@@ -427,18 +434,21 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
               Member->kind == K::ast_constructor ||
               Member->kind == K::ast_destructor) {
             Builder.setInsertionPointToEnd(Result.getBody());
-            EmitFunction(*Member, Class);
+            EmitFunction(*Member, Class, External);
           }
         if (!Class->Destructor) {
           Builder.setInsertionPointToEnd(Result.getBody());
-          EmitDefaultDestructor(*Class);
+          if (External)
+            EmitDefaultDestructorDeclaration(*Class);
+          else
+            EmitDefaultDestructor(*Class);
         }
         continue;
       }
       if (Child->kind != K::ast_function)
         continue;
       Builder.setInsertionPointToEnd(Result.getBody());
-      EmitFunction(*Child);
+      EmitFunction(*Child, nullptr, External);
     }
   }
   return Result;

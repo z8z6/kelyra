@@ -217,6 +217,44 @@ TEST(CLI, RejectModuleOutsideSearchPath) {
       "cannot find module 'external.util'");
 }
 
+TEST(CLI, LinkExternalModule) {
+  llvm::SmallString<128> objectPath;
+  ASSERT_FALSE(
+      llvm::sys::fs::createTemporaryFile("kelyra-external", "o", objectPath));
+  llvm::FileRemover removeObject(objectPath);
+  run({"--emit-obj", "--module-path=" KELYRA_TEST_DIR "/external/library", "-o",
+       objectPath, KELYRA_TEST_DIR "/external/library/external/math.kly"},
+      0, "", "");
+  llvm::SmallString<256> linkArgument("--link-input=");
+  linkArgument += objectPath;
+  llvm::SmallString<128> executablePath;
+  llvm::sys::fs::createUniquePath("kelyra-external-%%%%%%%%", executablePath,
+                                  true);
+  llvm::FileRemover removeExecutable(executablePath);
+  // The external path covers the entry too; the entry is still compiled.
+  run({"--emit-exe", "--module-path=" KELYRA_TEST_DIR "/external/library",
+       "--external-path=" KELYRA_TEST_DIR "/external", linkArgument, "-o",
+       executablePath, KELYRA_TEST_DIR "/external/main.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> args{executablePath};
+  std::string error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(executablePath, args, std::nullopt, {},
+                                      10, 0, &error),
+            42)
+      << error;
+}
+
+TEST(CLI, RejectExternalModuleWithoutLinkInput) {
+  llvm::SmallString<128> executablePath;
+  llvm::sys::fs::createUniquePath("kelyra-external-missing-%%%%%%%%",
+                                  executablePath, true);
+  llvm::FileRemover removeExecutable(executablePath);
+  run({"--emit-exe", "--module-path=" KELYRA_TEST_DIR "/external/library",
+       "--external-path=" KELYRA_TEST_DIR "/external/library", "-o",
+       executablePath, KELYRA_TEST_DIR "/external/main.kly"},
+      1, "", "linker failed");
+}
+
 TEST(CLI, CallCFunction) {
   llvm::SmallString<128> executablePath;
   llvm::sys::fs::createUniquePath("kelyra-c-call-%%%%%%%%", executablePath,

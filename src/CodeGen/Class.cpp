@@ -62,3 +62,12 @@ void codegen::IRGen::EmitDefaultDestructor(const sema::ClassInfo &Class) {
   EmitFieldDestructors(Class, Entry->getArgument(0), Loc);
   mlir::func::ReturnOp::create(Builder, Loc);
 }
+
+void codegen::IRGen::EmitDefaultDestructorDeclaration(
+    const sema::ClassInfo &Class) {
+  auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
+  auto Function = mlir::func::FuncOp::create(
+      Builder, GetLocation(Class.Node->Loc), Class.DestructorSymbol,
+      Builder.getFunctionType({Pointer}, {}));
+  Function.setPrivate();
+}

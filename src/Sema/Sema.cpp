@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdint>
 #include <sstream>
 
 using namespace kelyra;
@@ -347,6 +348,29 @@ const sema::CWrapper *sema::Sema::GetCWrapper(const lex::Node &Node) const {
   return It == CWrapperCalls.end() ? nullptr : &CWrappers[It->second];
 }
 
+void sema::Sema::GenerateSymbolPrefix(const std::vector<ModuleInput> &Modules) {
+  const lex::Node *Entry = nullptr;
+  for (const auto &Input : Modules)
+    if (Input.IsEntry) {
+      Entry = Input.Ast;
+      break;
+    }
+  if (!Entry && !Modules.empty())
+    Entry = Modules.front().Ast;
+  std::uint64_t Hash = 1469598103934665603ull;
+  const auto Feed = [&Hash](std::string_view Text) {
+    for (const char Character : Text) {
+      Hash ^= static_cast<unsigned char>(Character);
+      Hash *= 1099511628211ull;
+    }
+  };
+  if (Entry) {
+    Feed(Entry->Loc.File);
+    Feed(ModuleName(*Entry));
+  }
+  SymbolPrefix = "u" + std::to_string(Hash);
+}
+
 bool sema::Sema::CheckModules(
     const std::vector<ModuleInput> &Modules,
     const std::vector<ExternalFunction> &ExternalDeclarations,
@@ -379,6 +403,7 @@ bool sema::Sema::CheckModules(
   ExternalFunctions = ExternalDeclarations;
   for (const auto &External : ExternalTypeDeclarations)
     ExternalTypes.emplace(External.Name, External.Value);
+  GenerateSymbolPrefix(Modules);
   std::unordered_map<std::string, const lex::Node *> ModuleTable;
 
   for (const auto &Input : Modules) {

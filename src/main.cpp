@@ -16,6 +16,7 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -29,6 +30,7 @@ struct SourceModule {
   std::string Path;
   lex::ParseResult Parsed;
   bool IsEntry = false;
+  bool IsExternal = false;
 };
 
 class ModuleLoader {
@@ -36,10 +38,21 @@ class ModuleLoader {
 
   std::filesystem::path Root;
   std::vector<std::filesystem::path> ModulePaths;
+  std::vector<std::filesystem::path> ExternalPaths;
   lex::Lexer Lexer;
   std::deque<SourceModule> Modules;
   std::unordered_map<std::string, State> States;
   std::vector<std::string> CHeaders;
+
+  bool IsUnderExternalPath(const std::filesystem::path &Path) const {
+    const auto Normalized = Path.lexically_normal();
+    for (const auto &External : ExternalPaths) {
+      const auto Relative = Normalized.lexically_relative(External);
+      if (!Relative.empty() && Relative.native().rfind("..", 0) != 0)
+        return true;
+    }
+    return false;
+  }
 
   std::optional<std::filesystem::path>
   FindModule(const std::string &Name) const {
@@ -79,6 +92,8 @@ class ModuleLoader {
     auto &Module = Modules.back();
     Module.Path = Path.string();
     Module.IsEntry = IsEntry;
+    // The entry is always compiled; external paths only cover linked modules.
+    Module.IsExternal = !IsEntry && IsUnderExternalPath(Path);
     Module.Parsed = Lexer.parse(std::move(Source), Module.Path);
     for (const auto &Diagnostic : Module.Parsed.diagnostics)
       std::cerr << Diagnostic << '\n';
@@ -158,6 +173,10 @@ public:
     ModulePaths.push_back(std::filesystem::absolute(Path).lexically_normal());
   }
 
+  void AddExternalPath(const std::string &Path) {
+    ExternalPaths.push_back(std::filesystem::absolute(Path).lexically_normal());
+  }
+
   bool LoadEntry(const std::string &Path) {
     const auto Entry = std::filesystem::absolute(Path).lexically_normal();
     Root = Entry.parent_path();
@@ -175,6 +194,7 @@ int main(int argc, char **argv) {
     errs() << "usage: kelyra [--dump-ast|--check|--emit-mlir|--emit-obj|"
               "--emit-exe] [-O0|-O1|-O2|-O3] [--safe-level=<n>] "
               "[--c-source=<file>] [--c-arg=<arg>] [--module-path=<dir>] "
+              "[--external-path=<dir>] [--link-input=<file>] "
               "[-o <file>] <file>\n";
     return 2;
   }
@@ -190,6 +210,7 @@ int main(int argc, char **argv) {
     errs() << "usage: kelyra [--dump-ast|--check|--emit-mlir|--emit-obj|"
               "--emit-exe] [-O0|-O1|-O2|-O3] [--safe-level=<n>] "
               "[--c-source=<file>] [--c-arg=<arg>] [--module-path=<dir>] "
+              "[--external-path=<dir>] [--link-input=<file>] "
               "[-o <file>] <file>\n";
     return 2;
   }
@@ -199,6 +220,7 @@ int main(int argc, char **argv) {
       std::cerr << "usage: kelyra [--dump-ast|--check|--emit-mlir|--emit-obj|"
                    "--emit-exe] [-O0|-O1|-O2|-O3] [--safe-level=<n>] "
                    "[--c-source=<file>] [--c-arg=<arg>] [--module-path=<dir>] "
+                   "[--external-path=<dir>] [--link-input=<file>] "
                    "[-o <file>] <file>\n";
       return 2;
     }
@@ -210,12 +232,18 @@ int main(int argc, char **argv) {
     ModuleLoader Loader;
     for (const auto &ModulePath : Option::ModulePaths)
       Loader.AddModulePath(ModulePath);
+    for (const auto &ExternalPath : Option::ExternalPaths)
+      Loader.AddExternalPath(ExternalPath);
     if (!Loader.LoadEntry(filename))
       return 1;
     const auto &Modules = Loader.GetModules();
     const auto &Entry = Modules.front();
     std::vector<std::string> CArguments(Option::CArguments.begin(),
                                         Option::CArguments.end());
+    std::vector<std::string> LinkSources(Option::CSources.begin(),
+                                         Option::CSources.end());
+    LinkSources.insert(LinkSources.end(), Option::LinkInputs.begin(),
+                       Option::LinkInputs.end());
     if (Option::Progress)
       for (const auto &Header : Loader.GetCHeaders())
         std::cerr << "  [C header] " << Header << '\n';
@@ -232,9 +260,12 @@ int main(int argc, char **argv) {
       sema::Sema analysis;
       std::vector<sema::ModuleInput> Inputs;
       std::vector<const lex::Node *> Asts;
+      std::set<const lex::Node *> External;
       for (const auto &Module : Modules) {
         Inputs.push_back({Module.Parsed.root.get(), Module.IsEntry});
         Asts.push_back(Module.Parsed.root.get());
+        if (Module.IsExternal)
+          External.insert(Module.Parsed.root.get());
       }
       if (Option::Progress)
         std::cerr << "  [check] " << Modules.size() << " Kelyra module(s)\n";
@@ -252,6 +283,7 @@ int main(int argc, char **argv) {
         std::cerr << "  [codegen] Generating native code\n";
       codegen::IRGen generator(context, analysis, Option::SafeLevel,
                                Option::OptLevel == 0);
+      generator.SetExternalModules(External);
       auto module = generator.Generate(Asts);
       std::string CWrapperSource;
       for (const auto &Wrapper : analysis.GetCWrappers())
@@ -261,6 +293,8 @@ int main(int argc, char **argv) {
       if (Option::Progress && (Option::EmitObject || Option::EmitExecutable)) {
         for (const auto &Source : Option::CSources)
           std::cerr << "  [C source] " << Source << '\n';
+        for (const auto &Input : Option::LinkInputs)
+          std::cerr << "  [link input] " << Input << '\n';
         std::cerr << (Option::EmitExecutable ? "  [compile/link] "
                                              : "  [object] ")
                   << Option::OutputFile << '\n';
@@ -275,7 +309,7 @@ int main(int argc, char **argv) {
                                                Option::CArguments)
                          : codegen::EmitExecutable(
                                *module, Option::OutputFile, Option::OptLevel,
-                               Option::CSources, Option::CArguments,
+                               LinkSources, Option::CArguments,
                                CWrapperSource)) {
         errs() << filename << ": error: " << toString(std::move(Error)) << '\n';
         return 1;

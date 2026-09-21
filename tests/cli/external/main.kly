@@ -1,0 +1,10 @@
+import external.math;
+
+pub fn main() -> i32 {
+  let counter = external.math.Counter(40);
+  counter.add(2);
+  if counter.get() != 42 {
+    return 1;
+  }
+  return external.math.answer();
+}
