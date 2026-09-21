@@ -72,6 +72,7 @@ capabilities = receive(1)["capabilities"]
 assert capabilities["hoverProvider"]
 assert capabilities["signatureHelpProvider"]["triggerCharacters"] == ["(", ","]
 assert capabilities["documentSymbolProvider"]
+assert capabilities["referencesProvider"]
 
 source = """// Adds two numbers.
 fn add(a: i32, b: i32) -> i32 {
@@ -239,11 +240,15 @@ send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
     "textDocument": {"uri": app_uri, "languageId": "kelyra", "version": 1, "text": app_source}}})
 
 
-def app_position(needle):
-    for index, line in enumerate(app_source.split("\n")):
+def position_in(text, needle, offset=2):
+    for index, line in enumerate(text.split("\n")):
         if needle in line:
-            return {"line": index, "character": line.index(needle) + 2}
+            return {"line": index, "character": line.index(needle) + offset}
     raise AssertionError(needle)
+
+
+def app_position(needle, offset=2):
+    return position_in(app_source, needle, offset)
 
 
 send({"jsonrpc": "2.0", "id": 15, "method": "textDocument/definition", "params": {
@@ -256,6 +261,70 @@ send({"jsonrpc": "2.0", "id": 17, "method": "textDocument/hover", "params": {
     "textDocument": {"uri": app_uri}, "position": app_position("demo_helper")}})
 hover = receive(17)["contents"]["value"]
 assert "demo_helper" in hover and "local path dependency" in hover
+
+# An `import` navigates to the imported module's own file.
+send({"jsonrpc": "2.0", "id": 18, "method": "textDocument/definition", "params": {
+    "textDocument": {"uri": app_uri}, "position": app_position("import demo_api", 8)}})
+import_target = receive(18)[0]
+assert import_target["uri"] == (demo / "src/demo_api.kly").as_uri()
+assert import_target["range"]["start"] == {"line": 0, "character": 7}
+
+# C functions and types are declared in the headers `import c` pulls in.
+header = workspace / "app/src/bridge.h"
+header.write_text(
+    "#ifndef DEMO_BRIDGE_H\n#define DEMO_BRIDGE_H\n\n"
+    "int demo_c_add(int left, int right);\n"
+    "long demo_c_length(const char *text);\n\n"
+    "#endif\n"
+)
+c_source = """module app.c_api;
+
+import c "bridge.h";
+import c.*;
+
+fn call_c() -> i32 {
+  let first: c.int = demo_c_add(1, 2);
+  return first + c.demo_c_length("kelyra");
+}
+"""
+c_uri = (workspace / "app/src/c_api.kly").as_uri()
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": c_uri, "languageId": "kelyra", "version": 1, "text": c_source}}})
+send({"jsonrpc": "2.0", "id": 19, "method": "textDocument/definition", "params": {
+    "textDocument": {"uri": c_uri}, "position": position_in(c_source, "demo_c_add")}})
+c_definition = receive(19)[0]
+assert c_definition["uri"] == header.as_uri()
+assert c_definition["range"]["start"] == {"line": 3, "character": 4}
+send({"jsonrpc": "2.0", "id": 20, "method": "textDocument/definition", "params": {
+    "textDocument": {"uri": c_uri}, "position": position_in(c_source, "demo_c_length")}})
+assert receive(20)[0]["range"]["start"] == {"line": 4, "character": 5}
+send({"jsonrpc": "2.0", "id": 21, "method": "textDocument/definition", "params": {
+    "textDocument": {"uri": c_uri}, "position": position_in(c_source, '"bridge.h"', 4)}})
+assert receive(21)[0]["uri"] == header.as_uri()
+send({"jsonrpc": "2.0", "id": 22, "method": "textDocument/hover", "params": {
+    "textDocument": {"uri": c_uri}, "position": position_in(c_source, "demo_c_add")}})
+assert "int demo_c_add(int left, int right);" in receive(22)["contents"]["value"]
+
+# Find references: a function across its declaration and its call sites, a
+# local inside its scope, and a module across the imports that name it.
+send({"jsonrpc": "2.0", "id": 23, "method": "textDocument/references", "params": {
+    "textDocument": {"uri": app_uri}, "position": app_position("demo_helper"),
+    "context": {"includeDeclaration": True}}})
+references = receive(23)
+assert {reference["uri"] for reference in references} == {
+    (demo / "src/demo_api.kly").as_uri(), app_uri}
+assert len(references) == 2
+send({"jsonrpc": "2.0", "id": 24, "method": "textDocument/references", "params": {
+    "textDocument": {"uri": app_uri}, "position": app_position("demo_helper"),
+    "context": {"includeDeclaration": False}}})
+skip_declaration = receive(24)
+assert len(skip_declaration) == 1 and skip_declaration[0]["uri"] == app_uri
+send({"jsonrpc": "2.0", "id": 25, "method": "textDocument/references", "params": {
+    "textDocument": {"uri": app_uri}, "position": app_position("import demo_api", 8),
+    "context": {"includeDeclaration": True}}})
+imports = receive(25)
+assert len(imports) == 1 and imports[0]["uri"] == app_uri
+assert imports[0]["range"]["start"]["line"] == 2
 
 send({"jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": None})
 receive(6)

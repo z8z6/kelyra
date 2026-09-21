@@ -144,13 +144,24 @@ std::string TypeName(const lex::Node &Node) {
 }
 
 struct Document {
+  // One `import` declaration: the module it names and the span to jump to.
+  struct ImportRef {
+    std::string Module;
+    Span Extent;
+    bool Wildcard = false;
+  };
+
   std::string Path;
   URIForFile Uri;
   int64_t Version = 0;
   lex::ParseResult Parsed;
   std::string Module;
-  std::vector<std::string> Imports;
-  std::vector<std::string> WildcardImports;
+  Span ModuleSpan;
+  std::vector<ImportRef> ImportRefs;
+  // `import c "header.h"` and `import c.*`: the resolved header and the span
+  // of the string literal, so both C declarations and the header are reachable.
+  std::vector<std::pair<std::string, Span>> CHeaders;
+  bool CImportWildcard = false;
   std::vector<Symbol> Symbols;
 
   std::string_view Spelling(const lex::Token &Token) const {
@@ -365,21 +376,38 @@ struct Document {
   void Rebuild(std::string Source) {
     Parsed = lex::Lexer().parse(std::move(Source), Path);
     Module.clear();
-    Imports.clear();
-    WildcardImports.clear();
+    ModuleSpan = {};
+    ImportRefs.clear();
+    CHeaders.clear();
+    CImportWildcard = false;
     Symbols.clear();
     if (!Parsed.root)
       return;
     using K = lex::TokenKind;
     for (const auto &Node : Parsed.root->children) {
-      if (Node->kind == K::ast_module_decl)
+      if (Node->kind == K::ast_module_decl) {
         Module = Node->text;
-      else if (Node->kind == K::ast_import && Node->text != "c") {
-        if (Node->text.ends_with(".*"))
-          WildcardImports.push_back(
-              Node->text.substr(0, Node->text.size() - 2));
-        else
-          Imports.push_back(Node->text);
+        ModuleSpan = {Node->Loc.Offset, Node->text.size()};
+      } else if (Node->kind == K::ast_import) {
+        if (Node->text == "c") {
+          if (Node->children.empty())
+            continue;
+          const auto &Header = *Node->children.front();
+          CHeaders.emplace_back(
+              (std::filesystem::path(Path).parent_path() / Header.text)
+                  .lexically_normal()
+                  .string(),
+              Span{Header.Loc.Offset + 1, Header.Loc.Len - 2});
+        } else if (Node->text == "c.*") {
+          CImportWildcard = true;
+        } else if (Node->text.ends_with(".*")) {
+          ImportRefs.push_back({Node->text.substr(0, Node->text.size() - 2),
+                                {Node->Loc.Offset, Node->Loc.Len},
+                                true});
+        } else {
+          ImportRefs.push_back(
+              {Node->text, {Node->Loc.Offset, Node->Loc.Len}, false});
+        }
       }
     }
 
@@ -728,13 +756,20 @@ class Server {
     return {};
   }
 
+  // Member access dereferences a pointer receiver implicitly.
+  static std::string Dereference(std::string Type) {
+    while (!Type.empty() && Type.front() == '*')
+      Type.erase(Type.begin());
+    return Type;
+  }
+
   std::string ReceiverType(const Document &Doc, std::string_view Qualifier,
                            std::size_t Offset) const {
     const auto Dot = Qualifier.find('.');
     const auto *Root = Doc.FindVisible(Qualifier.substr(0, Dot), Offset);
     if (!Root)
       return {};
-    std::string Type = Root->Type;
+    std::string Type = Dereference(Root->Type);
     std::size_t Start = Dot;
     while (Start != std::string_view::npos) {
       ++Start;
@@ -743,7 +778,7 @@ class Server {
           FindMember(Doc, Type, Qualifier.substr(Start, End - Start));
       if (!Member)
         return {};
-      Type = Member->Type;
+      Type = Dereference(Member->Type);
       if (Type.find('.') == std::string::npos && !Owner->Module.empty())
         Type = Owner->Module + "." + Type;
       Start = End;
@@ -791,10 +826,10 @@ class Server {
         // A name from an imported module beats any other public symbol now
         // that dependency sources are indexed too.
         if (Qualifier.empty() && !Imported &&
-            (std::find(Doc.Imports.begin(), Doc.Imports.end(),
-                       Candidate.Module) != Doc.Imports.end() ||
-             std::find(Doc.WildcardImports.begin(), Doc.WildcardImports.end(),
-                       Candidate.Module) != Doc.WildcardImports.end())) {
+            std::any_of(Doc.ImportRefs.begin(), Doc.ImportRefs.end(),
+                        [&](const Document::ImportRef &Ref) {
+                          return Ref.Module == Candidate.Module;
+                        })) {
           ImportedDoc = &CandidateDoc;
           Imported = &Candidate;
         }
@@ -807,6 +842,321 @@ class Server {
     if (Imported)
       return {ImportedDoc, Imported};
     return {FallbackDoc, Fallback};
+  }
+
+  // True when `Name` names a declaration of this document or of a module it
+  // imports, which is what a C interop declaration must not shadow.
+  bool HasImportedSymbol(const Document &Doc, std::string_view Name) const {
+    for (const auto &Candidate : Doc.Symbols)
+      if (Candidate.Name == Name && Candidate.Owner.empty())
+        return true;
+    for (const auto &[Path, Other] : Documents) {
+      if (&Other == &Doc ||
+          !std::any_of(Doc.ImportRefs.begin(), Doc.ImportRefs.end(),
+                       [&](const Document::ImportRef &Ref) {
+                         return Ref.Module == Other.Module;
+                       }))
+        continue;
+      for (const auto &Candidate : Other.Symbols)
+        if (Candidate.Name == Name && Candidate.Owner.empty() &&
+            Candidate.Public)
+          return true;
+    }
+    return false;
+  }
+
+  // The module named by `module X;` or `import X;` at this offset.
+  std::string ModuleAt(const Document &Doc, std::size_t Offset) const {
+    using K = lex::TokenKind;
+    for (const auto &Node : Doc.Parsed.root->children) {
+      if (Node->kind != K::ast_module_decl && Node->kind != K::ast_import)
+        continue;
+      if (Offset < Node->Loc.Offset || Offset > Node->Loc.End())
+        continue;
+      if (Node->text == "c" || Node->text == "c.*")
+        return {};
+      return Node->text.ends_with(".*")
+                 ? Node->text.substr(0, Node->text.size() - 2)
+                 : Node->text;
+    }
+    return {};
+  }
+
+  const Document *FindModule(std::string_view Name) const {
+    for (const auto &[Path, Candidate] : Documents)
+      if (!Name.empty() && Candidate.Module == Name)
+        return &Candidate;
+    return nullptr;
+  }
+
+  // The `import c "header.h"` string literal at this offset.
+  std::optional<std::string> CHeaderAt(const Document &Doc,
+                                       std::size_t Offset) const {
+    for (const auto &[Path, Span] : Doc.CHeaders)
+      if (Offset >= Span.Offset && Offset <= Span.Offset + Span.Length)
+        return Path;
+    return std::nullopt;
+  }
+
+  // The column of `Name` in `Line` when it appears as a whole word.
+  static std::optional<std::size_t> WordColumn(std::string_view Line,
+                                               std::string_view Name) {
+    const auto IsWord = [](char Character) {
+      return std::isalnum(static_cast<unsigned char>(Character)) ||
+             Character == '_';
+    };
+    for (auto Position = Line.find(Name); Position != std::string_view::npos;
+         Position = Line.find(Name, Position + 1)) {
+      const bool Start = Position == 0 || !IsWord(Line[Position - 1]);
+      const auto End = Position + Name.size();
+      const bool Stop = End >= Line.size() || !IsWord(Line[End]);
+      if (Start && Stop)
+        return Position;
+    }
+    return std::nullopt;
+  }
+
+  // A C declaration found by scanning an `import c` header.
+  struct CDeclaration {
+    std::string Header;
+    Position Start;
+    Position End;
+    std::string Line;
+  };
+
+  // C declarations live in the headers `import c` pulls in, so search them
+  // textually, following nested includes a few levels deep.
+  std::optional<CDeclaration> SearchHeader(const std::string &Header,
+                                           std::string_view Name, int Depth,
+                                           std::set<std::string> &Seen) const {
+    if (Depth > 3 || !Seen.insert(Header).second)
+      return std::nullopt;
+    std::ifstream Input(Header, std::ios::binary);
+    if (!Input)
+      return std::nullopt;
+    const std::string Text((std::istreambuf_iterator<char>(Input)), {});
+    std::vector<std::pair<std::string, bool>> Includes;
+    std::optional<std::size_t> Preprocessor;
+    std::size_t Start = 0;
+    while (Start <= Text.size()) {
+      auto End = Text.find('\n', Start);
+      if (End == std::string::npos)
+        End = Text.size();
+      const std::string_view Line(Text.data() + Start, End - Start);
+      if (const auto Column = WordColumn(Line, Name)) {
+        const auto First = Line.find_first_not_of(" \t");
+        if (First != std::string_view::npos && Line[First] == '#') {
+          // A `#define` may declare the name, but a real declaration wins.
+          if (!Preprocessor)
+            Preprocessor = Start + *Column;
+        } else {
+          const auto Target = Start + *Column;
+          auto Trimmed = Line;
+          const auto Left = Trimmed.find_first_not_of(" \t");
+          const auto Right = Trimmed.find_last_not_of(" \t\r");
+          if (Left != std::string_view::npos && Right != std::string_view::npos)
+            Trimmed = Trimmed.substr(Left, Right - Left + 1);
+          return CDeclaration{Header, PositionAt(Text, Target),
+                              PositionAt(Text, Target + Name.size()),
+                              std::string(Trimmed)};
+        }
+      }
+      const auto Include = Line.find("#include");
+      if (Include != std::string_view::npos) {
+        const auto Open = Line.find_first_of("\"<", Include + 8);
+        if (Open != std::string_view::npos) {
+          const char Close = Line[Open] == '"' ? '"' : '>';
+          const auto Closing = Line.find(Close, Open + 1);
+          if (Closing != std::string_view::npos)
+            Includes.emplace_back(
+                std::string(Line.substr(Open + 1, Closing - Open - 1)),
+                Line[Open] == '"');
+        }
+      }
+      if (End == Text.size())
+        break;
+      Start = End + 1;
+    }
+    const auto Directory = std::filesystem::path(Header).parent_path();
+    static const char *SystemPaths[] = {
+        "/usr/local/include", "/usr/include/x86_64-linux-gnu", "/usr/include"};
+    std::error_code Error;
+    for (const auto &[Include, Quoted] : Includes) {
+      std::vector<std::filesystem::path> Candidates{Directory / Include};
+      if (!Quoted)
+        for (const char *SystemPath : SystemPaths)
+          Candidates.emplace_back(std::filesystem::path(SystemPath) / Include);
+      for (const auto &Candidate : Candidates) {
+        if (!std::filesystem::exists(Candidate, Error)) {
+          Error.clear();
+          continue;
+        }
+        if (auto Found =
+                SearchHeader(Candidate.string(), Name, Depth + 1, Seen))
+          return Found;
+      }
+    }
+    if (Preprocessor) {
+      const auto Target = *Preprocessor;
+      return CDeclaration{Header,
+                          PositionAt(Text, Target),
+                          PositionAt(Text, Target + Name.size()),
+                          {}};
+    }
+    return std::nullopt;
+  }
+
+  std::optional<CDeclaration> FindCDeclaration(const Document &Doc,
+                                               std::string_view Name) const {
+    std::set<std::string> Seen;
+    for (const auto &[Header, Span] : Doc.CHeaders)
+      if (auto Found = SearchHeader(Header, Name, 0, Seen))
+        return Found;
+    return std::nullopt;
+  }
+
+  static std::optional<Location> LocationOf(const CDeclaration &Declaration) {
+    auto Uri = URIForFile::fromFile(Declaration.Header);
+    if (!Uri) {
+      consumeError(Uri.takeError());
+      return std::nullopt;
+    }
+    return Location{*Uri, Range{Declaration.Start, Declaration.End}};
+  }
+
+  // Everywhere a target is defined: a Kelyra symbol, a module, or a C
+  // declaration from an `import c` header.
+  std::optional<Location>
+  ResolveLocation(const TextDocumentPositionParams &Params) const {
+    const auto It = Documents.find(Params.textDocument.uri.file().str());
+    if (It == Documents.end())
+      return std::nullopt;
+    const auto &Doc = It->second;
+    const auto Offset = OffsetAt(Doc.Parsed.source, Params.position);
+    if (const auto Module = ModuleAt(Doc, Offset); !Module.empty())
+      if (const auto *Target = FindModule(Module))
+        return Location{Target->Uri, Target->ToRange(Target->ModuleSpan)};
+    if (const auto Header = CHeaderAt(Doc, Offset))
+      if (auto Uri = URIForFile::fromFile(*Header)) {
+        const auto Start = PositionAt(Doc.Parsed.source, Offset);
+        return Location{*Uri, Range{Start, Start}};
+      } else {
+        consumeError(Uri.takeError());
+      }
+    const auto [TargetDoc, Symbol] =
+        Resolve(Params.textDocument.uri, Params.position);
+    if (Symbol && (Symbol->Kind == SymbolType::Variable ||
+                   Symbol->Kind == SymbolType::Parameter || TargetDoc == &Doc ||
+                   HasImportedSymbol(Doc, Symbol->Name)))
+      return Location{TargetDoc->Uri, TargetDoc->ToRange(Symbol->Definition)};
+    std::size_t TokenIndex = 0;
+    if (const auto *Token = TokenAt(Doc, Offset, &TokenIndex)) {
+      const auto [Qualifier, Name] = QualifiedName(Doc, TokenIndex);
+      // `c.printf(...)` and unprefixed names after `import c.*` come from the
+      // C headers, so look there before giving up on the name.
+      if ((Qualifier == "c" || (Qualifier.empty() && Doc.CImportWildcard)) &&
+          !(Qualifier.empty() && Doc.FindVisible(Name, Offset)))
+        if (auto Found = FindCDeclaration(Doc, Name))
+          if (auto Location = LocationOf(*Found))
+            return Location;
+    }
+    if (Symbol)
+      return Location{TargetDoc->Uri, TargetDoc->ToRange(Symbol->Definition)};
+    return std::nullopt;
+  }
+
+  // True when `Other` imports `Module`, which is what makes an unqualified
+  // reference to it legal in that document.
+  static bool Imports(const Document &Other, std::string_view Module) {
+    return std::any_of(
+        Other.ImportRefs.begin(), Other.ImportRefs.end(),
+        [&](const Document::ImportRef &Ref) { return Ref.Module == Module; });
+  }
+
+  std::vector<Location> ReferencesAt(const ReferenceParams &Params) const {
+    const auto It = Documents.find(Params.textDocument.uri.file().str());
+    if (It == Documents.end())
+      return {};
+    const auto &Doc = It->second;
+    const auto Offset = OffsetAt(Doc.Parsed.source, Params.position);
+    std::vector<Location> Result;
+    // A module is referenced by every import that names it.
+    if (const auto Module = ModuleAt(Doc, Offset); !Module.empty()) {
+      for (const auto &[Path, Other] : Documents)
+        for (const auto &Ref : Other.ImportRefs)
+          if (Ref.Module == Module)
+            Result.push_back({Other.Uri, Other.ToRange(Ref.Extent)});
+      return Result;
+    }
+    const auto [TargetDoc, Symbol] =
+        Resolve(Params.textDocument.uri, Params.position);
+    if (!Symbol)
+      return {};
+    for (const auto &[Path, Other] : Documents) {
+      for (std::size_t Index = 0; Index < Other.Parsed.tokens.size(); ++Index) {
+        const auto &Token = Other.Parsed.tokens[Index];
+        if (Token.kind != lex::TokenKind::name ||
+            Other.Spelling(Token) != Symbol->Name)
+          continue;
+        const bool Declaration = &Other == TargetDoc &&
+                                 Token.Loc.Offset == Symbol->Definition.Offset;
+        if (Declaration && !Params.context.includeDeclaration)
+          continue;
+        if (Symbol->Kind == SymbolType::Variable ||
+            Symbol->Kind == SymbolType::Parameter) {
+          // Locals only exist inside their own scope of their own document.
+          if (&Other != TargetDoc || Token.Loc.Offset < Symbol->Scope.Offset ||
+              Token.Loc.Offset > Symbol->Scope.Offset + Symbol->Scope.Length)
+            continue;
+        } else {
+          const auto [Qualifier, Name] = QualifiedName(Other, Index);
+          if (!Qualifier.empty()) {
+            if (Symbol->Owner.empty()) {
+              if (Qualifier != Symbol->Module)
+                continue;
+            } else if (Qualifier == "this") {
+              // `this.field` belongs to the class declared in this document.
+              if (&Other != TargetDoc)
+                continue;
+            } else {
+              const auto Type =
+                  ReceiverType(Other, Qualifier, Token.Loc.Offset);
+              const auto Expected =
+                  Symbol->Owner.find('.') == std::string::npos
+                      ? TargetDoc->Module + "." + Symbol->Owner
+                      : Symbol->Owner;
+              // A receiver keeps its bare type name inside the owning file.
+              if (Type != Expected &&
+                  !(&Other == TargetDoc && Type == Symbol->Owner))
+                continue;
+            }
+          } else {
+            if (&Other != TargetDoc && !Imports(Other, Symbol->Module))
+              continue;
+            // A local of the same name shadows the symbol at this offset.
+            if (const auto *Local = Other.FindVisible(Name, Token.Loc.Offset);
+                Local && Local != Symbol &&
+                (Local->Kind == SymbolType::Variable ||
+                 Local->Kind == SymbolType::Parameter))
+              continue;
+            // A parameter that shadows the symbol is declared right here.
+            const bool DeclaresOther = std::any_of(
+                Other.Symbols.begin(), Other.Symbols.end(),
+                [&](const auto &Candidate) {
+                  return &Candidate != Symbol && Candidate.Name == Name &&
+                         Candidate.Definition.Offset == Token.Loc.Offset &&
+                         (Candidate.Kind == SymbolType::Variable ||
+                          Candidate.Kind == SymbolType::Parameter);
+                });
+            if (DeclaresOther)
+              continue;
+          }
+        }
+        Result.push_back(
+            {Other.Uri, Other.ToRange({Token.Loc.Offset, Token.Loc.Len})});
+      }
+    }
+    return Result;
   }
 
 public:
@@ -868,6 +1218,41 @@ public:
   }
 
   std::optional<Hover> HoverAt(const TextDocumentPositionParams &Params) const {
+    const auto It = Documents.find(Params.textDocument.uri.file().str());
+    if (It != Documents.end()) {
+      const auto &Doc = It->second;
+      const auto Offset = OffsetAt(Doc.Parsed.source, Params.position);
+      // Module paths and C headers are not symbols, so describe them directly.
+      if (const auto Module = ModuleAt(Doc, Offset); !Module.empty())
+        if (const auto *Target = FindModule(Module)) {
+          Hover Result(Doc.ToRange({Offset, 1}));
+          Result.contents.value =
+              "```kelyra\nmodule " + Module + "\n```\n\n" + Target->Path;
+          return Result;
+        }
+      if (const auto Header = CHeaderAt(Doc, Offset)) {
+        Hover Result(Doc.ToRange({Offset, 1}));
+        Result.contents.value = "C header `" + *Header + "`";
+        return Result;
+      }
+      std::size_t TokenIndex = 0;
+      if (const auto *Token = TokenAt(Doc, Offset, &TokenIndex)) {
+        const auto [Qualifier, Name] = QualifiedName(Doc, TokenIndex);
+        if ((Qualifier == "c" || (Qualifier.empty() && Doc.CImportWildcard)) &&
+            !(Qualifier.empty() && Doc.FindVisible(Name, Offset))) {
+          if (auto Found = FindCDeclaration(Doc, Name)) {
+            Hover Result(Doc.ToRange({Offset, 1}));
+            Result.contents.value =
+                Found->Line.empty()
+                    ? "```c\n#define " + Name + "\n```\n\nDeclared in `" +
+                          Found->Header + "`"
+                    : "```c\n" + Found->Line + "\n```\n\nDeclared in `" +
+                          Found->Header + "`";
+            return Result;
+          }
+        }
+      }
+    }
     const auto [Doc, Found] = Resolve(Params.textDocument.uri, Params.position);
     if (!Doc || !Found)
       return std::nullopt;
@@ -880,10 +1265,13 @@ public:
 
   std::vector<Location>
   DefinitionAt(const TextDocumentPositionParams &Params) const {
-    const auto [Doc, Found] = Resolve(Params.textDocument.uri, Params.position);
-    if (!Doc || !Found)
-      return {};
-    return {{Doc->Uri, Doc->ToRange(Found->Definition)}};
+    if (auto Found = ResolveLocation(Params))
+      return {*Found};
+    return {};
+  }
+
+  std::vector<Location> References(const ReferenceParams &Params) const {
+    return ReferencesAt(Params);
   }
 
   std::optional<SignatureHelp>
@@ -1159,6 +1547,7 @@ public:
         },
         {"hoverProvider", true},
         {"definitionProvider", true},
+        {"referencesProvider", true},
         {"documentSymbolProvider", true},
         {"signatureHelpProvider",
          json::Object{{"triggerCharacters", json::Array{"(", ","}}}},
@@ -1200,6 +1589,11 @@ public:
                          Callback<std::vector<Location>> Reply) {
     Reply(Language.DefinitionAt(Params));
   }
+
+  void ReferencesRequest(const ReferenceParams &Params,
+                         Callback<std::vector<Location>> Reply) {
+    Reply(Language.References(Params));
+  }
   void SignatureHelpRequest(const TextDocumentPositionParams &Params,
                             Callback<std::optional<SignatureHelp>> Reply) {
     Reply(Language.SignatureAt(Params));
@@ -1234,6 +1628,8 @@ int main(int Argc, char **Argv) {
   Handler.method("textDocument/hover", &Server, &LSPServer::HoverRequest);
   Handler.method("textDocument/definition", &Server,
                  &LSPServer::DefinitionRequest);
+  Handler.method("textDocument/references", &Server,
+                 &LSPServer::ReferencesRequest);
   Handler.method("textDocument/signatureHelp", &Server,
                  &LSPServer::SignatureHelpRequest);
   Handler.method("textDocument/documentSymbol", &Server,
