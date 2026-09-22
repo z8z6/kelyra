@@ -19,18 +19,18 @@ public:
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<std::string> OutputFile{
       "o", llvm::cl::desc("Output file"), llvm::cl::Optional,
-    llvm::cl::init("output"),
-      llvm::cl::cat(KelyraCategory)};
+      llvm::cl::init("output"), llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<llvm::CodeGenOptLevel> OptLevel{
       "O",
       llvm::cl::Prefix,
       llvm::cl::desc("Optimization level (0-3)"),
       llvm::cl::values(
-          clEnumVal(llvm::CodeGenOptLevel::None, "No optimization"),
-          clEnumVal(llvm::CodeGenOptLevel::Less, "Basic optimization"),
-          clEnumVal(llvm::CodeGenOptLevel::Default, "Moderate optimization"),
-          clEnumVal(llvm::CodeGenOptLevel::Aggressive,
-                    "Aggressive optimization")),
+          clEnumValN(llvm::CodeGenOptLevel::None, "0", "No optimization"),
+          clEnumValN(llvm::CodeGenOptLevel::Less, "1", "Basic optimization"),
+          clEnumValN(llvm::CodeGenOptLevel::Default, "2",
+                     "Moderate optimization"),
+          clEnumValN(llvm::CodeGenOptLevel::Aggressive, "3",
+                     "Aggressive optimization")),
       llvm::cl::init(llvm::CodeGenOptLevel::None),
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<unsigned> SafeLevel{
@@ -69,15 +69,12 @@ public:
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> EmitMlir{
       "emit-mlir", llvm::cl::desc("Generate and print MLIR"),
-    llvm::cl::init(false),
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> EmitObject{
       "emit-obj", llvm::cl::desc("Generate a native object file"),
-    llvm::cl::init(false),
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> EmitExecutable{
       "emit-exe", llvm::cl::desc("Generate a native executable"),
-    llvm::cl::init(true),
       llvm::cl::cat(KelyraCategory)};
 };
 } // namespace kelyra

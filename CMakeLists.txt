@@ -39,7 +39,7 @@ add_subdirectory(src/Sema)
 add_subdirectory(src/CImport)
 add_subdirectory(src/CodeGen)
 
-add_executable(kelyra src/main.cpp)
+add_executable(kelyra src/main.cpp src/Driver/ModuleLoader.cpp)
 target_link_libraries(kelyra PRIVATE
   kelyra_codegen
   kelyra_cimport

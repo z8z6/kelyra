@@ -378,5 +378,5 @@ TEST(CLI, RejectInvalidArguments) { run({"--unknown"}, 2, "", "usage:"); }
 
 TEST(CLI, RejectInvalidOptimizationLevel) {
   run({"-O4", "--check", KELYRA_SOURCE_DIR "/examples/basic.kly"}, 2, "",
-      "optimization level must be between 0 and 3");
+      "Cannot find option named '4'");
 }

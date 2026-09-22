@@ -1,12 +1,13 @@
-//
-// Created by zzm on 2026/9/22
-// Part of RVision
-//
-
 #pragma once
+
+#include "Lexer/Lexer.h"
 
 #include <deque>
 #include <filesystem>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace kelyra {
 struct SourceModule {
@@ -26,29 +27,22 @@ class ModuleLoader {
   std::deque<SourceModule> Modules;
   std::unordered_map<std::string, State> States;
   std::vector<std::string> CHeaders;
+  bool Progress;
 
   bool IsUnderExternalPath(const std::filesystem::path &Path) const;
-
-  std::optional<std::filesystem::path> FindModule(const std::string &Name) const;
-
-  bool Load(const std::filesystem::path &Path, std::string Expected, bool IsEntry);
+  std::optional<std::filesystem::path>
+  FindModule(const std::string &Name) const;
+  bool Load(const std::filesystem::path &Path, std::string Expected,
+            bool IsEntry);
 
 public:
-  void AddModulePath(const std::string &Path) {
-    ModulePaths.push_back(std::filesystem::absolute(Path).lexically_normal());
-  }
+  explicit ModuleLoader(bool Progress = false) : Progress(Progress) {}
 
-  void AddExternalPath(const std::string &Path) {
-    ExternalPaths.push_back(std::filesystem::absolute(Path).lexically_normal());
-  }
-
-  bool LoadEntry(const std::string &Path) {
-    const auto Entry = std::filesystem::absolute(Path).lexically_normal();
-    Root = Entry.parent_path();
-    return Load(Entry, {}, true);
-  }
+  void AddModulePath(const std::string &Path);
+  void AddExternalPath(const std::string &Path);
+  bool LoadEntry(const std::string &Path);
 
   const std::deque<SourceModule> &GetModules() const { return Modules; }
   const std::vector<std::string> &GetCHeaders() const { return CHeaders; }
 };
-}
+} // namespace kelyra

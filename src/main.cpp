@@ -1,5 +1,6 @@
 #include "CImport/CImporter.h"
 #include "CodeGen/IRGen.h"
+#include "Driver/ModuleLoader.h"
 #include "Lexer/Lexer.h"
 #include "Sema/Sema.h"
 #include "Support/Option.h"
@@ -8,11 +9,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
-#include "IR/Module.h"
-
-#include <algorithm>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <set>
 #include <string>
@@ -25,12 +21,11 @@ using namespace kelyra;
 int main(int argc, char **argv) {
   cl::HideUnrelatedOptions(Option::KelyraCategory);
   if (!cl::ParseCommandLineOptions(argc, argv, "Kelyra compiler\n", &errs())) {
-    cl::PrintHelpMessage(true, true);
+    errs() << "usage: kelyra [options] <file>\n";
     return 2;
   }
-
   const std::string &filename = Option::InputFile.getValue();
-  ModuleLoader Loader;
+  ModuleLoader Loader(Option::Progress);
   for (const auto &ModulePath : Option::ModulePaths)
     Loader.AddModulePath(ModulePath);
   for (const auto &ExternalPath : Option::ExternalPaths)
@@ -39,17 +34,14 @@ int main(int argc, char **argv) {
     return 1;
   const auto &Modules = Loader.GetModules();
   const auto &Entry = Modules.front();
-  std::vector CArguments(Option::CArguments.begin(),
-                                      Option::CArguments.end());
-  std::vector LinkSources(Option::CSources.begin(),
-                                       Option::CSources.end());
+  std::vector CArguments(Option::CArguments.begin(), Option::CArguments.end());
+  std::vector LinkSources(Option::CSources.begin(), Option::CSources.end());
   LinkSources.insert(LinkSources.end(), Option::LinkInputs.begin(),
                      Option::LinkInputs.end());
   if (Option::Progress)
     for (const auto &Header : Loader.GetCHeaders())
       std::cerr << "  [C header] " << Header << '\n';
-  auto CDeclarations =
-      cimport::ImportHeaders(Loader.GetCHeaders(), CArguments);
+  auto CDeclarations = cimport::ImportHeaders(Loader.GetCHeaders(), CArguments);
   if (!CDeclarations.Ok()) {
     for (const auto &Diagnostic : CDeclarations.Diagnostics)
       std::cerr << filename << ": error: " << Diagnostic << '\n';
@@ -110,13 +102,10 @@ int main(int argc, char **argv) {
                                              Option::CArguments)
                        : codegen::EmitExecutable(
                              *module, Option::OutputFile, Option::OptLevel,
-                             LinkSources, Option::CArguments,
-                             CWrapperSource)) {
+                             LinkSources, Option::CArguments, CWrapperSource)) {
       errs() << filename << ": error: " << toString(std::move(Error)) << '\n';
       return 1;
     }
   }
-
-
   return 0;
 }
