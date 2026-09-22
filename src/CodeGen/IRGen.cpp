@@ -68,13 +68,13 @@ bool HasTerminator(mlir::Block *Block) {
          Block->back().hasTrait<mlir::OpTrait::IsTerminator>();
 }
 
-llvm::OptimizationLevel GetOptimizationLevel(unsigned Level) {
+llvm::OptimizationLevel GetOptimizationLevel(llvm::CodeGenOptLevel Level) {
   switch (Level) {
-  case 1:
+  case llvm::CodeGenOptLevel::Less:
     return llvm::OptimizationLevel::O1;
-  case 2:
+  case llvm::CodeGenOptLevel::Default:
     return llvm::OptimizationLevel::O2;
-  case 3:
+  case llvm::CodeGenOptLevel::Aggressive:
     return llvm::OptimizationLevel::O3;
   default:
     return llvm::OptimizationLevel::O0;
@@ -459,7 +459,7 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
 }
 
 llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
-                                llvm::StringRef OutputPath, unsigned OptLevel,
+                                llvm::StringRef OutputPath, llvm::CodeGenOptLevel OptLevel,
                                 llvm::StringRef CWrapperSource,
                                 llvm::ArrayRef<std::string> CArguments) {
   mlir::PassManager Passes(Module.getContext());
@@ -467,7 +467,7 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
   Passes.addPass(mlir::createArithToLLVMConversionPass());
   Passes.addPass(mlir::createConvertControlFlowToLLVMPass());
   Passes.addPass(mlir::createReconcileUnrealizedCastsPass());
-  if (OptLevel == 0) {
+  if (OptLevel == llvm::CodeGenOptLevel::None) {
     mlir::LLVM::DIScopeForLLVMFuncOpPassOptions DebugOptions;
     DebugOptions.emissionKind = mlir::LLVM::DIEmissionKind::Full;
     Passes.addPass(mlir::LLVM::createDIScopeForLLVMFuncOpPass(DebugOptions));
@@ -506,7 +506,7 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
     return llvm::createStringError(TargetError);
 
   llvm::TargetOptions Options;
-  const auto CodeGenLevel = *llvm::CodeGenOpt::getLevel(OptLevel);
+  const auto CodeGenLevel = OptLevel;
   std::unique_ptr<llvm::TargetMachine> TargetMachine(
       Target->createTargetMachine(Triple, llvm::sys::getHostCPUName(), "",
                                   Options, llvm::Reloc::PIC_, std::nullopt,
@@ -516,8 +516,7 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
   LLVMModule->setDataLayout(TargetMachine->createDataLayout());
   LLVMModule->setTargetTriple(Triple);
   const auto OptimizationLevel = GetOptimizationLevel(OptLevel);
-  if (OptimizationLevel != llvm::OptimizationLevel::O0)
-    Optimize(*LLVMModule, *TargetMachine, OptimizationLevel);
+  Optimize(*LLVMModule, *TargetMachine, OptimizationLevel);
 
   llvm::SmallString<128> NativeObject;
   llvm::StringRef NativeOutput = OutputPath;
@@ -593,7 +592,7 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
 
 llvm::Error codegen::EmitExecutable(mlir::ModuleOp Module,
                                     llvm::StringRef OutputPath,
-                                    unsigned OptLevel,
+                                    llvm::CodeGenOptLevel OptLevel,
                                     llvm::ArrayRef<std::string> CSources,
                                     llvm::ArrayRef<std::string> CArguments,
                                     llvm::StringRef CWrapperSource) {

@@ -10,6 +10,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
+#include <llvm/Support/CodeGen.h>
 
 #include <set>
 #include <string>
@@ -111,11 +112,11 @@ public:
 };
 
 llvm::Error EmitObject(mlir::ModuleOp Module, llvm::StringRef OutputPath,
-                       unsigned OptLevel = 0,
+                       llvm::CodeGenOptLevel OptLevel = llvm::CodeGenOptLevel::None,
                        llvm::StringRef CWrapperSource = {},
                        llvm::ArrayRef<std::string> CArguments = {});
 llvm::Error EmitExecutable(mlir::ModuleOp Module, llvm::StringRef OutputPath,
-                           unsigned OptLevel = 0,
+                           llvm::CodeGenOptLevel OptLevel = llvm::CodeGenOptLevel::None,
                            llvm::ArrayRef<std::string> CSources = {},
                            llvm::ArrayRef<std::string> CArguments = {},
                            llvm::StringRef CWrapperSource = {});

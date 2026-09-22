@@ -5,8 +5,8 @@
 
 #pragma once
 
+#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/CommandLine.h>
-
 #include <string>
 
 namespace kelyra {
@@ -15,14 +15,24 @@ public:
   inline static llvm::cl::OptionCategory KelyraCategory{
       "Kelyra compiler options"};
   inline static llvm::cl::opt<std::string> InputFile{
-      llvm::cl::Positional, llvm::cl::desc("Input file"), llvm::cl::Optional,
+      llvm::cl::Positional, llvm::cl::desc("Input file"), llvm::cl::Required,
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<std::string> OutputFile{
       "o", llvm::cl::desc("Output file"), llvm::cl::Optional,
+    llvm::cl::init("output"),
       llvm::cl::cat(KelyraCategory)};
-  inline static llvm::cl::opt<unsigned> OptLevel{
-      "O", llvm::cl::Prefix, llvm::cl::desc("Optimization level (0-3)"),
-      llvm::cl::init(0), llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<llvm::CodeGenOptLevel> OptLevel{
+      "O",
+      llvm::cl::Prefix,
+      llvm::cl::desc("Optimization level (0-3)"),
+      llvm::cl::values(
+          clEnumVal(llvm::CodeGenOptLevel::None, "No optimization"),
+          clEnumVal(llvm::CodeGenOptLevel::Less, "Basic optimization"),
+          clEnumVal(llvm::CodeGenOptLevel::Default, "Moderate optimization"),
+          clEnumVal(llvm::CodeGenOptLevel::Aggressive,
+                    "Aggressive optimization")),
+      llvm::cl::init(llvm::CodeGenOptLevel::None),
+      llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<unsigned> SafeLevel{
       "safe-level", llvm::cl::desc("Safety level (0 disables checks)"),
       llvm::cl::init(0), llvm::cl::cat(KelyraCategory)};
@@ -59,12 +69,15 @@ public:
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> EmitMlir{
       "emit-mlir", llvm::cl::desc("Generate and print MLIR"),
+    llvm::cl::init(false),
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> EmitObject{
       "emit-obj", llvm::cl::desc("Generate a native object file"),
+    llvm::cl::init(false),
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> EmitExecutable{
       "emit-exe", llvm::cl::desc("Generate a native executable"),
+    llvm::cl::init(true),
       llvm::cl::cat(KelyraCategory)};
 };
 } // namespace kelyra
