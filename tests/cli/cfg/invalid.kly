@@ -1,0 +1,5 @@
+@cfg(os=linux)
+@main
+fn main() -> i32 {
+  return 0;
+}

@@ -1,0 +1,4 @@
+module transitive.indirect_type;
+import transitive.middle;
+
+pub fn value(item: *transitive.leaf.Leaf) -> i32 { return 0; }

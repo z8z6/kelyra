@@ -16,6 +16,7 @@ class Holder {
   marker: Marker;
 }
 
+@main
 fn main() -> i32 {
   let empty = Empty();
   let point = Point();

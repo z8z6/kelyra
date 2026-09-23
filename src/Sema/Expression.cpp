@@ -51,6 +51,7 @@ sema::Sema::CheckExpression(const lex::Node &Expression,
       {K::ast_call, &Sema::CheckCallExpression},
       {K::ast_unary, &Sema::CheckUnaryExpression},
       {K::ast_binary, &Sema::CheckBinaryExpression},
+      {K::ast_cast, &Sema::CheckCastExpression},
       {K::ast_meta, &Sema::CheckMetaExpression},
   };
   const auto It = Handlers.find(Expression.kind);
@@ -89,7 +90,12 @@ sema::Sema::CheckNameExpression(const lex::Node &Expression,
   const auto *Result = FindName(Expression.text);
   if (!Result && !CurrentClass.empty()) {
     const auto *Class = GetClass(CurrentClass);
-    if (Class)
+    if (Class) {
+      for (const auto &Constant : Class->Constants)
+        if (Constant.Name == Expression.text) {
+          ConstantReferences[&Expression] = Constant.Value;
+          return FinishExpression(Expression, Constant.ValueType, Expected);
+        }
       for (std::size_t I = 0; I < Class->Fields.size(); ++I)
         if (Class->Fields[I].Name == Expression.text) {
           if (CurrentConstructor && I >= InitializedFields &&
@@ -100,6 +106,7 @@ sema::Sema::CheckNameExpression(const lex::Node &Expression,
           FieldReferences[&Expression] = {CurrentClass, I};
           return FinishExpression(Expression, Class->Fields[I].Value, Expected);
         }
+    }
   }
   if (!Result) {
     return CheckFunctionValue(Expression, Expected);
@@ -118,6 +125,30 @@ sema::Sema::CheckMemberExpression(const lex::Node &Expression,
   while (Root->kind == lex::TokenKind::ast_member)
     Root = Root->children.front().get();
   if (Root->kind == lex::TokenKind::ast_name && !FindName(Root->text)) {
+    if (auto Name = QualifiedName(Expression)) {
+      const auto Dot = Name->rfind('.');
+      if (Dot != std::string::npos) {
+        const auto OwnerName = Name->substr(0, Dot);
+        const auto *Owner = GetClass(OwnerName);
+        if (!Owner && !CurrentModule.empty())
+          Owner = GetClass(CurrentModule + "." + OwnerName);
+        if (Owner && Owner->IsInterface)
+          for (const auto &Constant : Owner->Constants)
+            if (Constant.Name == Expression.text) {
+              const auto Import = Imports.find(CurrentModule);
+              if (Owner->Module != CurrentModule &&
+                  (!Owner->Public || !Constant.Public ||
+                   Import == Imports.end() ||
+                   (!Import->second.contains(Owner->Module) &&
+                    !Import->second.contains(Owner->Module + ".*")))) {
+                Error(Expression, lex::DiagnosticKind::PrivateDeclaration);
+                return std::nullopt;
+              }
+              ConstantReferences[&Expression] = Constant.Value;
+              return FinishExpression(Expression, Constant.ValueType, Expected);
+            }
+      }
+    }
     const auto *Class = GetClass(CurrentClass);
     bool Field = false;
     if (Class)
@@ -282,6 +313,10 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
     Key = LocalKey(*Name);
   const auto *Class = !ValueRoot ? GetClass(Key) : nullptr;
   if (Class) {
+    if (Class->IsInterface) {
+      Error(Expression, lex::DiagnosticKind::InvalidClass);
+      return std::nullopt;
+    }
     if (ConstructionContext != &Expression) {
       Error(Expression, lex::DiagnosticKind::ClassValueOperation);
       return std::nullopt;
@@ -300,9 +335,17 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
         Error(Expression, lex::DiagnosticKind::TypeMismatch);
         return std::nullopt;
       }
-      for (std::size_t I = 0; I < ArgumentCount; ++I)
-        CheckExpression(*Expression.children[I + 1],
-                        Function->second.Parameters[I + 1]);
+      for (std::size_t I = 0; I < ArgumentCount; ++I) {
+        const auto *Previous = ConstructionContext;
+        ConstructionContext = Expression.children[I + 1].get();
+        auto Argument = CheckExpression(*Expression.children[I + 1],
+                                        Function->second.Parameters[I + 1]);
+        ConstructionContext = Previous;
+        if (Argument && Argument->IsClass())
+          CheckTransferAccess(*Argument,
+                              IsClassTemporary(*Expression.children[I + 1]),
+                              *Expression.children[I + 1]);
+      }
     } else if (ArgumentCount != 0) {
       // The generated default constructor takes no arguments.
       Error(Expression, lex::DiagnosticKind::TypeMismatch);
@@ -333,7 +376,8 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
     for (const auto &Field : Class->Fields)
       if (Field.Name == Callee.text)
         return CheckIndirectCall(Expression, Expected);
-    if (Callee.text == "init" || Callee.text == "deinit") {
+    if (Callee.text == "init" || Callee.text == "deinit" ||
+        Callee.text == "copy" || Callee.text == "move") {
       Error(Expression, lex::DiagnosticKind::InvalidLifecycleCall);
       return std::nullopt;
     }
@@ -367,7 +411,8 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
     if (!CurrentClass.empty()) {
       const auto Method = Functions.find(CurrentClass + "." + *Name);
       if (Method != Functions.end()) {
-        if (*Name == "init" || *Name == "deinit") {
+        if (*Name == "init" || *Name == "deinit" || *Name == "copy" ||
+            *Name == "move") {
           Error(Expression, lex::DiagnosticKind::InvalidLifecycleCall);
           return std::nullopt;
         }
@@ -390,11 +435,15 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
     return std::nullopt;
   }
   const auto &Info = Function->second;
+  if (Info.Abstract) {
+    Error(Expression, lex::DiagnosticKind::InvalidClass);
+    return std::nullopt;
+  }
   if (!Info.OwnerClass.empty() && !MethodCall) {
     Error(Expression, lex::DiagnosticKind::InvalidLifecycleCall);
     return std::nullopt;
   }
-  if (!Imported(Info.Module) ||
+  if ((!MethodCall && !Imported(Info.Module)) ||
       (Info.Module != CurrentModule && !Info.Public)) {
     Error(Expression, lex::DiagnosticKind::PrivateDeclaration);
     return std::nullopt;
@@ -410,9 +459,23 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
   }
   std::vector<Type> Arguments;
   for (std::size_t I = ParameterOffset; I < Info.Parameters.size(); ++I)
-    if (auto Value = CheckExpression(
-            *Expression.children[I + 1 - ParameterOffset], Info.Parameters[I]))
+    if (auto Value = [&]() {
+          const auto *Previous = ConstructionContext;
+          ConstructionContext =
+              Expression.children[I + 1 - ParameterOffset].get();
+          auto Result =
+              CheckExpression(*Expression.children[I + 1 - ParameterOffset],
+                              Info.Parameters[I]);
+          ConstructionContext = Previous;
+          return Result;
+        }()) {
+      if (Value->IsClass())
+        CheckTransferAccess(
+            *Value,
+            IsClassTemporary(*Expression.children[I + 1 - ParameterOffset]),
+            *Expression.children[I + 1 - ParameterOffset]);
       Arguments.push_back(*Value);
+    }
   for (std::size_t I = Info.Parameters.size() - ParameterOffset;
        I < ArgumentCount; ++I)
     if (auto Value = CheckExpression(*Expression.children[I + 1])) {
@@ -485,6 +548,7 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
     CWrappers.push_back(std::move(Wrapper));
   }
   Callees[&Expression] = Info.Symbol;
+  WarnIfDeprecated(Callee, Info.Node);
   if (MethodCall)
     MethodCalls.insert(&Expression);
   return FinishExpression(Expression, Info.Return, Expected);
@@ -510,7 +574,7 @@ sema::Sema::CheckUnaryExpression(const lex::Node &Expression,
       return std::nullopt;
     }
     auto Result = CheckExpression(*Expression.children.front());
-    if (GetFunctionValue(*Operand)) {
+    if (GetFunctionValue(*Operand) || GetConstant(*Operand)) {
       Error(Expression, lex::DiagnosticKind::UnsupportedExpression);
       return std::nullopt;
     }
@@ -599,4 +663,34 @@ sema::Sema::CheckBinaryExpression(const lex::Node &Expression,
   }
   Types[&Expression] = *Lhs;
   return Lhs;
+}
+
+std::optional<sema::Type>
+sema::Sema::CheckCastExpression(const lex::Node &Expression,
+                                std::optional<Type> Expected, bool) {
+  if (Expression.children.size() != 2) {
+    Error(Expression, lex::DiagnosticKind::UnsupportedExpression);
+    return std::nullopt;
+  }
+  auto Source = CheckExpression(*Expression.children.front());
+  auto Target = CheckType(*Expression.children.back());
+  if (!Source || !Target)
+    return std::nullopt;
+  const bool PointerCast = Source->IsPointer() && Target->IsPointer();
+  const bool PointerIntegerCast =
+      (Source->IsPointer() && !Target->IsPointer() && !Target->IsArray() &&
+       IsInteger(Target->Element)) ||
+      (Target->IsPointer() && !Source->IsPointer() && !Source->IsArray() &&
+       IsInteger(Source->Element));
+  const bool NumericCast =
+      !Source->IsPointer() && !Target->IsPointer() && !Source->IsArray() &&
+      !Target->IsArray() && IsNumeric(Source->Element) &&
+      IsNumeric(Target->Element) && GetBitWidth(*Source) <= 128 &&
+      GetBitWidth(*Target) <= 128;
+  if (*Source != *Target && !PointerCast && !PointerIntegerCast &&
+      !NumericCast) {
+    Error(Expression, lex::DiagnosticKind::UnsupportedExpression);
+    return std::nullopt;
+  }
+  return FinishExpression(Expression, *Target, Expected);
 }

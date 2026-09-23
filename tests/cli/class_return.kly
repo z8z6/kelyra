@@ -1,0 +1,21 @@
+class Box {
+  value: i32;
+
+  init(value: i32) { this.value = value; }
+
+  fn get() -> i32 { return value; }
+}
+
+fn direct(value: i32) -> Box { return Box(value); }
+
+fn via_local(value: i32) -> Box {
+  let result = direct(value);
+  return result;
+}
+
+@main
+fn launch() -> i32 {
+  let result = via_local(41);
+  direct(0);
+  return result.get() + direct(1).get();
+}

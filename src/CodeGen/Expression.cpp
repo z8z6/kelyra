@@ -15,6 +15,8 @@ using namespace kelyra;
 using K = lex::TokenKind;
 
 mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
+  if (const auto *Constant = Analysis.GetConstant(Expression))
+    return EmitExpression(*Constant);
   if (const auto *Symbol = Analysis.GetFunctionValue(Expression)) {
     const auto &Type = Analysis.GetType(Expression);
     llvm::SmallVector<mlir::Type> Parameters;
@@ -42,6 +44,7 @@ mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
       {K::ast_group, &IRGen::EmitGroupExpression},
       {K::ast_unary, &IRGen::EmitUnaryExpression},
       {K::ast_binary, &IRGen::EmitBinaryExpression},
+      {K::ast_cast, &IRGen::EmitCastExpression},
   };
   const auto It = Handlers.find(Expression.kind);
   assert(It != Handlers.end() &&
@@ -65,6 +68,22 @@ mlir::Value codegen::IRGen::EmitNameExpression(const lex::Node &Expression) {
 
 mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
   const auto Loc = GetLocation(Expression.Loc);
+  if (Expression.kind == K::ast_member && Analysis.GetField(Expression)) {
+    const auto &Base = *Expression.children.front();
+    if (Analysis.IsClassTemporary(Base)) {
+      auto [Address, Temporary] = EmitClassSourceAddress(Base);
+      const auto *Class = Analysis.GetClass(Analysis.GetType(Base));
+      auto Field = FieldAddress(*Class, Address,
+                                Analysis.GetFieldIndex(Expression), Loc);
+      auto Value = mlir::LLVM::LoadOp::create(
+          Builder, Loc, GetType(Analysis.GetType(Expression)), Field);
+      if (Temporary)
+        mlir::func::CallOp::create(Builder, Loc, Class->DestructorSymbol,
+                                   mlir::TypeRange{},
+                                   mlir::ValueRange{Address});
+      return Value;
+    }
+  }
   return mlir::LLVM::LoadOp::create(Builder, Loc,
                                     GetType(Analysis.GetType(Expression)),
                                     EmitAddress(Expression));
@@ -76,6 +95,7 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
   const auto Type =
       SemanticType.IsVoid() ? mlir::Type() : GetType(SemanticType);
   llvm::SmallVector<mlir::Value> Arguments;
+  mlir::Value ReceiverTemporary;
   if (Analysis.IsIndirectCall(Expression)) {
     const auto &Callee = *Expression.children.front();
     const auto &Signature = Analysis.GetType(Callee);
@@ -95,9 +115,16 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
     const auto &Callee = *Expression.children.front();
     if (Callee.kind == K::ast_member) {
       const auto &Base = *Callee.children.front();
-      Arguments.push_back(Analysis.GetType(Base).IsPointer()
-                              ? EmitExpression(Base)
-                              : EmitAddress(Base));
+      if (Analysis.IsClassTemporary(Base)) {
+        auto [Address, Temporary] = EmitClassSourceAddress(Base);
+        Arguments.push_back(Address);
+        if (Temporary)
+          ReceiverTemporary = Address;
+      } else {
+        Arguments.push_back(Analysis.GetType(Base).IsPointer()
+                                ? EmitExpression(Base)
+                                : EmitAddress(Base));
+      }
     } else {
       Arguments.push_back(FindVariable("this")->DirectValue);
     }
@@ -122,7 +149,9 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
         Arguments.push_back(Address);
       }
     } else {
-      Arguments.push_back(EmitExpression(Argument));
+      Arguments.push_back(Analysis.GetType(Argument).IsClass()
+                              ? EmitClassArgument(Argument)
+                              : EmitExpression(Argument));
     }
   }
   const auto Callee = Wrapper ? Wrapper->Name : Analysis.GetCallee(Expression);
@@ -136,6 +165,13 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
     Results.push_back(Type);
   auto Call =
       mlir::func::CallOp::create(Builder, Loc, Callee, Results, Arguments);
+  if (ReceiverTemporary) {
+    const auto &Base = *Expression.children.front()->children.front();
+    mlir::func::CallOp::create(
+        Builder, Loc,
+        Analysis.GetClass(Analysis.GetType(Base))->DestructorSymbol,
+        mlir::TypeRange{}, mlir::ValueRange{ReceiverTemporary});
+  }
   return Type ? Call.getResult(0) : mlir::Value();
 }
 
@@ -203,6 +239,48 @@ mlir::Value codegen::IRGen::EmitUnaryExpression(const lex::Node &Expression) {
   auto Zero = mlir::arith::ConstantIntOp::create(
       Builder, Loc, Type, llvm::APInt(sema::GetBitWidth(SemanticType), 0));
   return mlir::arith::SubIOp::create(Builder, Loc, Zero, Value);
+}
+
+mlir::Value codegen::IRGen::EmitCastExpression(const lex::Node &Expression) {
+  const auto Loc = GetLocation(Expression.Loc);
+  const auto &Source = Analysis.GetType(*Expression.children.front());
+  const auto &Target = Analysis.GetType(Expression);
+  auto Value = EmitExpression(*Expression.children.front());
+  if (Source == Target || (Source.IsPointer() && Target.IsPointer()))
+    return Value;
+  const auto ResultType = GetType(Target);
+  if (Source.IsPointer())
+    return mlir::LLVM::PtrToIntOp::create(Builder, Loc, ResultType, Value);
+  if (Target.IsPointer())
+    return mlir::LLVM::IntToPtrOp::create(Builder, Loc, ResultType, Value);
+  const bool SourceFloat = sema::IsFloat(Source.Element);
+  const bool TargetFloat = sema::IsFloat(Target.Element);
+  if (SourceFloat && TargetFloat) {
+    if (sema::GetBitWidth(Source) == sema::GetBitWidth(Target))
+      return Value;
+    if (sema::GetBitWidth(Source) < sema::GetBitWidth(Target))
+      return mlir::arith::ExtFOp::create(Builder, Loc, ResultType, Value,
+                                         mlir::arith::FastMathFlagsAttr{});
+    return mlir::arith::TruncFOp::create(Builder, Loc, ResultType, Value);
+  }
+  if (SourceFloat) {
+    if (sema::IsSignedInteger(Target.Element))
+      return mlir::arith::FPToSIOp::create(Builder, Loc, ResultType, Value);
+    return mlir::arith::FPToUIOp::create(Builder, Loc, ResultType, Value);
+  }
+  if (TargetFloat) {
+    if (sema::IsSignedInteger(Source.Element))
+      return mlir::arith::SIToFPOp::create(Builder, Loc, ResultType, Value);
+    return mlir::arith::UIToFPOp::create(Builder, Loc, ResultType, Value);
+  }
+  if (sema::GetBitWidth(Source) < sema::GetBitWidth(Target)) {
+    if (sema::IsSignedInteger(Source.Element))
+      return mlir::arith::ExtSIOp::create(Builder, Loc, ResultType, Value);
+    return mlir::arith::ExtUIOp::create(Builder, Loc, ResultType, Value);
+  }
+  if (sema::GetBitWidth(Source) > sema::GetBitWidth(Target))
+    return mlir::arith::TruncIOp::create(Builder, Loc, ResultType, Value);
+  return Value;
 }
 
 mlir::Value codegen::IRGen::EmitBinaryExpression(const lex::Node &Expression) {

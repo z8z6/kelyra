@@ -39,6 +39,7 @@ fn inspect(parameter: i32) -> i32 {
   return value;
 }
 
+@main
 fn main() -> i32 {
   return inspect(40);
 }

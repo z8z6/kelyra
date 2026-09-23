@@ -49,6 +49,8 @@ enum class BuiltinType {
   CSize,
   CPtrdiff,
   CBool,
+  CFloat,
+  CDouble,
   CWChar,
   CRecord,
   Class,
@@ -76,6 +78,10 @@ struct Type {
   std::string CName;
   std::string CSpelling;
   std::string ClassName;
+  // Access to a type supplied to a generic is checked in its use module,
+  // not in the module that owns the generic template.
+  bool GenericArgument = false;
+  std::string GenericOriginModule;
   std::vector<Type> Results;
   std::vector<Type> Parameters;
   // Outermost first: *[2]i32 is {Pointer, Array(2)}.
@@ -178,6 +184,8 @@ inline constexpr std::array BuiltinTypeInfos = {
     BuiltinTypeInfo{"c.ptrdiff", TypeClass::SignedInteger,
                     sizeof(std::ptrdiff_t) * 8},
     BuiltinTypeInfo{"c.bool", TypeClass::Bool, 8},
+    BuiltinTypeInfo{"c.float", TypeClass::Float, sizeof(float) * 8},
+    BuiltinTypeInfo{"c.double", TypeClass::Float, sizeof(double) * 8},
     BuiltinTypeInfo{"c.wchar", TypeClass::SignedInteger, sizeof(wchar_t) * 8},
     BuiltinTypeInfo{"", TypeClass::Aggregate, 0},
     BuiltinTypeInfo{"", TypeClass::Aggregate, 0},

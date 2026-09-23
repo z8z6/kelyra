@@ -1,6 +1,7 @@
-module app.main;
+module main;
 import math.vector;
 
+@main
 pub fn main() -> i32 {
   return math.vector.answer();
 }

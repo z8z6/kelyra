@@ -49,6 +49,9 @@ TEST(Frontend, ExpressionAst) {
   expression("true", "(Literal \"true\")");
   expression("meta(*u8)", "(Meta (PointerType (Type \"u8\")))");
   expression("\"a\\n\"", "(Literal \"\\\"a\\\\n\\\"\")");
+  expression("identity<i32>(value)",
+             "(Call (GenericApply (Name \"identity\") (Type \"i32\")) "
+             "(Name \"value\"))");
   expression(
       "a / b % c",
       "(Binary \"%\" (Binary \"/\" (Name \"a\") (Name \"b\")) (Name \"c\"))");
@@ -102,6 +105,59 @@ TEST(Frontend, PrefixArrayTypes) {
   EXPECT_NE(Ast.find("(ArrayType \"2\" (PointerType (Type \"i32\")))"),
             std::string::npos);
   EXPECT_FALSE(lexer.parse("fn old(value: i32[2]) {}").ok());
+}
+
+TEST(Frontend, GenericSyntaxAndFormatting) {
+  auto Parsed =
+      lexer.parse("class Box<T>{value:T;init(value:T){this.value=value;}}"
+                  "class Pair<T,U>{first:T;second:U;}"
+                  "fn identity<T>(value:T)->T{return value;}"
+                  "fn use()->i32{let pair:Pair<i32,Box<i32>> = "
+                  "Pair<i32,Box<i32>>(1,Box<i32>(42));"
+                  "let box:Box<i32> = Box<i32>(identity<i32>(42));"
+                  "return box.value;}");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("class Box<T> {"), std::string::npos);
+  EXPECT_NE(Formatted.find("fn identity<T>(value: T) -> T"), std::string::npos);
+  EXPECT_NE(Formatted.find("class Pair<T, U> {"), std::string::npos);
+  EXPECT_NE(Formatted.find("Pair<i32, Box<i32>>(1, Box<i32>(42))"),
+            std::string::npos);
+  EXPECT_NE(Formatted.find("Box<i32>(identity<i32>(42))"), std::string::npos);
+  auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, InterfaceDeclaration) {
+  const std::string Source = R"(
+@interface pub class Reader {
+  pub const CAPACITY: i32 = 64;
+  pub fn read(count: i32) -> i32;
+  pub fn ready() -> bool { return true; }
+}
+)";
+  auto Parsed = lexer.parse(Source);
+  ASSERT_TRUE(Parsed.ok());
+  const auto Ast = lexer.dumpAst(*Parsed.root);
+  EXPECT_NE(Ast.find("(Class \"Reader\""), std::string::npos);
+  EXPECT_NE(Ast.find("(ConstField \"CAPACITY\""), std::string::npos);
+  EXPECT_TRUE(lexer.parse(Format(Parsed)).ok());
+  EXPECT_FALSE(lexer.parse("interface Reader {}").ok());
+}
+
+TEST(Frontend, ModuleTargetCondition) {
+  auto Parsed = lexer.parse("@cfg(os=\"linux\") module platform.linux;\nfn "
+                            "value() -> i32 { return 1; }");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Ast = lexer.dumpAst(*Parsed.root);
+  EXPECT_NE(Ast.find("(ModuleDecl \"platform.linux\" (Annotation \"cfg\""),
+            std::string::npos);
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("@cfg(os = \"linux\") module platform.linux;"),
+            std::string::npos);
+  EXPECT_TRUE(lexer.parse(Formatted).ok());
+  EXPECT_TRUE(lexer.parseExpression("meta(std.annotation.main)").ok());
 }
 
 TEST(Frontend, ClassAndMultipleReturnRoundTrip) {
@@ -217,7 +273,8 @@ TEST(Frontend, TokensAndComments) {
 
 TEST(Frontend, TokenKinds) {
   auto result = lexer.parseExpression(
-      "name 1 \"s\" let fn class annotation if else while return break "
+      "name 1 \"s\" let fn class interface const annotation if else while "
+      "return break "
       "continue "
       "true false meta when parallel extern defer module import pub -> = + - "
       "* / % == != < <= > >= && || ! & ( ) { } [ ] , : ; . @");
@@ -227,6 +284,8 @@ TEST(Frontend, TokenKinds) {
                                            TokenKind::keyword_let,
                                            TokenKind::keyword_fn,
                                            TokenKind::keyword_class,
+                                           TokenKind::name,
+                                           TokenKind::keyword_const,
                                            TokenKind::keyword_annotation,
                                            TokenKind::keyword_if,
                                            TokenKind::keyword_else,
@@ -327,8 +386,9 @@ TEST(Frontend, ModuleImportsAndVisibility) {
   auto Parsed = lexer.parse(Source);
   ASSERT_TRUE(Parsed.ok());
   EXPECT_EQ(lexer.dumpAst(*Parsed.root),
-            "(Module (ModuleDecl \"app.main\") (Import \"math.vector\") "
-            "(Function \"main\" (Public) (Type \"i32\") (Block (Return "
+            "(Module (ModuleDecl \"main\") (Import \"math.vector\") "
+            "(Function \"main\" (Annotation \"main\") (Public) (Type \"i32\") "
+            "(Block (Return "
             "(Call (Member \"answer\" (Member \"vector\" (Name "
             "\"math\"))))))))");
 }

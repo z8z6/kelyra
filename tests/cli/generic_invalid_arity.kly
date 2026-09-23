@@ -1,0 +1,10 @@
+class Pair<T, U> {
+  first: T;
+  second: U;
+}
+
+@main
+fn launch() -> i32 {
+  let pair: Pair<i32> = Pair<i32>();
+  return 0;
+}

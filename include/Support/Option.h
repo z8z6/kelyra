@@ -10,6 +10,7 @@
 #include <string>
 
 namespace kelyra {
+
 class Option {
 public:
   inline static llvm::cl::OptionCategory KelyraCategory{
@@ -65,7 +66,7 @@ public:
       "dump-ast", llvm::cl::desc("Print the parsed AST"),
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> LexVerify{
-      "check", llvm::cl::desc("Verify source syntax"),
+      "check", llvm::cl::desc("Verify source syntax and semantics"),
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> EmitMlir{
       "emit-mlir", llvm::cl::desc("Generate and print MLIR"),
@@ -75,6 +76,20 @@ public:
       llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> EmitExecutable{
       "emit-exe", llvm::cl::desc("Generate a native executable"),
+      llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<std::string> Runtime{
+      "runtime", llvm::cl::desc("Executable runtime: host or freestanding"),
+      llvm::cl::init("host"), llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<std::string> Target{
+      "target", llvm::cl::desc("LLVM target triple (default: native target)"),
+      llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<bool> EmitCDefinitions{
+      "emit-c-defs",
+      llvm::cl::desc("Generate an importable Kelyra wrapper module for "
+                     "imported C headers"),
+      llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<std::string> CDefinitionsModule{
+      "c-defs-module", llvm::cl::desc("Module name for --emit-c-defs"),
       llvm::cl::cat(KelyraCategory)};
 };
 } // namespace kelyra

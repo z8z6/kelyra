@@ -112,8 +112,7 @@ void sema::Sema::CheckLetStatement(const lex::Node &Statement, unsigned) {
   ConstructionContext = nullptr;
   const auto Result = Declared ? Declared : Initial;
   if (Result && (Result->IsVoid() || Result->IsResults() ||
-                 (Result->IsClass() &&
-                  (!Initializer || !GetConstructorCall(*Initializer))))) {
+                 (Result->IsClass() && !Initializer))) {
     Error(Statement, lex::DiagnosticKind::ClassValueOperation);
     return;
   }
@@ -122,6 +121,9 @@ void sema::Sema::CheckLetStatement(const lex::Node &Statement, unsigned) {
     return;
   }
   if (Name && Result) {
+    if (Result->IsClass() && Initializer)
+      CheckTransferAccess(*Result, IsClassTemporary(*Initializer),
+                          *Initializer);
     if (!Scopes.back().emplace(Name->text, *Result).second)
       Error(*Name, lex::DiagnosticKind::DuplicateParameter);
     Types[Name] = *Result;
@@ -135,7 +137,11 @@ void sema::Sema::CheckAssignStatement(const lex::Node &Statement, unsigned) {
     return;
   }
   auto Target = CheckExpression(*Statement.children[0]);
-  if (GetFunctionValue(*Statement.children[0])) {
+  const lex::Node *TargetNode = Statement.children[0].get();
+  while (TargetNode->kind == lex::TokenKind::ast_group &&
+         TargetNode->children.size() == 1)
+    TargetNode = TargetNode->children.front().get();
+  if (GetFunctionValue(*TargetNode) || GetConstant(*TargetNode)) {
     Error(Statement, lex::DiagnosticKind::InvalidAssignmentTarget);
     return;
   }
@@ -144,14 +150,22 @@ void sema::Sema::CheckAssignStatement(const lex::Node &Statement, unsigned) {
     Error(Statement, lex::DiagnosticKind::InvalidAssignmentTarget);
     return;
   }
-  if (Target && (Target->IsClass() || Target->IsVoid())) {
+  if (Target && Target->IsVoid()) {
     Error(Statement, lex::DiagnosticKind::ClassValueOperation);
     return;
   }
   if (Target && !Target->IsRecord() && GetBitWidth(*Target) > 128)
     Error(Statement, lex::DiagnosticKind::UnsupportedType);
-  else if (Target)
+  else if (Target) {
+    ConstructionContext = Statement.children[1].get();
     CheckExpression(*Statement.children[1], Target);
+    ConstructionContext = nullptr;
+    if (Target->IsClass()) {
+      CheckTransferAccess(*Target, IsClassTemporary(*Statement.children[1]),
+                          Statement);
+      CheckTransferAccess(*Target, true, Statement);
+    }
+  }
 }
 
 void sema::Sema::CheckExpressionStatement(const lex::Node &Statement,
@@ -179,7 +193,12 @@ void sema::Sema::CheckReturnStatement(const lex::Node &Statement, unsigned) {
     Error(Statement, lex::DiagnosticKind::MissingReturn);
     return;
   }
-  CheckExpression(*Statement.children.front(), ReturnType);
+  const auto &Value = *Statement.children.front();
+  ConstructionContext = &Value;
+  auto Actual = CheckExpression(Value, ReturnType);
+  ConstructionContext = nullptr;
+  if (Actual && ReturnType->IsClass())
+    CheckTransferAccess(*ReturnType, IsClassTemporary(Value), Value);
 }
 
 void sema::Sema::CheckIfStatement(const lex::Node &Statement,

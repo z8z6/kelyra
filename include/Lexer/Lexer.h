@@ -25,6 +25,9 @@ struct Node {
   std::string text;
   std::vector<std::unique_ptr<Node>> children;
   std::size_t height = 1;
+  bool GenericInstance = false;
+  bool GenericArgument = false;
+  std::string GenericOriginModule;
 };
 
 struct ParseResult {
@@ -78,7 +81,7 @@ class Lexer {
   Ptr block();
   Ptr assembly();
   Ptr stmt();
-  Ptr decl();
+  Ptr decl(std::vector<Ptr> annotations = {});
   void run();
   void runExpression();
 

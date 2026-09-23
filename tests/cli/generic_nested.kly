@@ -1,0 +1,28 @@
+class Box<T> {
+  value: T;
+
+  init(value: T) { this.value = value; }
+
+  fn get() -> T { return value; }
+}
+
+class Pair<T, U> {
+  first: T;
+  second: U;
+
+  init(first: T, second: U) {
+    this.first = first;
+    this.second = second;
+  }
+
+  fn left() -> T { return first; }
+
+  fn right() -> U { return second; }
+}
+
+@main
+fn launch() -> i32 {
+  let pair: Pair<i32, Box<i32>> =
+      Pair<i32, Box<i32>>(1, Box<i32>(41));
+  return pair.left() + pair.right().get();
+}

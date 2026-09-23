@@ -30,6 +30,7 @@ enum class DiagnosticKind {
   UnterminatedBlockComment,            // Block comment has no closing marker.
   UnexpectedCharacter,                 // Character is not part of the language.
   ExpectedRightBracket,                // Expected ']'.
+  ExpectedRightAngle,                  // Expected '>' in generic arguments.
   ExpectedRightParen,                  // Expected ')'.
   ExpectedRightBrace,                  // Expected '}'.
   ExpectedSemicolon,                   // Expected ';'.
@@ -55,6 +56,7 @@ enum class DiagnosticKind {
   UnknownAnnotation,            // Annotation name cannot be resolved.
   InvalidAnnotation,            // Annotation declaration or arguments invalid.
   InvalidAnnotationTarget,      // Annotation cannot target this declaration.
+  InvalidExternDeclaration,     // @extern needs a bodyless top-level function.
   MetaValueInRuntimeExpression, // Reflection metadata cannot escape.
   InvalidWhenCondition,         // When requires a compile-time boolean.
   UnsupportedType,              // Type is not supported by IR generation.
@@ -67,8 +69,8 @@ enum class DiagnosticKind {
   InvalidIntegerLiteral,  // Integer literal does not fit its target type.
   MissingReturn,          // Function does not return a value.
   TypeMismatch,           // Expression type does not match its context.
-  MissingEntrypoint,      // Executable has no main function.
-  InvalidEntrypoint,      // Main must have the executable ABI signature.
+  MissingEntrypoint,      // Executable has no @main function.
+  InvalidEntrypoint,      // @main must have the executable ABI signature.
   DuplicateModule,        // Module name is already defined.
   UnknownModule,          // Imported module cannot be resolved.
   PrivateDeclaration,     // Declaration is private to another module.

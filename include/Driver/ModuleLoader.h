@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace kelyra {
@@ -28,6 +29,7 @@ class ModuleLoader {
   std::unordered_map<std::string, State> States;
   std::vector<std::string> CHeaders;
   bool Progress;
+  std::string TargetTriple;
 
   bool IsUnderExternalPath(const std::filesystem::path &Path) const;
   std::optional<std::filesystem::path>
@@ -36,13 +38,15 @@ class ModuleLoader {
             bool IsEntry);
 
 public:
-  explicit ModuleLoader(bool Progress = false) : Progress(Progress) {}
+  explicit ModuleLoader(bool Progress = false, std::string TargetTriple = {})
+      : Progress(Progress), TargetTriple(std::move(TargetTriple)) {}
 
   void AddModulePath(const std::string &Path);
   void AddExternalPath(const std::string &Path);
   bool LoadEntry(const std::string &Path);
 
   const std::deque<SourceModule> &GetModules() const { return Modules; }
+  std::deque<SourceModule> &GetMutableModules() { return Modules; }
   const std::vector<std::string> &GetCHeaders() const { return CHeaders; }
 };
 } // namespace kelyra

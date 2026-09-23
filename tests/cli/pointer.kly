@@ -1,3 +1,4 @@
+@main
 fn main() -> i32 {
   let value: i32 = 41;
   let pointer: *i32 = &value;

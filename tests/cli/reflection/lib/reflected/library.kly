@@ -1,0 +1,13 @@
+module reflected.library;
+
+@reflect
+pub class Box {
+  pub value: i32;
+  @reflect secret: u64;
+  ignored: i32;
+}
+
+pub class Sparse {
+  pub ignored: i32;
+  @reflect selected: i32;
+}

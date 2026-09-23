@@ -1,0 +1,9 @@
+@extern
+fn bad() -> i32 {
+  return 1;
+}
+
+@main
+fn main() -> i32 {
+  return bad();
+}

@@ -1,0 +1,7 @@
+module cfg.invalid_duplicate;
+
+@cfg(os="linux", os="windows")
+@main
+fn main() -> i32 {
+  return 0;
+}

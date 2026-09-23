@@ -1,0 +1,12 @@
+@main
+fn main() -> i32 {
+  let narrow: i8 = 41;
+  let wide: i64 = narrow as i64;
+  let floating: f64 = wide as f64;
+  let value: u8 = floating as u8;
+  let one: i32 = 1;
+  let raw: *u8 = (&one) as *u8;
+  let address: usize = raw as usize;
+  let restored: *i32 = address as *i32;
+  return (value as i32) + *restored;
+}

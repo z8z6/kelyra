@@ -4,6 +4,7 @@
 #include "Sema/Sema.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OwningOpRef.h"
@@ -19,6 +20,8 @@
 #include <vector>
 
 namespace kelyra::codegen {
+enum class RuntimeMode { Host, Freestanding };
+
 class IRGen {
   struct Variable {
     sema::Type SemanticType;
@@ -49,6 +52,8 @@ class IRGen {
   std::vector<std::vector<Cleanup>> Cleanups;
   const sema::ClassInfo *CurrentClass = nullptr;
   const sema::ClassInfo *ActiveDestructor = nullptr;
+  bool InitializingField = false;
+  bool InTransferConstructor = false;
   unsigned GlobalStringCount = 0;
   std::set<const lex::Node *> ExternalModules;
 
@@ -70,6 +75,7 @@ class IRGen {
   mlir::Value EmitGroupExpression(const lex::Node &Expression);
   mlir::Value EmitUnaryExpression(const lex::Node &Expression);
   mlir::Value EmitBinaryExpression(const lex::Node &Expression);
+  mlir::Value EmitCastExpression(const lex::Node &Expression);
   mlir::Value EmitExpression(const lex::Node &Expression);
   void EmitBlock(const lex::Node &Block);
   void EmitBlockStatement(const lex::Node &Statement);
@@ -87,7 +93,16 @@ class IRGen {
   void EmitFunction(const lex::Node &Function,
                     const sema::ClassInfo *Owner = nullptr,
                     bool DeclarationOnly = false);
+  bool EmitOptionIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
+                           bool DeclarationOnly);
+  bool EmitReflectIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
+                            bool DeclarationOnly);
+  void EmitReflectionGlobals(llvm::ArrayRef<const lex::Node *> Modules,
+                             mlir::ModuleOp Output);
   void EmitConstruction(const lex::Node &Expression, mlir::Value Address);
+  std::pair<mlir::Value, bool>
+  EmitClassSourceAddress(const lex::Node &Expression);
+  mlir::Value EmitClassArgument(const lex::Node &Expression);
   void EmitCleanups(std::size_t KeepDepth, mlir::Location Loc);
   void EmitFieldDestructors(const sema::ClassInfo &Class, mlir::Value Address,
                             mlir::Location Loc);
@@ -95,6 +110,10 @@ class IRGen {
   void EmitDefaultConstructorDeclaration(const sema::ClassInfo &Class);
   void EmitDefaultDestructor(const sema::ClassInfo &Class);
   void EmitDefaultDestructorDeclaration(const sema::ClassInfo &Class);
+  void EmitDefaultTransfer(const sema::ClassInfo &Class, bool Move,
+                           bool DeclarationOnly);
+  void EmitTransfer(const sema::ClassInfo &Class, mlir::Value Target,
+                    mlir::Value Source, bool Move, mlir::Location Loc);
   mlir::Value FieldAddress(const sema::ClassInfo &Class, mlir::Value Address,
                            std::size_t Index, mlir::Location Loc);
 
@@ -111,13 +130,20 @@ public:
   Generate(llvm::ArrayRef<const lex::Node *> Modules);
 };
 
-llvm::Error EmitObject(mlir::ModuleOp Module, llvm::StringRef OutputPath,
-                       llvm::CodeGenOptLevel OptLevel = llvm::CodeGenOptLevel::None,
-                       llvm::StringRef CWrapperSource = {},
-                       llvm::ArrayRef<std::string> CArguments = {});
-llvm::Error EmitExecutable(mlir::ModuleOp Module, llvm::StringRef OutputPath,
-                           llvm::CodeGenOptLevel OptLevel = llvm::CodeGenOptLevel::None,
-                           llvm::ArrayRef<std::string> CSources = {},
-                           llvm::ArrayRef<std::string> CArguments = {},
-                           llvm::StringRef CWrapperSource = {});
+llvm::Error
+EmitObject(mlir::ModuleOp Module, llvm::StringRef OutputPath,
+           llvm::CodeGenOptLevel OptLevel = llvm::CodeGenOptLevel::None,
+           llvm::StringRef CWrapperSource = {},
+           llvm::ArrayRef<std::string> CArguments = {},
+           llvm::ArrayRef<std::string> CSources = {},
+           llvm::StringRef TargetTriple = {},
+           RuntimeMode Runtime = RuntimeMode::Host);
+llvm::Error
+EmitExecutable(mlir::ModuleOp Module, llvm::StringRef OutputPath,
+               llvm::CodeGenOptLevel OptLevel = llvm::CodeGenOptLevel::None,
+               llvm::ArrayRef<std::string> CSources = {},
+               llvm::ArrayRef<std::string> CArguments = {},
+               llvm::StringRef CWrapperSource = {},
+               RuntimeMode Runtime = RuntimeMode::Host,
+               llvm::StringRef TargetTriple = {});
 } // namespace kelyra::codegen

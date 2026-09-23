@@ -140,10 +140,27 @@ annotation serializable();
 
 ## 内建注解
 
-内建注解也以预声明方式进入注解符号表。完成普通参数验证后，Sema 根据稳定的 `BuiltinAnnotationKind` 调用处理器。计划提供：
+已实现的内建注解声明位于标准库的
+[`std.annotation`](../../kstd/src/std/annotation.kly) 模块。
+编译器在编译期隐式加载该模块，因此现有 `@cfg`、`@interface`、`@layout`、
+`@extern`、`@callconv`、`@main`、`@inline`、`@deprecated`、`@reflect`、`@target`、
+`@repeatable` 和 `@retention` 短名称无需
+显式 `import`。也可以使用 `@std.annotation.interface` 等限定名。
+声明和参数由 Kelyra 文件提供；需要在依赖加载之前执行的 `@cfg`，以及
+布局、外部符号、接口等内建语义仍由编译器处理。
 
-- `@inline(default|hint|always|never)`；
-- `@deprecated([message])`；
+- `@inline` 等价于 `@inline(auto)`，交给优化器决定是否内联；
+  `@inline(always)` 标记强制内联，在无优化构建中也执行强制内联 pass。
+- `@deprecated` 或 `@deprecated("改用新 API")` 标记函数或方法；使用处输出
+  编译警告，不中止编译。
+- `@reflect` 可以标记类或实例字段。标记类时，选中全部公开实例字段，
+  以及额外标记 `@reflect` 的私有实例字段；只标记字段时，仅选中所标记的
+  字段。接口常量不是实例字段，不能使用 `@reflect`。被选字段会进入
+  逐类型运行时描述符，可通过 `std.reflect` 查询和读写；详见
+  [`kstd` 运行时反射说明](../../kstd/doc/reflection.md)。
+
+后续计划提供：
+
 - `@export([name])`；
 - `@link_name(name)`；
 - `@compiler.intrinsic(name)`。

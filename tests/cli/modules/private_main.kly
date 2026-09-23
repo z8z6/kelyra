@@ -1,6 +1,7 @@
-module app.private_main;
+module private_main;
 import math.vector;
 
+@main
 pub fn main() -> i32 {
   return math.vector.hidden();
 }

@@ -1,0 +1,6 @@
+module cfg.module_gate;
+
+@cfg(os="linux", arch="x86_64") import cfg.module_linux;
+
+@main
+fn main() -> i32 { return cfg.module_linux.answer(); }

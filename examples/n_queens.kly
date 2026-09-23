@@ -1,5 +1,6 @@
 // Counts all 92 solutions of the eight queens puzzle.
 // Returning the count keeps the example independent of an I/O runtime.
+@main
 fn main() -> i32 {
   // 棋盘
   let board: [8][8]i32;

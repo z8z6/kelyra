@@ -10,6 +10,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <optional>
+#include <sstream>
 
 using namespace kelyra;
 
@@ -85,6 +86,12 @@ std::optional<sema::Type> ConvertType(clang::ASTContext &Context,
       break;
     case C::Bool:
       Result = K::CBool;
+      break;
+    case C::Float:
+      Result = K::CFloat;
+      break;
+    case C::Double:
+      Result = K::CDouble;
       break;
     default:
       return std::nullopt;
@@ -189,4 +196,109 @@ cimport::ImportHeaders(const std::vector<std::string> &Headers,
     }
   }
   return Result;
+}
+
+namespace {
+std::optional<std::string> KelyraType(const sema::Type &Type) {
+  if (Type.IsPointer()) {
+    auto Pointee = KelyraType(Type.Pointee());
+    if (!Pointee || *Pointee == "void")
+      return std::nullopt;
+    return "*" + *Pointee;
+  }
+  if (Type.IsRecord()) {
+    if (Type.CName.empty() || Type.CName == "void")
+      return std::nullopt;
+    return "c." + Type.CName;
+  }
+  using T = sema::BuiltinType;
+  switch (Type.Element) {
+  case T::Void:
+    return "void";
+  case T::CChar:
+    return "c.char";
+  case T::CSChar:
+    return "c.schar";
+  case T::CUChar:
+    return "c.uchar";
+  case T::CShort:
+    return "c.short";
+  case T::CInt:
+    return "c.int";
+  case T::CUInt:
+    return "c.uint";
+  case T::CLong:
+    return "c.long";
+  case T::CLongLong:
+    return "c.longlong";
+  case T::CSize:
+    return "c.size";
+  case T::CPtrdiff:
+    return "c.ptrdiff";
+  case T::CBool:
+    return "c.bool";
+  case T::CFloat:
+    return "c.float";
+  case T::CDouble:
+    return "c.double";
+  case T::CWChar:
+    return "c.wchar";
+  default:
+    return std::nullopt;
+  }
+}
+
+std::string EscapeString(std::string_view Value) {
+  std::string Result;
+  for (const char Character : Value) {
+    if (Character == '\\' || Character == '"')
+      Result += '\\';
+    Result += Character;
+  }
+  return Result;
+}
+} // namespace
+
+std::string
+cimport::GenerateDefinitions(const ImportResult &Declarations,
+                             const std::vector<std::string> &Headers,
+                             const std::string &ModuleName) {
+  std::ostringstream Source;
+  Source << "module " << ModuleName << ";\n\n";
+  for (const auto &Header : Headers)
+    Source << "import c \"" << EscapeString(Header) << "\";\n";
+  Source << '\n';
+  for (const auto &Function : Declarations.Functions) {
+    if (Function.Variadic)
+      continue;
+    auto Return = KelyraType(Function.Return);
+    if (!Return)
+      continue;
+    std::vector<std::string> Parameters;
+    for (const auto &Parameter : Function.Parameters) {
+      auto Name = KelyraType(Parameter);
+      if (!Name)
+        break;
+      Parameters.push_back(std::move(*Name));
+    }
+    if (Parameters.size() != Function.Parameters.size())
+      continue;
+    Source << "pub fn " << Function.Name << '(';
+    for (std::size_t I = 0; I < Parameters.size(); ++I) {
+      if (I)
+        Source << ", ";
+      Source << "arg" << I << ": " << Parameters[I];
+    }
+    Source << ") -> " << *Return << " {\n  ";
+    if (*Return != "void")
+      Source << "return ";
+    Source << "c." << Function.Name << '(';
+    for (std::size_t I = 0; I < Parameters.size(); ++I) {
+      if (I)
+        Source << ", ";
+      Source << "arg" << I;
+    }
+    Source << ");\n}\n\n";
+  }
+  return Source.str();
 }

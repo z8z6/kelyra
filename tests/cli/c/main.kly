@@ -1,7 +1,8 @@
-module app.c_call;
+module main;
 import c "print.h";
 import c.*;
 
+@main
 pub fn main() -> i32 {
   print();
   return 0;

@@ -1,0 +1,29 @@
+import reflected.library;
+import std.reflect;
+
+@main
+fn run() -> i32 {
+  let box = reflected.library.Box();
+  box.value = 11;
+  let info = std.reflect.type_of<reflected.library.Box>();
+  if !info.has_field("value") || !info.has_field("secret") ||
+     info.has_field("ignored") { return 1; }
+  let found = info.field("value");
+  if !found.ok { return 2; }
+  let field = found.value();
+  if field.type().id != std.reflect.type_of<i32>().id { return 3; }
+  let object = std.reflect.value<reflected.library.Box>(&box);
+  let before = std.reflect.read<i32>(field, object);
+  if !before.ok || before.value() != 11 { return 4; }
+  let written = std.reflect.write<i32>(field, object, 42);
+  if !written.ok || box.value != 42 { return 5; }
+  let private_field = info.field("secret");
+  if !private_field.ok { return 7; }
+  let changed = std.reflect.write<u64>(private_field.value(), object, 77);
+  if !changed.ok { return 8; }
+  let private_value = std.reflect.read<u64>(private_field.value(), object);
+  if !private_value.ok || private_value.value() != 77 { return 9; }
+  let sparse = std.reflect.type_of<reflected.library.Sparse>();
+  if sparse.has_field("ignored") || !sparse.has_field("selected") { return 6; }
+  return 0;
+}

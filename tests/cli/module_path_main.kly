@@ -1,6 +1,7 @@
-module app.module_path_main;
+module module_path_main;
 import external.util;
 
+@main
 pub fn main() -> i32 {
   return external.util.answer();
 }

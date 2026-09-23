@@ -3,11 +3,64 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstdint>
 #include <functional>
 #include <limits>
 
 using namespace kelyra;
 using K = lex::TokenKind;
+
+namespace {
+unsigned CFieldAlignment(const sema::Type &Type) {
+  using T = sema::BuiltinType;
+  if (Type.IsPointer() || Type.IsFunction())
+    return alignof(void *);
+  if (Type.IsRecord())
+    return Type.Alignment;
+  switch (Type.Element) {
+  case T::I8:
+  case T::U8:
+  case T::CChar:
+  case T::CSChar:
+  case T::CUChar:
+    return alignof(char);
+  case T::I16:
+  case T::U16:
+  case T::CShort:
+    return alignof(short);
+  case T::I32:
+  case T::U32:
+  case T::CInt:
+  case T::CUInt:
+    return alignof(int);
+  case T::I64:
+  case T::U64:
+  case T::CLongLong:
+    return alignof(long long);
+  case T::CLong:
+    return alignof(long);
+  case T::ISize:
+  case T::CPtrdiff:
+    return alignof(std::ptrdiff_t);
+  case T::USize:
+  case T::CSize:
+    return alignof(std::size_t);
+  case T::F32:
+  case T::CFloat:
+    return alignof(float);
+  case T::F64:
+  case T::CDouble:
+    return alignof(double);
+  case T::Bool:
+  case T::CBool:
+    return alignof(bool);
+  case T::CWChar:
+    return alignof(wchar_t);
+  default:
+    return 0;
+  }
+}
+} // namespace
 
 void sema::Sema::CheckClassLayouts() {
   std::unordered_map<std::string, unsigned> States;
@@ -22,9 +75,34 @@ void sema::Sema::CheckClassLayouts() {
     std::uint64_t Size = 0;
     unsigned Alignment = 1;
     unsigned LayoutIndex = 0;
+    if (Class.CLayout && Class.Fields.empty()) {
+      Error(*Class.Node, lex::DiagnosticKind::InvalidClass);
+      return false;
+    }
     for (auto &Field : Class.Fields) {
       if (Field.Value.IsClass() && !Visit(Classes.at(Field.Value.ClassName)))
         return false;
+      if (Field.Value.IsClass()) {
+        const auto &Child = Classes.at(Field.Value.ClassName);
+        if (Child.Module != Class.Module &&
+            (!Child.Public || (Child.Copy && !IsPublic(*Child.Copy)) ||
+             (Child.Move && !IsPublic(*Child.Move)))) {
+          Error(*Field.Node, lex::DiagnosticKind::PrivateDeclaration);
+          return false;
+        }
+      }
+      if (Class.CLayout) {
+        auto Element = Field.Value;
+        while (Element.IsArray())
+          Element = Element.Indexed();
+        if ((!Element.IsPointer() && Element.IsClass() &&
+             !Classes.at(Element.ClassName).CLayout) ||
+            Element.IsFunction() || Element.IsResults() || Element.IsVoid() ||
+            (!Element.IsClass() && !CFieldAlignment(Element))) {
+          Error(*Field.Node, lex::DiagnosticKind::UnsupportedType);
+          return false;
+        }
+      }
       // A generated default constructor constructs class fields by calling
       // their own default constructor, which must exist and be reachable.
       if (Field.Value.IsClass() && !Class.Constructor) {
@@ -66,6 +144,8 @@ void sema::Sema::CheckClassLayouts() {
         FieldSize = Child.Size;
         FieldAlignment = Child.Alignment;
       }
+      if (Class.CLayout && !Element.IsClass())
+        FieldAlignment = CFieldAlignment(Element);
       if (!FieldAlignment)
         FieldAlignment = std::min<std::uint64_t>(
             16, std::bit_ceil(std::max<std::uint64_t>(1, FieldSize)));
@@ -119,7 +199,10 @@ void sema::Sema::CheckClassMember(const lex::Node &Member,
   Scopes.clear();
   Scopes.emplace_back();
   CurrentClass = Class.QualifiedName;
-  CurrentConstructor = Member.kind == K::ast_constructor ? &Member : nullptr;
+  CurrentConstructor = Member.kind == K::ast_constructor ||
+                               Class.Copy == &Member || Class.Move == &Member
+                           ? &Member
+                           : nullptr;
   InitializedFields = 0;
   InDestructor = Member.kind == K::ast_destructor;
   Type Receiver{BuiltinType::Class, {}};
@@ -137,8 +220,12 @@ void sema::Sema::CheckClassMember(const lex::Node &Member,
     } else if (Child->kind == K::ast_block)
       Body = Child.get();
   }
-  if (!Body)
+  if (!Body) {
+    CurrentConstructor = nullptr;
+    CurrentClass.clear();
+    InDestructor = false;
     return;
+  }
 
   if (CurrentConstructor) {
     Scopes.emplace_back();
@@ -171,8 +258,11 @@ void sema::Sema::CheckClassMember(const lex::Node &Member,
         ConstructionContext = &Value;
         auto ValueType = CheckExpression(Value, TargetType);
         ConstructionContext = nullptr;
-        if (TargetType && TargetType->IsClass() && !GetConstructorCall(Value))
+        if (TargetType && TargetType->IsClass() &&
+            (!ValueType || *ValueType != *TargetType))
           Error(Value, lex::DiagnosticKind::ClassValueOperation);
+        if (TargetType && TargetType->IsClass() && ValueType)
+          CheckTransferAccess(*TargetType, IsClassTemporary(Value), Value);
         ++InitializedFields;
       } else {
         CheckStatement(Statement, 0);
@@ -187,4 +277,18 @@ void sema::Sema::CheckClassMember(const lex::Node &Member,
   CurrentConstructor = nullptr;
   CurrentClass.clear();
   InDestructor = false;
+}
+
+void sema::Sema::CheckTransferAccess(const Type &Value, bool Move,
+                                     const lex::Node &Site) {
+  if (!Value.IsClass())
+    return;
+  const auto *Class = GetClass(Value);
+  const auto &AccessModule =
+      Value.GenericArgument ? Value.GenericOriginModule : CurrentModule;
+  if (!Class || Class->Module == AccessModule)
+    return;
+  const auto *Method = Move ? Class->Move : Class->Copy;
+  if (!Class->Public || (Method && !IsPublic(*Method)))
+    Error(Site, lex::DiagnosticKind::PrivateDeclaration);
 }

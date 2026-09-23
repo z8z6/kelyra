@@ -1,6 +1,7 @@
 import c "c/trace.h";
 import modules.callbacks;
 
+@main
 fn main() -> i32 {
   let imported = modules.callbacks.factory();
   if imported(41) != 42 {

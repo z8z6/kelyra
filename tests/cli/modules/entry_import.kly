@@ -1,0 +1,2 @@
+module entry_import;
+import entry_impl;

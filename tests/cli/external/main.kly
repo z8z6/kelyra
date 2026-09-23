@@ -1,5 +1,6 @@
 import external.math;
 
+@main
 pub fn main() -> i32 {
   let counter = external.math.Counter(40);
   counter.add(2);

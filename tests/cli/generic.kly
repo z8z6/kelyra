@@ -1,0 +1,19 @@
+class Box<T> {
+  value: T;
+
+  init(value: T) { this.value = value; }
+
+  fn get() -> T { return value; }
+}
+
+fn identity<T>(value: T) -> T { return value; }
+
+fn make<T>(value: T) -> Box<T> { return Box<T>(value); }
+
+@main
+fn launch() -> i32 {
+  let first: Box<i32> = make<i32>(1);
+  let second: Box<i32> = Box<i32>(identity<i32>(1));
+  let big: Box<i64> = make<i64>(40);
+  return first.get() + second.get() + big.get() as i32;
+}

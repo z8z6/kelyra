@@ -1,0 +1,10 @@
+@interface class Answer {
+  const VALUE: i32 = 40 + 2;
+  fn missing() -> i32;
+  fn ready() -> bool { return true; }
+}
+
+@main
+fn main() -> i32 {
+  return Answer.VALUE;
+}

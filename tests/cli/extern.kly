@@ -1,0 +1,12 @@
+@extern("getpid")
+@callconv("c")
+fn process_id() -> c.int;
+
+@main
+fn main() -> i32 {
+  let pid: c.int = process_id();
+  if pid > 0 {
+    return 42;
+  }
+  return 1;
+}

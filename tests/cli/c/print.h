@@ -14,5 +14,7 @@ Pair *pair_pointer(void);
 int sum_pair_pointer(const Pair *pair);
 int sum_many(int count, ...);
 int print_format(const char *format, ...);
+float float_add(float left, float right);
+double double_add(double left, double right);
 
 #endif

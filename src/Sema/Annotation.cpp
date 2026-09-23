@@ -1,5 +1,6 @@
 #include "Sema/Sema.h"
 #include "SemaInternal.h"
+#include "Support/BuiltinAnnotation.h"
 
 #include <algorithm>
 #include <unordered_set>
@@ -31,6 +32,17 @@ bool IsAnnotationType(std::string_view Name) {
 void sema::Sema::RegisterAnnotation(const lex::Node &Declaration,
                                     std::string_view Module) {
   using K = lex::TokenKind;
+  if (Module != BuiltinAnnotationModule &&
+      (Declaration.text == "layout" || Declaration.text == "cfg" ||
+       Declaration.text == "extern" || Declaration.text == "callconv" ||
+       Declaration.text == "interface" || Declaration.text == "main" ||
+       Declaration.text == "reflect" ||
+       Declaration.text == "inline" || Declaration.text == "deprecated" ||
+       Declaration.text == "target" || Declaration.text == "repeatable" ||
+       Declaration.text == "retention")) {
+    Error(Declaration, lex::DiagnosticKind::InvalidAnnotation);
+    return;
+  }
   AnnotationInfo Info;
   Info.Node = &Declaration;
   Info.Module = Module;
@@ -144,8 +156,12 @@ sema::Sema::ParseAnnotationValue(const lex::Node &Expression,
     if (Name->find('.') == std::string::npos && !CurrentModule.empty())
       Key = CurrentModule + "." + *Name;
     const auto Function = Functions.find(Key);
-    if (Function == Functions.end() || !Function->second.Node)
+    if (Function == Functions.end() || !Function->second.Node) {
+      if (ExpectedType == "meta.symbol" &&
+          (*Name == "auto" || *Name == "always"))
+        return AnnotationValue{AnnotationValueKind::Symbol, std::move(*Name)};
       return std::nullopt;
+    }
     if (Function->second.Module != CurrentModule) {
       const auto Import = Imports.find(CurrentModule);
       if (!Function->second.Public || Import == Imports.end() ||
@@ -203,13 +219,13 @@ void sema::Sema::CheckAnnotationDefinition(const lex::Node &Declaration) {
   for (const auto &Child : Declaration.children) {
     if (Child->kind != K::ast_annotation)
       continue;
-    if (Child->text == "repeatable") {
+    if (IsBuiltinAnnotation(Child->text, "repeatable")) {
       if (Info.Repeatable || !Child->children.empty())
         Error(*Child, lex::DiagnosticKind::InvalidAnnotation);
       Info.Repeatable = true;
       continue;
     }
-    if (Child->text == "target") {
+    if (IsBuiltinAnnotation(Child->text, "target")) {
       if (HasTarget || Child->children.empty()) {
         Error(*Child, lex::DiagnosticKind::InvalidAnnotation);
         continue;
@@ -242,7 +258,7 @@ void sema::Sema::CheckAnnotationDefinition(const lex::Node &Declaration) {
       }
       continue;
     }
-    if (Child->text == "retention") {
+    if (IsBuiltinAnnotation(Child->text, "retention")) {
       if (HasRetention || Child->children.size() != 1 ||
           !Child->children.front()->text.empty() ||
           Child->children.front()->children.size() != 1 ||
@@ -270,11 +286,20 @@ void sema::Sema::CheckAnnotationDefinition(const lex::Node &Declaration) {
 const sema::Sema::AnnotationInfo *
 sema::Sema::ResolveAnnotation(const lex::Node &Annotation) const {
   auto Name = QualifiedName(Annotation);
-  std::string Key = Name ? *Name : Annotation.text;
+  const std::string Original = Name ? *Name : Annotation.text;
+  std::string Key = Original;
   if (Key.find('.') == std::string::npos && !CurrentModule.empty())
     Key = CurrentModule + "." + Key;
   const auto It = AnnotationDeclarations.find(Key);
-  return It == AnnotationDeclarations.end() ? nullptr : &It->second;
+  if (It != AnnotationDeclarations.end())
+    return &It->second;
+  if (Original.find('.') == std::string::npos) {
+    const auto Builtin =
+        AnnotationDeclarations.find("std.annotation." + Original);
+    if (Builtin != AnnotationDeclarations.end())
+      return &Builtin->second;
+  }
+  return nullptr;
 }
 
 void sema::Sema::CheckAnnotations(const lex::Node &Target) {
@@ -284,20 +309,61 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
           ? (Reflection.Get(*Reflection.GetId(Target)).Kind == MetaKind::Method
                  ? AnnotationMethod
                  : AnnotationFunction)
-      : Target.kind == K::ast_field       ? AnnotationField
+      : Target.kind == K::ast_field || Target.kind == K::ast_const_field
+          ? AnnotationField
       : Target.kind == K::ast_constructor ? AnnotationConstructor
       : Target.kind == K::ast_destructor  ? AnnotationDestructor
       : Target.kind == K::ast_class       ? AnnotationClass
                                           : AnnotationDeclaration;
   std::unordered_set<const lex::Node *> Seen;
+  bool SeenInterface = false;
   for (const auto &Annotation : Target.children) {
     if (Annotation->kind != K::ast_annotation)
       continue;
-    if (Target.kind == K::ast_annotation_decl &&
-        (Annotation->text == "target" || Annotation->text == "repeatable" ||
-         Annotation->text == "retention"))
+    const auto *Resolved = ResolveAnnotation(*Annotation);
+    if (!Resolved && (IsBuiltinAnnotation(Annotation->text, "interface") ||
+                      IsBuiltinAnnotation(Annotation->text, "layout") ||
+                      IsBuiltinAnnotation(Annotation->text, "extern") ||
+                      IsBuiltinAnnotation(Annotation->text, "callconv") ||
+                      IsBuiltinAnnotation(Annotation->text, "main") ||
+                      IsBuiltinAnnotation(Annotation->text, "reflect") ||
+                      IsBuiltinAnnotation(Annotation->text, "inline") ||
+                      IsBuiltinAnnotation(Annotation->text, "deprecated") ||
+                      IsBuiltinAnnotation(Annotation->text, "target") ||
+                      IsBuiltinAnnotation(Annotation->text, "repeatable") ||
+                      IsBuiltinAnnotation(Annotation->text, "retention"))) {
+      Error(*Annotation, lex::DiagnosticKind::UnknownAnnotation);
       continue;
-    const auto *Info = ResolveAnnotation(*Annotation);
+    }
+    if (IsBuiltinAnnotation(Annotation->text, "interface")) {
+      if (Target.kind != K::ast_class)
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
+      if (!Annotation->children.empty() || SeenInterface)
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotation);
+      SeenInterface = true;
+      continue;
+    }
+    if (IsBuiltinAnnotation(Annotation->text, "layout")) {
+      if (Target.kind != K::ast_class)
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
+      continue;
+    }
+    if (IsBuiltinAnnotation(Annotation->text, "extern")) {
+      if (Target.kind != K::ast_function)
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
+      continue;
+    }
+    if (IsBuiltinAnnotation(Annotation->text, "callconv")) {
+      if (Target.kind != K::ast_function)
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
+      continue;
+    }
+    if (Target.kind == K::ast_annotation_decl &&
+        (IsBuiltinAnnotation(Annotation->text, "target") ||
+         IsBuiltinAnnotation(Annotation->text, "repeatable") ||
+         IsBuiltinAnnotation(Annotation->text, "retention")))
+      continue;
+    const auto *Info = Resolved;
     if (!Info) {
       Error(*Annotation, lex::DiagnosticKind::UnknownAnnotation);
       continue;
@@ -306,7 +372,12 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
       Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
       continue;
     }
-    if (Info->Module != CurrentModule) {
+    if (Info->Module == BuiltinAnnotationModule &&
+        Info->Node->text == "reflect" && Target.kind == K::ast_const_field) {
+      Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
+      continue;
+    }
+    if (Info->Module != CurrentModule && Info->Module != "std.annotation") {
       const auto Import = Imports.find(CurrentModule);
       if (!Info->Public || Import == Imports.end() ||
           (!Import->second.contains(Info->Module) &&
@@ -377,6 +448,24 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
       }
       Instance.Arguments.push_back(
           {Info->Parameters[I].Name, std::move(*Values[I])});
+    }
+    if (!Invalid && Info->Module == BuiltinAnnotationModule &&
+        Info->Node->text == "inline" &&
+        (Instance.Arguments.empty() ||
+         (Instance.Arguments.front().Value.Text != "auto" &&
+          Instance.Arguments.front().Value.Text != "always"))) {
+      Error(*Annotation, lex::DiagnosticKind::InvalidAnnotation);
+      Invalid = true;
+    }
+    if (!Invalid && Info->Module == BuiltinAnnotationModule &&
+        Info->Node->text == "inline" &&
+        Instance.Arguments.front().Value.Text == "always" &&
+        !std::any_of(Target.children.begin(), Target.children.end(),
+                     [](const auto &Child) {
+                       return Child->kind == K::ast_block;
+                     })) {
+      Error(*Annotation, lex::DiagnosticKind::InvalidAnnotation);
+      Invalid = true;
     }
     if (!Invalid && Info->Retention == AnnotationRetention::Compile)
       AnnotationInstances[&Target].push_back(std::move(Instance));

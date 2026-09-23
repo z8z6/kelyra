@@ -1,3 +1,4 @@
+@main
 fn main() -> i32 {
   let values: [2][2]i32;
   return values[2][0];

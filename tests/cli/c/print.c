@@ -36,3 +36,7 @@ int print_format(const char *format, ...) {
   va_end(args);
   return result;
 }
+
+float float_add(float left, float right) { return left + right; }
+
+double double_add(double left, double right) { return left + right; }

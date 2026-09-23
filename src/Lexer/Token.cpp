@@ -25,6 +25,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "fn";
   case TokenKind::keyword_class:
     return "class";
+  case TokenKind::keyword_const:
+    return "const";
   case TokenKind::keyword_this:
     return "this";
   case TokenKind::keyword_annotation:
@@ -49,6 +51,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "meta";
   case TokenKind::keyword_when:
     return "when";
+  case TokenKind::keyword_as:
+    return "as";
   case TokenKind::keyword_parallel:
     return "parallel";
   case TokenKind::keyword_extern:
@@ -141,10 +145,18 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "AnnotationArgument";
   case TokenKind::ast_function:
     return "Function";
+  case TokenKind::ast_generic_parameter:
+    return "GenericParameter";
+  case TokenKind::ast_generic_type:
+    return "GenericType";
+  case TokenKind::ast_generic_apply:
+    return "GenericApply";
   case TokenKind::ast_parameter:
     return "Parameter";
   case TokenKind::ast_class:
     return "Class";
+  case TokenKind::ast_const_field:
+    return "ConstField";
   case TokenKind::ast_field:
     return "Field";
   case TokenKind::ast_constructor:
@@ -199,6 +211,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Unary";
   case TokenKind::ast_binary:
     return "Binary";
+  case TokenKind::ast_cast:
+    return "Cast";
   case TokenKind::ast_call:
     return "Call";
   case TokenKind::ast_index:

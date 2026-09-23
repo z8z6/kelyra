@@ -88,6 +88,7 @@ sema::Sema::CheckFunctionValue(const lex::Node &Node,
     return std::nullopt;
   }
   FunctionValues[&Node] = Info.Symbol;
+  WarnIfDeprecated(Node, Info.Node);
   return FinishExpression(Node, Result, Expected);
 }
 

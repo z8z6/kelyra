@@ -34,6 +34,7 @@ enum class SymbolType {
   Field,
   Parameter,
   Variable,
+  Annotation,
   Module
 };
 
@@ -239,7 +240,9 @@ struct Document {
         SawKeyword = true;
         continue;
       }
-      if (SawKeyword && Token.kind == lex::TokenKind::name &&
+      if (SawKeyword &&
+          (Token.kind == lex::TokenKind::name ||
+           Token.kind == lex::TokenKind::keyword_extern) &&
           Spelling(Token) == Node.text)
         return {Token.Loc.Offset, Token.Loc.Len};
     }
@@ -251,6 +254,7 @@ struct Document {
     for (const auto &Candidate : Symbols) {
       const bool Forward = Candidate.Kind == SymbolType::Function ||
                            Candidate.Kind == SymbolType::Class ||
+                           Candidate.Kind == SymbolType::Annotation ||
                            Candidate.Kind == SymbolType::Method ||
                            Candidate.Kind == SymbolType::Field;
       if (Candidate.Name != Name ||
@@ -413,20 +417,26 @@ struct Document {
 
     const Span FileScope{0, Parsed.source.size()};
     for (const auto &Node : Parsed.root->children) {
-      if (Node->kind != K::ast_function && Node->kind != K::ast_class)
+      if (Node->kind != K::ast_function && Node->kind != K::ast_class &&
+          Node->kind != K::ast_annotation_decl)
         continue;
       const bool IsFunction = Node->kind == K::ast_function;
+      const bool IsAnnotation = Node->kind == K::ast_annotation_decl;
       const auto Definition =
-          FindDeclaration(*Node, IsFunction ? K::keyword_fn : K::keyword_class);
+          FindDeclaration(*Node, IsFunction     ? K::keyword_fn
+                                 : IsAnnotation ? K::keyword_annotation
+                                                : K::keyword_class);
       bool IsPublic = false;
       std::string ReturnType;
-      std::string Detail =
-          IsFunction ? "fn " + Node->text + "(" : "class " + Node->text;
+      std::string Detail = IsFunction     ? "fn " + Node->text + "("
+                           : IsAnnotation ? "annotation " + Node->text + "("
+                                          : "class " + Node->text;
       bool First = true;
       for (const auto &Child : Node->children) {
         if (Child->kind == K::ast_public)
           IsPublic = true;
-        if (Child->kind == K::ast_parameter) {
+        if (Child->kind == K::ast_parameter ||
+            Child->kind == K::ast_annotation_parameter) {
           if (!First)
             Detail += ", ";
           Detail += Child->text + ": " + TypeName(*Child->children.front());
@@ -435,16 +445,18 @@ struct Document {
           ReturnType = TypeName(*Child);
         }
       }
-      if (IsFunction) {
+      if (IsFunction || IsAnnotation) {
         Detail += ")";
-        if (!ReturnType.empty())
+        if (IsFunction && !ReturnType.empty())
           Detail += " -> " + ReturnType;
       }
-      Symbols.push_back({IsFunction ? SymbolType::Function : SymbolType::Class,
+      Symbols.push_back({IsFunction     ? SymbolType::Function
+                         : IsAnnotation ? SymbolType::Annotation
+                                        : SymbolType::Class,
                          Node->text, IsFunction ? ReturnType : Node->text,
                          Detail, Module, Definition, FileScope, IsPublic});
       Symbols.back().Documentation = DocumentationAt(Node->Loc.Offset);
-      if (!IsFunction) {
+      if (!IsFunction && !IsAnnotation) {
         const Span ClassScope{Node->Loc.Offset, Node->Loc.Len};
         for (const auto &Member : Node->children) {
           if (Member->kind == K::ast_public ||
@@ -705,7 +717,8 @@ class Server {
     for (std::size_t I = 0; I < Doc.Parsed.tokens.size(); ++I) {
       const auto &Token = Doc.Parsed.tokens[I];
       if ((Token.kind == lex::TokenKind::name ||
-           Token.kind == lex::TokenKind::keyword_this) &&
+           Token.kind == lex::TokenKind::keyword_this ||
+           Token.kind == lex::TokenKind::keyword_extern) &&
           Offset >= Token.Loc.Offset && Offset <= Token.Loc.End()) {
         if (Index)
           *Index = I;
@@ -717,11 +730,15 @@ class Server {
 
   std::pair<std::string, std::string>
   QualifiedName(const Document &Doc, std::size_t TokenIndex) const {
+    const auto IsPart = [](lex::TokenKind Kind) {
+      return Kind == lex::TokenKind::name ||
+             Kind == lex::TokenKind::keyword_annotation;
+    };
     std::vector<std::string> Parts{
         std::string(Doc.Spelling(Doc.Parsed.tokens[TokenIndex]))};
     while (TokenIndex >= 2 &&
            Doc.Parsed.tokens[TokenIndex - 1].kind == lex::TokenKind::punc_dot &&
-           (Doc.Parsed.tokens[TokenIndex - 2].kind == lex::TokenKind::name ||
+           (IsPart(Doc.Parsed.tokens[TokenIndex - 2].kind) ||
             Doc.Parsed.tokens[TokenIndex - 2].kind ==
                 lex::TokenKind::keyword_this)) {
       Parts.push_back(
@@ -798,24 +815,35 @@ class Server {
     if (!Token)
       return {};
     const auto [Qualifier, Name] = QualifiedName(Doc, TokenIndex);
+    std::size_t AnnotationStart = TokenIndex;
+    while (
+        AnnotationStart >= 2 &&
+        Doc.Parsed.tokens[AnnotationStart - 1].kind ==
+            lex::TokenKind::punc_dot &&
+        (Doc.Parsed.tokens[AnnotationStart - 2].kind == lex::TokenKind::name ||
+         Doc.Parsed.tokens[AnnotationStart - 2].kind ==
+             lex::TokenKind::keyword_annotation))
+      AnnotationStart -= 2;
+    const bool AnnotationUse =
+        AnnotationStart > 0 &&
+        Doc.Parsed.tokens[AnnotationStart - 1].kind == lex::TokenKind::punc_at;
     if (!Qualifier.empty()) {
       const auto Type = ReceiverType(Doc, Qualifier, Offset);
       if (!Type.empty())
         return FindMember(Doc, Type, Name);
     }
     if (Qualifier.empty()) {
-      if (const auto *Local = Doc.FindVisible(Name, Offset))
+      if (const auto *Local = Doc.FindVisible(Name, Offset);
+          Local && ((Local->Kind == SymbolType::Annotation) == AnnotationUse ||
+                    Local->Definition.Offset == Token->Loc.Offset))
         return {&Doc, Local};
     }
-    const Document *FallbackDoc = nullptr;
-    const Symbol *Fallback = nullptr;
-    const Document *ImportedDoc = nullptr;
-    const Symbol *Imported = nullptr;
     for (const auto &[Path, CandidateDoc] : Documents) {
       for (const auto &Candidate : CandidateDoc.Symbols) {
         if (Candidate.Name != Name || !Candidate.Owner.empty() ||
             Candidate.Kind == SymbolType::Variable ||
-            Candidate.Kind == SymbolType::Parameter)
+            Candidate.Kind == SymbolType::Parameter ||
+            (Candidate.Kind == SymbolType::Annotation) != AnnotationUse)
           continue;
         if (!Qualifier.empty() && Candidate.Module != Qualifier)
           continue;
@@ -823,25 +851,20 @@ class Server {
           return {&CandidateDoc, &Candidate};
         if (!Candidate.Public)
           continue;
-        // A name from an imported module beats any other public symbol now
-        // that dependency sources are indexed too.
-        if (Qualifier.empty() && !Imported &&
+        const bool Imported =
             std::any_of(Doc.ImportRefs.begin(), Doc.ImportRefs.end(),
                         [&](const Document::ImportRef &Ref) {
-                          return Ref.Module == Candidate.Module;
-                        })) {
-          ImportedDoc = &CandidateDoc;
-          Imported = &Candidate;
-        }
-        if (!Fallback) {
-          FallbackDoc = &CandidateDoc;
-          Fallback = &Candidate;
-        }
+                          return Ref.Module == Candidate.Module &&
+                                 (!Qualifier.empty() || Ref.Wildcard);
+                        });
+        const bool ImplicitBuiltin =
+            AnnotationUse && Candidate.Module == "std.annotation" &&
+            (Qualifier.empty() || Qualifier == "std.annotation");
+        if (Imported || ImplicitBuiltin)
+          return {&CandidateDoc, &Candidate};
       }
     }
-    if (Imported)
-      return {ImportedDoc, Imported};
-    return {FallbackDoc, Fallback};
+    return {};
   }
 
   // True when `Name` names a declaration of this document or of a module it
@@ -1047,7 +1070,9 @@ class Server {
         Resolve(Params.textDocument.uri, Params.position);
     if (Symbol && (Symbol->Kind == SymbolType::Variable ||
                    Symbol->Kind == SymbolType::Parameter || TargetDoc == &Doc ||
-                   HasImportedSymbol(Doc, Symbol->Name)))
+                   HasImportedSymbol(Doc, Symbol->Name) ||
+                   (Symbol->Kind == SymbolType::Annotation &&
+                    TargetDoc->Module == "std.annotation")))
       return Location{TargetDoc->Uri, TargetDoc->ToRange(Symbol->Definition)};
     std::size_t TokenIndex = 0;
     if (const auto *Token = TokenAt(Doc, Offset, &TokenIndex)) {
@@ -1060,8 +1085,6 @@ class Server {
           if (auto Location = LocationOf(*Found))
             return Location;
     }
-    if (Symbol)
-      return Location{TargetDoc->Uri, TargetDoc->ToRange(Symbol->Definition)};
     return std::nullopt;
   }
 
@@ -1171,13 +1194,22 @@ public:
     } else if (Params.rootPath) {
       Root = *Params.rootPath;
     }
-    if (Root.empty())
+    if (Root.empty()) {
+#ifdef KELYRA_STDLIB_SOURCE_DIR
+      IndexSources(KELYRA_STDLIB_SOURCE_DIR);
+#endif
       return;
+    }
     // Members, cached clones, and local path dependencies all contribute
     // modules the compiler can see, so index everything the manifests reach.
     std::set<std::string> Visited;
     LoadProject(WorkspaceRoot(Root), Visited);
     LoadProject(Root, Visited);
+#ifdef KELYRA_STDLIB_SOURCE_DIR
+    // Compiler builtins such as std.annotation are implicitly available even
+    // when a Kelp project does not declare kstd as a path dependency.
+    IndexSources(KELYRA_STDLIB_SOURCE_DIR);
+#endif
   }
 
   std::vector<Diagnostic> Open(const TextDocumentItem &Item) {
@@ -1256,7 +1288,13 @@ public:
     const auto [Doc, Found] = Resolve(Params.textDocument.uri, Params.position);
     if (!Doc || !Found)
       return std::nullopt;
-    Hover Result(Doc->ToRange(Found->Definition));
+    // LSP Hover.range is a range in the *requesting* document, not the target
+    // declaration. An external definition span can highlight unrelated code.
+    const auto &Current = Documents.at(Params.textDocument.uri.file().str());
+    const auto Offset = OffsetAt(Current.Parsed.source, Params.position);
+    const auto *Token = TokenAt(Current, Offset);
+    Hover Result(Current.ToRange(Token ? Span{Token->Loc.Offset, Token->Loc.Len}
+                                       : Span{Offset, 1}));
     Result.contents.value = "```kelyra\n" + Found->Detail + "\n```";
     if (!Found->Documentation.empty())
       Result.contents.value += "\n\n" + Found->Documentation;
@@ -1424,6 +1462,9 @@ public:
       if (Child->kind == lex::TokenKind::ast_function) {
         Result.push_back(
             Make(*Child, SymbolKind::Function, lex::TokenKind::keyword_fn));
+      } else if (Child->kind == lex::TokenKind::ast_annotation_decl) {
+        Result.push_back(Make(*Child, SymbolKind::Class,
+                              lex::TokenKind::keyword_annotation));
       } else if (Child->kind == lex::TokenKind::ast_class) {
         auto Class =
             Make(*Child, SymbolKind::Class, lex::TokenKind::keyword_class);

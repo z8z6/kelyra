@@ -326,6 +326,72 @@ imports = receive(25)
 assert len(imports) == 1 and imports[0]["uri"] == app_uri
 assert imports[0]["range"]["start"]["line"] == 2
 
+# Built-in annotations are implicitly available from std.annotation, and
+# ordinary std functions resolve even when the project omits a kstd dependency.
+std_source = """module app.std_use;
+import std.math.integer;
+annotation local();
+@local fn declared() -> i64 { return 1; }
+@cfg(os="linux") fn platform() -> i64 {
+  return std.math.integer.abs_i64(-4);
+}
+@std.annotation.main fn entry() {}
+"""
+std_uri = (workspace / "app/src/std_use.kly").as_uri()
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": std_uri, "languageId": "kelyra", "version": 1,
+                     "text": std_source}}})
+annotation_uri = (pathlib.Path(__file__).resolve().parents[3] /
+                  "kstd/src/std/annotation.kly").as_uri()
+send({"jsonrpc": "2.0", "id": 31, "method": "textDocument/documentSymbol", "params": {
+    "textDocument": {"uri": annotation_uri}}})
+assert "cfg" in {symbol["name"] for symbol in receive(31)}
+annotation_source = pathlib.Path(annotation_uri.removeprefix("file://")).read_text()
+send({"jsonrpc": "2.0", "id": 32, "method": "textDocument/hover", "params": {
+    "textDocument": {"uri": annotation_uri},
+    "position": position_in(annotation_source, "cfg(", 1)}})
+assert receive(32), "indexed annotation has no symbol"
+for request_id, needle, expected_suffix in [
+    (26, "@local", "/app/src/std_use.kly"),
+    (27, "@cfg", "/std/annotation.kly"),
+    (28, "abs_i64(-4)", "/std/math/integer.kly"),
+    (33, "@std.annotation.main", "/std/annotation.kly"),
+]:
+    send({"jsonrpc": "2.0", "id": request_id,
+          "method": "textDocument/definition", "params": {
+              "textDocument": {"uri": std_uri},
+              "position": position_in(std_source, needle,
+                                       16 if needle == "@std.annotation.main"
+                                       else 3 if needle == "abs_i64(-4)" else 2)}})
+    results = receive(request_id)
+    assert results, (request_id, needle)
+    target = results[0]
+    assert target["uri"].endswith(expected_suffix), target
+send({"jsonrpc": "2.0", "id": 29, "method": "textDocument/hover", "params": {
+    "textDocument": {"uri": std_uri},
+    "position": position_in(std_source, "abs_i64(-4)", 3)}})
+std_hover = receive(29)
+assert std_hover["range"]["start"]["line"] == 5
+assert std_hover["range"]["start"]["character"] == position_in(
+    std_source, "abs_i64(-4)", 0)["character"]
+
+io_path = pathlib.Path(__file__).resolve().parents[3] / "kstd/src/std/io.kly"
+io_source = io_path.read_text()
+send({"jsonrpc": "2.0", "id": 34, "method": "textDocument/definition", "params": {
+    "textDocument": {"uri": io_path.as_uri()},
+    "position": position_in(io_source, "std.io.linux.read_stdin", 16)}})
+assert receive(34)[0]["uri"].endswith("/std/io/linux.kly")
+
+unimported = "fn unknown() -> i64 { return abs_i64(-4); }\n"
+unimported_uri = (workspace / "app/src/unimported.kly").as_uri()
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": unimported_uri, "languageId": "kelyra", "version": 1,
+                     "text": unimported}}})
+send({"jsonrpc": "2.0", "id": 30, "method": "textDocument/definition", "params": {
+    "textDocument": {"uri": unimported_uri},
+    "position": position_in(unimported, "abs_i64", 3)}})
+assert receive(30) == []
+
 send({"jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": None})
 receive(6)
 send({"jsonrpc": "2.0", "method": "exit", "params": None})

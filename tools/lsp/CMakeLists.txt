@@ -1,4 +1,6 @@
 add_executable(kelyra-ls main.cpp)
+target_compile_definitions(kelyra-ls PRIVATE
+  KELYRA_STDLIB_SOURCE_DIR="${KELYRA_STDLIB_SOURCE_DIR}")
 target_include_directories(kelyra-ls SYSTEM PRIVATE
   "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm/include"
   "${PROJECT_BINARY_DIR}/llvm/include"

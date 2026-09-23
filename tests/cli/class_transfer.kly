@@ -1,0 +1,33 @@
+class Box {
+  value: i32;
+}
+
+class Wrapper {
+  item: Box;
+}
+
+fn read(box: Box) -> i32 {
+  return box.value;
+}
+
+@main
+fn main() -> i32 {
+  let wrapper = Wrapper();
+  wrapper.item.value = 40;
+  let duplicate = wrapper;
+  if duplicate.item.value != 40 {
+    return 98;
+  }
+  let first = Box();
+  first.value = 20;
+  let second = first;
+  second.value = 21;
+  first = second;
+  first = first;
+  if first.value != 21 {
+    return 99;
+  }
+  first = Box();
+  first.value = 42;
+  return read(first);
+}

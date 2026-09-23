@@ -1,0 +1,8 @@
+@inline(always)
+fn increment(value: i32) -> i32 { return value + 1; }
+
+@deprecated("use increment")
+fn old_increment(value: i32) -> i32 { return increment(value); }
+
+@main
+fn launch() -> i32 { return old_increment(41); }

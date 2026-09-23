@@ -1,0 +1,14 @@
+module generated_user;
+
+import generated;
+
+@main
+pub fn main() -> i32 {
+  if generated.float_add(1.25, 2.75) != 4.0 {
+    return 1;
+  }
+  if generated.double_add(1.25, 2.75) != 4.0 {
+    return 2;
+  }
+  return generated.sum_pair(generated.make_pair(20, 22)) - 42;
+}

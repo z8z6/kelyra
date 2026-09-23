@@ -1,0 +1,4 @@
+module entry_impl;
+
+@main
+fn launch() -> i32 { return 42; }

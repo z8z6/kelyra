@@ -1,6 +1,7 @@
-module app.wildcard_main;
+module wildcard_main;
 import math.vector.*;
 
+@main
 pub fn main() -> i32 {
   return answer();
 }

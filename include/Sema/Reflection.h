@@ -63,6 +63,9 @@ struct MetaDeclaration {
   std::string QualifiedName;
   MetaId Module = InvalidMetaId;
   bool Public = false;
+  // Selected for future runtime reflection; compile-time metadata remains
+  // available for every declaration regardless of this flag.
+  bool RuntimeReflected = false;
   lex::Location Loc;
   std::vector<MetaId> Children;
   MetaId Type = InvalidMetaId;

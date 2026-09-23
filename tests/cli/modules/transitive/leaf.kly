@@ -1,0 +1,7 @@
+module transitive.leaf;
+
+pub class Leaf {
+  pub init() {}
+}
+
+pub fn answer() -> i32 { return 42; }

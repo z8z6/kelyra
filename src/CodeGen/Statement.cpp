@@ -1,5 +1,6 @@
 #include "CodeGen/IRGen.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -35,10 +36,16 @@ void codegen::IRGen::EmitBlock(const lex::Node &Block) {
         DebugScope, GetDebugFile(Block.Loc), Block.Loc.Line, Block.Loc.Column);
   Scopes.emplace_back();
   Cleanups.emplace_back();
-  for (const auto &Statement : Block.children) {
+  for (std::size_t Index = 0; Index < Block.children.size(); ++Index) {
+    const auto &Statement = Block.children[Index];
     if (HasTerminator(Builder.getInsertionBlock()))
       break;
+    const bool PreviousInitializing = InitializingField;
+    InitializingField = InTransferConstructor && CurrentClass &&
+                        Cleanups.size() == 2 &&
+                        Index < CurrentClass->Fields.size();
     EmitStatement(*Statement);
+    InitializingField = PreviousInitializing;
   }
   if (!HasTerminator(Builder.getInsertionBlock()))
     EmitCleanups(Cleanups.size() - 1, GetLocation(Block.Loc));
@@ -98,7 +105,16 @@ void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
                                      ? Statement.children.back().get()
                                      : nullptr;
   if (Type.IsClass()) {
-    EmitConstruction(*Initializer, Address);
+    const auto &Class = *Analysis.GetClass(Type);
+    if (Analysis.GetConstructorCall(*Initializer)) {
+      EmitConstruction(*Initializer, Address);
+    } else {
+      auto [Source, Temporary] = EmitClassSourceAddress(*Initializer);
+      EmitTransfer(Class, Address, Source, Temporary, Loc);
+      if (Temporary)
+        mlir::func::CallOp::create(Builder, Loc, Class.DestructorSymbol,
+                                   mlir::TypeRange{}, mlir::ValueRange{Source});
+    }
     Scopes.back().emplace(Name.text, Variable{Type, Address, {}});
     Cleanups.back().push_back({Analysis.GetClass(Type), Address});
     EmitDebugVariable(Name.text, Name.Loc, Type, Address);
@@ -117,6 +133,56 @@ void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
 void codegen::IRGen::EmitAssignStatement(const lex::Node &Statement) {
   const auto Loc = GetLocation(Statement.Loc);
   auto Address = EmitAddress(*Statement.children[0]);
+  const auto &TargetType = Analysis.GetType(*Statement.children[0]);
+  if (TargetType.IsClass()) {
+    if (InitializingField &&
+        Analysis.GetConstructorCall(*Statement.children[1])) {
+      EmitConstruction(*Statement.children[1], Address);
+      return;
+    }
+    const auto &Class = *Analysis.GetClass(TargetType);
+    auto [Source, Temporary] = EmitClassSourceAddress(*Statement.children[1]);
+    const auto Transfer = [&] {
+      if (InitializingField) {
+        EmitTransfer(Class, Address, Source, Temporary, Loc);
+      } else {
+        auto Staging = CreateAlloca(TargetType, Loc);
+        EmitTransfer(Class, Staging, Source, Temporary, Loc);
+        mlir::func::CallOp::create(Builder, Loc, Class.DestructorSymbol,
+                                   mlir::TypeRange{},
+                                   mlir::ValueRange{Address});
+        EmitTransfer(Class, Address, Staging, true, Loc);
+        mlir::func::CallOp::create(Builder, Loc, Class.DestructorSymbol,
+                                   mlir::TypeRange{},
+                                   mlir::ValueRange{Staging});
+      }
+      if (Temporary)
+        mlir::func::CallOp::create(Builder, Loc, Class.DestructorSymbol,
+                                   mlir::TypeRange{}, mlir::ValueRange{Source});
+    };
+    if (!InitializingField && !Temporary) {
+      auto TargetAddress = mlir::LLVM::PtrToIntOp::create(
+          Builder, Loc, Builder.getI64Type(), Address);
+      auto SourceAddress = mlir::LLVM::PtrToIntOp::create(
+          Builder, Loc, Builder.getI64Type(), Source);
+      auto Same = mlir::arith::CmpIOp::create(Builder, Loc,
+                                              mlir::arith::CmpIPredicate::eq,
+                                              TargetAddress, SourceAddress);
+      auto *Region = Builder.getInsertionBlock()->getParent();
+      auto *Work = new mlir::Block();
+      auto *After = new mlir::Block();
+      Region->push_back(Work);
+      Region->push_back(After);
+      mlir::cf::CondBranchOp::create(Builder, Loc, Same, After, Work);
+      Builder.setInsertionPointToStart(Work);
+      Transfer();
+      mlir::cf::BranchOp::create(Builder, Loc, After);
+      Builder.setInsertionPointToStart(After);
+    } else {
+      Transfer();
+    }
+    return;
+  }
   if (Analysis.GetConstructorCall(*Statement.children[1])) {
     EmitConstruction(*Statement.children[1], Address);
     return;
@@ -127,7 +193,17 @@ void codegen::IRGen::EmitAssignStatement(const lex::Node &Statement) {
 }
 
 void codegen::IRGen::EmitExpressionStatement(const lex::Node &Statement) {
-  EmitExpression(*Statement.children.front());
+  const auto &Expression = *Statement.children.front();
+  auto Value = EmitExpression(Expression);
+  const auto &Type = Analysis.GetType(Expression);
+  if (Type.IsClass()) {
+    const auto Loc = GetLocation(Expression.Loc);
+    auto Address = CreateAlloca(Type, Loc);
+    mlir::LLVM::StoreOp::create(Builder, Loc, Value, Address);
+    mlir::func::CallOp::create(Builder, Loc,
+                               Analysis.GetClass(Type)->DestructorSymbol,
+                               mlir::TypeRange{}, mlir::ValueRange{Address});
+  }
   return;
 }
 
@@ -298,8 +374,12 @@ void codegen::IRGen::EmitReturnStatement(const lex::Node &Statement) {
       Values = mlir::LLVM::InsertValueOp::create(
           Builder, Loc, Values, EmitExpression(*Statement.children[I]), I);
     Results.push_back(Values);
-  } else if (!Statement.children.empty())
-    Results.push_back(EmitExpression(*Statement.children.front()));
+  } else if (!Statement.children.empty()) {
+    const auto &Value = *Statement.children.front();
+    Results.push_back(Analysis.GetType(Value).IsClass()
+                          ? EmitClassArgument(Value)
+                          : EmitExpression(Value));
+  }
   EmitCleanups(0, Loc);
   if (ActiveDestructor)
     EmitFieldDestructors(*ActiveDestructor, FindVariable("this")->DirectValue,

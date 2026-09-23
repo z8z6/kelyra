@@ -111,6 +111,42 @@ void CollectTypeOffsets(const Node &Node,
     CollectTypeOffsets(*Child, Pointers, ArrayElements);
 }
 
+void CollectGenericAngles(const Node &Node, std::string_view Source,
+                          std::unordered_set<std::size_t> &Angles) {
+  if (Node.kind == TokenKind::ast_generic_type ||
+      Node.kind == TokenKind::ast_generic_apply) {
+    const auto Start = Node.kind == TokenKind::ast_generic_apply
+                           ? Node.children.front()->Loc.End()
+                           : Node.Loc.Offset + Node.text.size();
+    const auto Open = Source.find('<', Start);
+    if (Open < Node.Loc.End())
+      Angles.insert(Open);
+    if (Node.Loc.End() > 0 && Source[Node.Loc.End() - 1] == '>')
+      Angles.insert(Node.Loc.End() - 1);
+  }
+  if (Node.kind == TokenKind::ast_class ||
+      Node.kind == TokenKind::ast_function) {
+    const kelyra::lex::Node *First = nullptr;
+    const kelyra::lex::Node *Last = nullptr;
+    for (const auto &Child : Node.children)
+      if (Child->kind == TokenKind::ast_generic_parameter) {
+        if (!First)
+          First = Child.get();
+        Last = Child.get();
+      }
+    if (First) {
+      const auto Open = Source.find('<', Node.Loc.Offset);
+      const auto Close = Source.find('>', Last->Loc.End());
+      if (Open < First->Loc.Offset)
+        Angles.insert(Open);
+      if (Close < Node.Loc.End())
+        Angles.insert(Close);
+    }
+  }
+  for (const auto &Child : Node.children)
+    CollectGenericAngles(*Child, Source, Angles);
+}
+
 std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
   struct Import {
     std::size_t Begin;
@@ -213,8 +249,11 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
   const auto Tokens = NormalizeImports(Parsed);
   std::unordered_set<std::size_t> TypePointers;
   std::unordered_set<std::size_t> ArrayElements;
-  if (Parsed.root)
+  std::unordered_set<std::size_t> GenericAngles;
+  if (Parsed.root) {
     CollectTypeOffsets(*Parsed.root, TypePointers, ArrayElements);
+    CollectGenericAngles(*Parsed.root, Parsed.source, GenericAngles);
+  }
   Writer Output;
   std::vector<bool> StructBraces;
   std::vector<bool> AsmBraces;
@@ -333,7 +372,15 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       if (Token.kind == TokenKind::punc_right_paren) {
         --Parentheses;
         if (Annotation && Parentheses == 0) {
-          Output.NewLine();
+          const auto Next = Index + 1 < Tokens.size() ? Tokens[Index + 1].kind
+                                                      : TokenKind::end;
+          if ((Next == TokenKind::keyword_module ||
+               Next == TokenKind::keyword_import) &&
+              Index + 1 < Tokens.size() &&
+              Token.Loc.Line == Tokens[Index + 1].Loc.Line)
+            Output.Space();
+          else
+            Output.NewLine();
           Annotation = false;
         }
         const auto Next =
@@ -368,6 +415,11 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       if (Token.kind == TokenKind::keyword_module)
         ModuleDeclaration = true;
       if (IsOperator(Token.kind)) {
+        if (GenericAngles.contains(Token.Loc.Offset)) {
+          Output.TrimSpace();
+          Output.Write(Text);
+          break;
+        }
         const bool TypePointer = TypePointers.contains(Token.Loc.Offset);
         const bool Unary = TypePointer || IsUnary(Tokens, Index);
         if (Unary &&
@@ -389,7 +441,7 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
         Output.Write(Text);
         const auto Next =
             Index + 1 < Tokens.size() ? Tokens[Index + 1].kind : TokenKind::end;
-        if (Annotation && Token.kind == TokenKind::name &&
+        if (Annotation && Parentheses == 0 && Token.kind == TokenKind::name &&
             Next != TokenKind::punc_dot && Next != TokenKind::punc_left_paren) {
           Output.NewLine();
           Annotation = false;

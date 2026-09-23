@@ -1,0 +1,8 @@
+#pragma once
+
+#include <string_view>
+
+namespace kelyra::sema {
+inline constexpr std::string_view BuiltinAnnotationsSource =
+    R"KELYRA_BUILTIN(@KELYRA_BUILTIN_ANNOTATIONS_SOURCE@)KELYRA_BUILTIN";
+} // namespace kelyra::sema

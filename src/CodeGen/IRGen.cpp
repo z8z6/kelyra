@@ -1,5 +1,6 @@
 #include "CodeGen/IRGen.h"
 #include "IR/Kelyra.h"
+#include "Support/BuiltinAnnotation.h"
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -30,6 +31,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -46,6 +48,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Host.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -98,6 +101,38 @@ void Optimize(llvm::Module &Module, llvm::TargetMachine &TargetMachine,
                                ModuleAnalyses);
   auto Passes = Builder.buildPerModuleDefaultPipeline(Level);
   Passes.run(Module, ModuleAnalyses);
+}
+
+llvm::Error AddFreestandingEntry(mlir::ModuleOp Module,
+                                 const llvm::Triple &Triple) {
+  const bool Linux =
+      Triple.getArch() == llvm::Triple::x86_64 && Triple.isOSLinux();
+  const bool Windows =
+      Triple.getArch() == llvm::Triple::x86_64 && Triple.isOSWindows();
+  if (!Linux && !Windows)
+    return llvm::createStringError(
+        "freestanding runtime supports only Linux x86-64 and Windows x86-64 "
+        "(target: %s)",
+        Triple.str().c_str());
+  mlir::OpBuilder Builder(Module.getContext());
+  Builder.setInsertionPointToEnd(Module.getBody());
+  const auto Loc =
+      mlir::FileLineColLoc::get(Module.getContext(), "<kelyra-runtime>", 1, 1);
+  const auto I32 = Builder.getI32Type();
+  llvm::SmallVector<mlir::Type> Parameters;
+  if (Linux)
+    Parameters = {Builder.getI64Type(),
+                  mlir::LLVM::LLVMPointerType::get(Module.getContext()),
+                  mlir::LLVM::LLVMPointerType::get(Module.getContext())};
+  auto Start =
+      mlir::func::FuncOp::create(Builder, Loc, "__kelyra_start",
+                                 Builder.getFunctionType(Parameters, {I32}));
+  auto *Entry = Start.addEntryBlock();
+  Builder.setInsertionPointToStart(Entry);
+  auto Main = mlir::func::CallOp::create(
+      Builder, Loc, "main", mlir::TypeRange{I32}, mlir::ValueRange{});
+  mlir::func::ReturnOp::create(Builder, Loc, Main.getResults());
+  return llvm::Error::success();
 }
 } // namespace
 
@@ -166,9 +201,11 @@ mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
   else {
     switch (Type.Element) {
     case T::F32:
+    case T::CFloat:
       Result = Builder.getF32Type();
       break;
     case T::F64:
+    case T::CDouble:
       Result = Builder.getF64Type();
       break;
     case T::F128:
@@ -313,14 +350,30 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
   auto Func =
       mlir::func::FuncOp::create(Builder, GetLocation(Function.Loc),
                                  Analysis.GetSymbol(Function), FunctionType);
-  if (DeclarationOnly) {
+  if (Function.GenericInstance || (Owner && Owner->Node->GenericInstance))
+    Func->setAttr("kelyra.generic", Builder.getUnitAttr());
+  if (EmitOptionIntrinsic(Function, Func, DeclarationOnly))
+    return;
+  if (EmitReflectIntrinsic(Function, Func, DeclarationOnly))
+    return;
+  for (const auto &Annotation : Analysis.GetAnnotations(Function))
+    if (Annotation.Name == "std.annotation.inline" &&
+        !Annotation.Arguments.empty() &&
+        Annotation.Arguments.front().Value.Text == "always")
+      Func->setAttr("kelyra.always_inline", Builder.getUnitAttr());
+  if (DeclarationOnly || !Body) {
     // The definition lives in a linked library; emit only the declaration.
     Func.setPrivate();
     return;
   }
   CurrentClass = Owner;
   BeginDebugFunction(Func, Function);
-  if (!Analysis.IsPublic(Function) && Function.text != "main")
+  const bool IsMain = std::any_of(
+      Function.children.begin(), Function.children.end(), [](const auto &Part) {
+        return Part->kind == lex::TokenKind::ast_annotation &&
+               IsBuiltinAnnotation(Part->text, "main");
+      });
+  if (!Analysis.IsPublic(Function) && !IsMain)
     Func.setPrivate();
   auto *Entry = Func.addEntryBlock();
   FunctionEntry = Entry;
@@ -328,9 +381,13 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
   Scopes.clear();
   Scopes.emplace_back();
   Cleanups.clear();
+  Cleanups.emplace_back();
   Loops.clear();
   CurrentClass = Owner;
   ActiveDestructor = Function.kind == K::ast_destructor ? Owner : nullptr;
+  InTransferConstructor =
+      Owner && (Function.kind == K::ast_constructor ||
+                Function.text == "copy" || Function.text == "move");
   const unsigned Offset = Owner ? 1 : 0;
   if (Owner) {
     sema::Type Receiver{sema::BuiltinType::Class, {}};
@@ -358,6 +415,8 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
     mlir::LLVM::StoreOp::create(Builder, GetLocation(Parameters[I]->Loc),
                                 Entry->getArgument(I + Offset), Address);
     Scopes.back().emplace(Parameters[I]->text, Variable{Type, Address, {}});
+    if (Type.IsClass())
+      Cleanups.front().push_back({Analysis.GetClass(Type), Address});
     EmitDebugVariable(Parameters[I]->text, Parameters[I]->Loc, Type, Address,
                       I + Offset + 1);
   }
@@ -366,6 +425,7 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
     if (ReturnType)
       mlir::LLVM::UnreachableOp::create(Builder, GetLocation(Body->Loc));
     else {
+      EmitCleanups(0, GetLocation(Body->Loc));
       if (ActiveDestructor)
         EmitFieldDestructors(*ActiveDestructor, Entry->getArgument(0),
                              GetLocation(Body->Loc));
@@ -374,6 +434,7 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
   }
   CurrentClass = nullptr;
   ActiveDestructor = nullptr;
+  InTransferConstructor = false;
   DebugScope = {};
 }
 
@@ -417,10 +478,12 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
         Builder.getFunctionType(Parameters, Results));
     Function.setPrivate();
   }
+  EmitReflectionGlobals(Modules, Result);
   for (const auto *Module : Modules) {
     const bool External = ExternalModules.count(Module) != 0;
     for (const auto &Child : Module->children) {
       if (Child->kind == K::ast_class) {
+        const bool DeclarationOnly = External && !Child->GenericInstance;
         const sema::ClassInfo *Class = nullptr;
         for (const auto &[Name, Candidate] : Analysis.GetClasses())
           if (Candidate.Node == Child.get())
@@ -431,37 +494,68 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
               Member->kind == K::ast_constructor ||
               Member->kind == K::ast_destructor) {
             Builder.setInsertionPointToEnd(Result.getBody());
-            EmitFunction(*Member, Class, External);
+            EmitFunction(*Member, Class, DeclarationOnly);
           }
-        if (!Class->Constructor) {
+        if (!Class->IsInterface && !Class->Constructor) {
           Builder.setInsertionPointToEnd(Result.getBody());
-          if (External)
+          if (DeclarationOnly)
             EmitDefaultConstructorDeclaration(*Class);
           else
             EmitDefaultConstructor(*Class);
         }
-        if (!Class->Destructor) {
+        if (!Class->IsInterface && !Class->Destructor) {
           Builder.setInsertionPointToEnd(Result.getBody());
-          if (External)
+          if (DeclarationOnly)
             EmitDefaultDestructorDeclaration(*Class);
           else
             EmitDefaultDestructor(*Class);
+        }
+        if (!Class->IsInterface && !Class->Copy) {
+          Builder.setInsertionPointToEnd(Result.getBody());
+          EmitDefaultTransfer(*Class, false, DeclarationOnly);
+        }
+        if (!Class->IsInterface && !Class->Move) {
+          Builder.setInsertionPointToEnd(Result.getBody());
+          EmitDefaultTransfer(*Class, true, DeclarationOnly);
         }
         continue;
       }
       if (Child->kind != K::ast_function)
         continue;
       Builder.setInsertionPointToEnd(Result.getBody());
-      EmitFunction(*Child, nullptr, External);
+      EmitFunction(*Child, nullptr, External && !Child->GenericInstance);
     }
   }
   return Result;
 }
 
 llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
-                                llvm::StringRef OutputPath, llvm::CodeGenOptLevel OptLevel,
+                                llvm::StringRef OutputPath,
+                                llvm::CodeGenOptLevel OptLevel,
                                 llvm::StringRef CWrapperSource,
-                                llvm::ArrayRef<std::string> CArguments) {
+                                llvm::ArrayRef<std::string> CArguments,
+                                llvm::ArrayRef<std::string> CSources,
+                                llvm::StringRef TargetTriple,
+                                RuntimeMode Runtime) {
+  const llvm::Triple Triple(TargetTriple.empty()
+                                ? llvm::sys::getDefaultTargetTriple()
+                                : TargetTriple.str());
+  if (Runtime == RuntimeMode::Freestanding)
+    if (auto Error = AddFreestandingEntry(Module, Triple))
+      return Error;
+  std::vector<std::string> AlwaysInlineSymbols;
+  std::vector<std::string> GenericSymbols;
+  Module.walk([&](mlir::func::FuncOp Function) {
+    if (Function->hasAttr("kelyra.generic")) {
+      if (!Function.isExternal())
+        GenericSymbols.push_back(Function.getSymName().str());
+      Function->removeAttr("kelyra.generic");
+    }
+    if (Function->hasAttr("kelyra.always_inline") && !Function.isExternal()) {
+      AlwaysInlineSymbols.push_back(Function.getSymName().str());
+      Function->removeAttr("kelyra.always_inline");
+    }
+  });
   mlir::PassManager Passes(Module.getContext());
   Passes.addPass(mlir::createConvertFuncToLLVMPass());
   Passes.addPass(mlir::createArithToLLVMConversionPass());
@@ -492,13 +586,29 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
   auto LLVMModule = mlir::translateModuleToLLVMIR(Module, Context);
   if (!LLVMModule)
     return llvm::createStringError("failed to translate MLIR to LLVM IR");
+  for (const auto &Symbol : AlwaysInlineSymbols)
+    if (auto *Function = LLVMModule->getFunction(Symbol))
+      Function->addFnAttr(llvm::Attribute::AlwaysInline);
+  for (const auto &Symbol : GenericSymbols)
+    if (auto *Function = LLVMModule->getFunction(Symbol)) {
+      Function->setLinkage(llvm::GlobalValue::LinkOnceODRLinkage);
+      auto *Group = LLVMModule->getOrInsertComdat(Symbol);
+      Group->setSelectionKind(llvm::Comdat::Any);
+      Function->setComdat(Group);
+    }
+  if (!AlwaysInlineSymbols.empty() && OptLevel == llvm::CodeGenOptLevel::None) {
+    llvm::initializeAlwaysInlinerLegacyPassPass(
+        *llvm::PassRegistry::getPassRegistry());
+    llvm::legacy::PassManager Inliner;
+    Inliner.add(llvm::createAlwaysInlinerLegacyPass());
+    Inliner.run(*LLVMModule);
+  }
 
   if (llvm::InitializeNativeTarget() ||
       llvm::InitializeNativeTargetAsmParser() ||
       llvm::InitializeNativeTargetAsmPrinter())
     return llvm::createStringError("failed to initialize native target");
 
-  const llvm::Triple Triple(llvm::sys::getDefaultTargetTriple());
   std::string TargetError;
   const llvm::Target *Target =
       llvm::TargetRegistry::lookupTarget(Triple, TargetError);
@@ -520,7 +630,7 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
 
   llvm::SmallString<128> NativeObject;
   llvm::StringRef NativeOutput = OutputPath;
-  if (!CWrapperSource.empty()) {
+  if (!CWrapperSource.empty() || !CSources.empty()) {
     if (auto ErrorCode = llvm::sys::fs::createTemporaryFile("kelyra-native",
                                                             "o", NativeObject))
       return llvm::createStringError(ErrorCode,
@@ -545,41 +655,62 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
     return llvm::createStringError(Output.os().error(),
                                    "cannot write output file");
   Output.keep();
-  if (CWrapperSource.empty())
+  if (CWrapperSource.empty() && CSources.empty())
     return llvm::Error::success();
 
-  llvm::SmallString<128> SourcePath, WrapperObject;
-  if (auto Code =
-          llvm::sys::fs::createTemporaryFile("kelyra-wrapper", "c", SourcePath))
-    return llvm::createStringError(Code, "cannot create C wrapper");
-  llvm::FileRemover RemoveSource(SourcePath);
-  llvm::raw_fd_ostream Source(SourcePath, ErrorCode);
-  if (ErrorCode)
-    return llvm::createStringError(ErrorCode, "cannot write C wrapper");
-  Source << CWrapperSource;
-  Source.close();
-  if (auto Code = llvm::sys::fs::createTemporaryFile("kelyra-wrapper", "o",
-                                                     WrapperObject))
-    return llvm::createStringError(Code, "cannot create wrapper object");
-  llvm::FileRemover RemoveWrapper(WrapperObject);
   auto Clang = llvm::sys::findProgramByName("clang");
   if (!Clang)
     return llvm::createStringError(Clang.getError(), "cannot find Clang");
-  llvm::SmallVector<llvm::StringRef> Compile{*Clang, "-c", SourcePath};
-  for (const auto &Argument : CArguments)
-    Compile.push_back(Argument);
-  Compile.append({"-o", WrapperObject});
+  llvm::SmallString<128> WrapperSource;
+  std::unique_ptr<llvm::FileRemover> RemoveWrapperSource;
+  if (!CWrapperSource.empty()) {
+    if (auto Code = llvm::sys::fs::createTemporaryFile("kelyra-wrapper", "c",
+                                                       WrapperSource))
+      return llvm::createStringError(Code, "cannot create C wrapper");
+    RemoveWrapperSource = std::make_unique<llvm::FileRemover>(WrapperSource);
+    llvm::raw_fd_ostream Source(WrapperSource, ErrorCode);
+    if (ErrorCode)
+      return llvm::createStringError(ErrorCode, "cannot write C wrapper");
+    Source << CWrapperSource;
+    Source.close();
+  }
+  std::vector<std::string> Sources(CSources.begin(), CSources.end());
+  if (!CWrapperSource.empty())
+    Sources.push_back(WrapperSource.str().str());
+  std::vector<llvm::SmallString<128>> CObjects;
+  std::vector<std::unique_ptr<llvm::FileRemover>> RemoveCObjects;
   std::string Message;
-  if (llvm::sys::ExecuteAndWait(*Clang, Compile, std::nullopt, {}, 0, 0,
-                                &Message) != 0)
-    return llvm::createStringError("Clang failed to compile C wrapper: %s",
-                                   Message.c_str());
+  const std::string TargetArgument =
+      TargetTriple.empty() ? std::string{} : "--target=" + Triple.str();
+  for (const auto &CSource : Sources) {
+    llvm::SmallString<128> CObject;
+    if (auto Code =
+            llvm::sys::fs::createTemporaryFile("kelyra-c", "o", CObject))
+      return llvm::createStringError(Code, "cannot create C object");
+    CObjects.push_back(CObject);
+    RemoveCObjects.push_back(
+        std::make_unique<llvm::FileRemover>(CObjects.back()));
+    llvm::SmallVector<llvm::StringRef> Compile{*Clang, "-c", CSource};
+    if (!TargetArgument.empty())
+      Compile.push_back(TargetArgument);
+    for (const auto &Argument : CArguments)
+      Compile.push_back(Argument);
+    Compile.append({"-o", CObjects.back()});
+    if (llvm::sys::ExecuteAndWait(*Clang, Compile, std::nullopt, {}, 0, 0,
+                                  &Message) != 0)
+      return llvm::createStringError("Clang failed to compile %s: %s",
+                                     CSource.c_str(), Message.c_str());
+  }
   llvm::SmallString<128> Combined;
   llvm::sys::fs::createUniquePath(OutputPath + ".tmp-%%%%%%%%", Combined,
                                   false);
   llvm::FileRemover RemoveCombined(Combined);
-  llvm::SmallVector<llvm::StringRef> Link{*Clang,        "-r", NativeObject,
-                                          WrapperObject, "-o", Combined};
+  llvm::SmallVector<llvm::StringRef> Link{*Clang, "-r", NativeObject};
+  if (!TargetArgument.empty())
+    Link.push_back(TargetArgument);
+  for (const auto &CObject : CObjects)
+    Link.push_back(CObject);
+  Link.append({"-o", Combined});
   if (llvm::sys::ExecuteAndWait(*Clang, Link, std::nullopt, {}, 0, 0,
                                 &Message) != 0)
     return llvm::createStringError("Clang failed to combine objects: %s",
@@ -590,29 +721,83 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
   return llvm::Error::success();
 }
 
-llvm::Error codegen::EmitExecutable(mlir::ModuleOp Module,
-                                    llvm::StringRef OutputPath,
-                                    llvm::CodeGenOptLevel OptLevel,
-                                    llvm::ArrayRef<std::string> CSources,
-                                    llvm::ArrayRef<std::string> CArguments,
-                                    llvm::StringRef CWrapperSource) {
+llvm::Error codegen::EmitExecutable(
+    mlir::ModuleOp Module, llvm::StringRef OutputPath,
+    llvm::CodeGenOptLevel OptLevel, llvm::ArrayRef<std::string> CSources,
+    llvm::ArrayRef<std::string> CArguments, llvm::StringRef CWrapperSource,
+    RuntimeMode Runtime, llvm::StringRef TargetTriple) {
+  const llvm::Triple Triple(TargetTriple.empty()
+                                ? llvm::sys::getDefaultTargetTriple()
+                                : TargetTriple.str());
+  const bool Linux =
+      Triple.getArch() == llvm::Triple::x86_64 && Triple.isOSLinux();
+  const bool Windows =
+      Triple.getArch() == llvm::Triple::x86_64 && Triple.isOSWindows();
+  if (Runtime == RuntimeMode::Freestanding && !Linux && !Windows)
+    return llvm::createStringError(
+        "freestanding runtime supports only Linux x86-64 and Windows x86-64 "
+        "(target: %s)",
+        Triple.str().c_str());
+
   llvm::SmallString<128> ObjectPath;
   if (auto ErrorCode =
           llvm::sys::fs::createTemporaryFile("kelyra", "o", ObjectPath))
     return llvm::createStringError(ErrorCode, "cannot create temporary object");
   llvm::FileRemover RemoveObject(ObjectPath);
-  if (auto Error =
-          EmitObject(Module, ObjectPath, OptLevel, CWrapperSource, CArguments))
+  if (auto Error = EmitObject(Module, ObjectPath, OptLevel, CWrapperSource,
+                              CArguments, {}, TargetTriple, Runtime))
     return Error;
 
-  auto Linker = llvm::sys::findProgramByName(CSources.empty() ? "cc" : "clang");
+  auto Linker = llvm::sys::findProgramByName(
+      Runtime == RuntimeMode::Freestanding || !CSources.empty() ? "clang"
+                                                                : "cc");
   if (!Linker)
     return llvm::createStringError(Linker.getError(), "cannot find C compiler");
+  const std::string TargetArgument =
+      TargetTriple.empty() ? std::string{} : "--target=" + Triple.str();
+  llvm::SmallString<128> StartObject;
+  std::unique_ptr<llvm::FileRemover> RemoveStart;
+  if (Runtime == RuntimeMode::Freestanding) {
+    const llvm::Twine Source =
+        llvm::Twine(KELYRA_RUNTIME_DIR) +
+        (Linux ? "/linux-x86_64/start.S" : "/windows-x86_64/start.S");
+    const std::string StartSource = Source.str();
+    if (!llvm::sys::fs::exists(StartSource))
+      return llvm::createStringError("missing freestanding startup file: %s",
+                                     StartSource.c_str());
+    if (auto ErrorCode = llvm::sys::fs::createTemporaryFile("kelyra-start", "o",
+                                                            StartObject))
+      return llvm::createStringError(ErrorCode, "cannot create startup object");
+    RemoveStart = std::make_unique<llvm::FileRemover>(StartObject);
+    llvm::SmallVector<llvm::StringRef> Compile{*Linker, "-c", StartSource, "-o",
+                                               StartObject};
+    if (!TargetArgument.empty())
+      Compile.push_back(TargetArgument);
+    std::string Message;
+    if (llvm::sys::ExecuteAndWait(*Linker, Compile, std::nullopt, {}, 0, 0,
+                                  &Message) != 0)
+      return llvm::createStringError(
+          "failed to compile freestanding startup object: %s",
+          Message.empty() ? "Clang exited with a non-zero status"
+                          : Message.c_str());
+  }
   llvm::SmallString<128> TemporaryOutput;
   llvm::sys::fs::createUniquePath(OutputPath + ".tmp-%%%%%%%%", TemporaryOutput,
                                   false);
   llvm::FileRemover RemoveOutput(TemporaryOutput);
   llvm::SmallVector<llvm::StringRef> Arguments{*Linker, ObjectPath};
+  if (!TargetArgument.empty())
+    Arguments.push_back(TargetArgument);
+  if (Runtime == RuntimeMode::Freestanding) {
+    Arguments.push_back(StartObject);
+    Arguments.push_back("-nostdlib");
+    if (Linux)
+      Arguments.append({"-static", "-Wl,-e,_start"});
+    else if (Triple.isWindowsMSVCEnvironment())
+      Arguments.append({"-Wl,/entry:mainCRTStartup", "kernel32.lib"});
+    else
+      Arguments.append({"-Wl,-e,mainCRTStartup", "-lkernel32"});
+  }
   for (const auto &Source : CSources)
     Arguments.push_back(Source);
   for (const auto &Argument : CArguments)
@@ -622,9 +807,14 @@ llvm::Error codegen::EmitExecutable(mlir::ModuleOp Module,
   const int Status = llvm::sys::ExecuteAndWait(*Linker, Arguments, std::nullopt,
                                                {}, 0, 0, &Message);
   if (Status != 0)
-    return llvm::createStringError("linker failed: %s",
-                                   Message.empty() ? "non-zero exit status"
-                                                   : Message.c_str());
+    return llvm::createStringError(
+        "%slinker failed%s: %s",
+        Runtime == RuntimeMode::Freestanding ? "freestanding " : "",
+        Runtime == RuntimeMode::Freestanding
+            ? " (check unresolved libc/CRT/compiler-runtime symbols and "
+              "explicitly supplied libraries)"
+            : "",
+        Message.empty() ? "non-zero exit status" : Message.c_str());
   if (auto ErrorCode = llvm::sys::fs::rename(TemporaryOutput, OutputPath))
     return llvm::createStringError(ErrorCode, "cannot write executable");
   RemoveOutput.releaseFile();

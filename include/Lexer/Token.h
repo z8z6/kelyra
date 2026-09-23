@@ -18,6 +18,7 @@ enum class TokenKind {
   keyword_var,              // var
   keyword_fn,               // fn
   keyword_class,            // class
+  keyword_const,            // const
   keyword_this,             // this
   keyword_annotation,       // annotation
   keyword_if,               // if
@@ -30,6 +31,7 @@ enum class TokenKind {
   keyword_false,            // false
   keyword_meta,             // meta
   keyword_when,             // when
+  keyword_as,               // as
   keyword_parallel,         // parallel
   keyword_extern,           // extern
   keyword_defer,            // defer
@@ -76,8 +78,12 @@ enum class TokenKind {
   ast_annotation_parameter, // AST annotation parameter
   ast_annotation_argument,  // AST annotation argument
   ast_function,             // AST function declaration
+  ast_generic_parameter,    // AST declaration type parameter
+  ast_generic_type,         // AST named type with type arguments
+  ast_generic_apply,        // AST explicit type arguments on a callee
   ast_parameter,            // AST function parameter
   ast_class,                // AST class declaration
+  ast_const_field,          // AST interface constant field
   ast_field,                // AST class field
   ast_constructor,          // AST class constructor
   ast_destructor,           // AST class destructor
@@ -105,6 +111,7 @@ enum class TokenKind {
   ast_name,                 // AST name expression
   ast_unary,                // AST unary expression
   ast_binary,               // AST binary expression
+  ast_cast,                 // AST explicit type conversion
   ast_call,                 // AST call expression
   ast_index,                // AST index expression
   ast_member,               // AST member expression

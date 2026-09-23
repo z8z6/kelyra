@@ -21,6 +21,7 @@ Kelyra 应当同时支持以下五个方向：
 ```kly
 import c "sqlite3.h" as sqlite;
 
+@main
 fn main() -> i32 {
     let database: *sqlite.sqlite3;
 

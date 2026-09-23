@@ -54,6 +54,21 @@ TEST(Sema, FunctionValuesRespectImports) {
   }
 }
 
+TEST(Sema, ExternalModuleUsesDeclarationsOnly) {
+  auto Main = lex::Lexer().parse(
+      "module app; import library; fn main() -> i32 { return "
+      "library.answer(); }");
+  auto Library = lex::Lexer().parse(
+      "module library; pub fn answer() -> i32 { return missing(); }");
+  ASSERT_TRUE(Main.ok());
+  ASSERT_TRUE(Library.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {Library.root.get(), false, true}}));
+  EXPECT_FALSE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {Library.root.get(), false, false}}));
+}
+
 TEST(Sema, VoidAndMultipleReturns) {
   auto Parsed = lex::Lexer().parse(R"(
 fn explicit() -> void { return; }
@@ -97,6 +112,101 @@ fn use() -> i32 { let (value, ok) = forward(); if ok { return value; } return 0;
   }
 }
 
+TEST(Sema, InterfaceDeclaration) {
+  auto Parsed = lex::Lexer().parse(R"(
+@interface class Reader {
+  const CAPACITY: i32 = 60 + 4;
+  fn read(count: i32) -> i32;
+  fn ready() -> bool { return true; }
+}
+
+fn capacity() -> i32 { return Reader.CAPACITY; }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.Check(*Parsed.root));
+  EXPECT_TRUE(Analysis.GetReflection().Find("std.annotation.interface",
+                                            sema::MetaKind::Annotation));
+  for (const auto Source : {
+           "@interface class Bad { value: i32; }",
+           "@interface class Bad { init() {} }",
+           "@interface class Bad { deinit() {} }",
+           "@interface class Bad { const VALUE: i32 = missing; }",
+           "class Bad { const VALUE: i32 = 1; }",
+           "@interface class Bad { fn missing(); } fn f() { let x = Bad(); }",
+           "@interface class Bad { const VALUE: i32 = 1; } fn f() { Bad.VALUE "
+           "= 2; }",
+           "@interface @interface class Bad {}",
+           "@interface(1) class Bad {}",
+           "@interface @layout(c) class Bad {}",
+           "@interface fn bad() {}",
+           "annotation interface();",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Invalid = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Invalid.ok());
+    EXPECT_FALSE(Analysis.Check(*Invalid.root));
+  }
+  EXPECT_FALSE(lex::Lexer().parse("class Bad { fn missing(); }").ok());
+}
+
+TEST(Sema, NamedEntrypointAnnotation) {
+  auto Parsed = lex::Lexer().parse("@main fn launch() -> i32 { return 42; } "
+                                   "fn main() -> i32 { return 1; }");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  EXPECT_TRUE(Analysis.CheckEntrypoint(*Parsed.root));
+  EXPECT_EQ(Analysis.GetSymbol(*Parsed.root->children.front()), "main");
+
+  for (const auto Source : {
+           "fn main() -> i32 { return 1; }",
+           "@main fn one() -> i32 { return 1; } @main fn two() -> i32 { return "
+           "2; }",
+           "@main fn launch(value: i32) -> i32 { return value; }",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Invalid = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Invalid.ok());
+    ASSERT_TRUE(Analysis.Check(*Invalid.root));
+    EXPECT_FALSE(Analysis.CheckEntrypoint(*Invalid.root));
+  }
+  auto InvalidTarget = lex::Lexer().parse("@main class Bad {}");
+  ASSERT_TRUE(InvalidTarget.ok());
+  EXPECT_FALSE(Analysis.Check(*InvalidTarget.root));
+}
+
+TEST(Sema, EntrypointCanBeImported) {
+  auto Main = lex::Lexer().parse("module app; import worker;");
+  auto Worker = lex::Lexer().parse(
+      "module worker; @main fn launch() -> i32 { return 42; }");
+  ASSERT_TRUE(Main.ok());
+  ASSERT_TRUE(Worker.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {Worker.root.get(), false}}));
+  EXPECT_TRUE(Analysis.CheckEntrypoint(*Main.root));
+  EXPECT_EQ(Analysis.GetSymbol(*Worker.root->children.back()), "main");
+}
+
+TEST(Sema, RejectInvalidTransferMethods) {
+  for (const auto Source : {
+           "class Item { fn copy() {} }",
+           "class Item { fn move(other: Item) {} }",
+           "class Item { fn copy(other: *Item) -> i32 { return 1; } }",
+           "class Item { value: i32; fn copy(other: *Item) {} }",
+           "class Item { value: i32; fn move(other: *Item) { value = value; } "
+           "}",
+           "class Item { value: i32; } fn f() { let a = Item(); a.copy(&a); }",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Parsed = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Parsed.ok());
+    sema::Sema Analysis;
+    EXPECT_FALSE(Analysis.Check(*Parsed.root));
+  }
+}
+
 TEST(Sema, ClassLayoutPadding) {
   auto Parsed = lex::Lexer().parse(R"(
 class Mixed {
@@ -113,6 +223,45 @@ class Mixed {
   EXPECT_EQ(Class->Alignment, 8u);
   EXPECT_EQ(Class->Fields[1].Offset, 8u);
   EXPECT_EQ(Class->Fields[2].Offset, 16u);
+}
+
+TEST(Sema, CLayoutAnnotation) {
+  struct CPair {
+    char tag;
+    float fraction;
+    double measure;
+    long value;
+  };
+  auto Parsed = lex::Lexer().parse(R"(
+@layout(c)
+class Pair {
+  pub tag: c.char;
+  pub fraction: c.float;
+  pub measure: c.double;
+  pub value: c.long;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  const auto *Class = Analysis.GetClass("Pair");
+  ASSERT_NE(Class, nullptr);
+  EXPECT_TRUE(Class->CLayout);
+  EXPECT_EQ(Class->Fields[0].Offset, 0u);
+  EXPECT_EQ(Class->Fields[1].Offset, offsetof(CPair, fraction));
+  EXPECT_EQ(Class->Fields[2].Offset, offsetof(CPair, measure));
+  EXPECT_EQ(Class->Fields[3].Offset, offsetof(CPair, value));
+  EXPECT_EQ(Class->Size, sizeof(CPair));
+  for (const auto Source : {
+           "@layout(c) fn f() {}",
+           "@layout(unknown) class Bad {}",
+           "@layout(c) @layout(c) class Bad {}",
+           "@layout(c) class Bad { value: char; }",
+       }) {
+    auto Invalid = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Invalid.ok()) << Source;
+    EXPECT_FALSE(Analysis.Check(*Invalid.root)) << Source;
+  }
 }
 
 TEST(Sema, ClassesThisAndMetadata) {
@@ -167,12 +316,8 @@ TEST(Sema, RejectInvalidClassLifetimes) {
            "A(); } }",
            "class A { init() {} } fn f() { let a: A; }",
            "class A { init() {} } fn f() { A(); }",
-           "class A { init() {} } fn f() { let a = A(); let b = a; }",
-           "class A { init() {} } fn f() { let a = A(); a = A(); }",
            "class A { init() {} } fn f() { let a = A(); a.deinit(); }",
            "class A { init() {} } fn f() { let a = A(); a.init(); }",
-           "class A { init() {} } fn f(a: A) {}",
-           "class A { init() {} } fn f() -> A { return A(); }",
            "class A { init() {} } fn f() { let a: [2]A; }",
            "class A { init() {} } fn A() {}",
            "class A { init() {} fn f() {} fn g() { f(); } } fn f() {}",
@@ -453,6 +598,37 @@ fn handler() -> i32 { return 0; }
   EXPECT_EQ(Instances.front().Arguments[1].Value.Text, "\"POST\"");
 }
 
+TEST(Sema, InlineAndDeprecatedAnnotations) {
+  auto Parsed = lex::Lexer().parse(R"(
+@inline fn automatic() -> i32 { return 1; }
+@inline(always) @deprecated("use automatic")
+fn old() -> i32 { return 2; }
+fn caller() -> i32 { return old(); }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  const bool Valid = Analysis.Check(*Parsed.root);
+  for (const auto &Diagnostic : Analysis.GetDiagnostics())
+    ADD_FAILURE() << Diagnostic;
+  ASSERT_TRUE(Valid);
+  ASSERT_EQ(Analysis.GetWarnings().size(), 1u);
+  EXPECT_EQ(Analysis.GetWarnings().front().Message,
+            "use of deprecated function 'old': use automatic");
+  const auto &Automatic = Analysis.GetAnnotations(*Parsed.root->children[0]);
+  ASSERT_EQ(Automatic.size(), 1u);
+  EXPECT_EQ(Automatic.front().Arguments[0].Value.Text, "auto");
+  for (const auto Source : {
+           "@inline(never) fn f() -> i32 { return 0; }",
+           "@inline(always) fn f();",
+           "@inline(always) class Box {}",
+           "@deprecated class Box {}",
+       }) {
+    auto Invalid = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Invalid.ok()) << Source;
+    EXPECT_FALSE(Analysis.Check(*Invalid.root)) << Source;
+  }
+}
+
 TEST(Sema, RejectInvalidUserAnnotations) {
   lex::Lexer Lexer;
   for (const std::string Source : {
@@ -542,6 +718,56 @@ fn registered() -> i32 { return 0; }
   const auto Registered = Reflection.GetId(*Parsed.root->children.back());
   ASSERT_TRUE(Registered.has_value());
   EXPECT_EQ(Reflection.Get(*Registered).Annotations.size(), 1u);
+}
+
+TEST(Sema, ReflectAnnotationSelectsInstanceFields) {
+  auto Parsed = lex::Lexer().parse(R"(
+@reflect class Whole {
+  pub visible: i32;
+  hidden: i32;
+  @reflect selected: i32;
+}
+
+class Partial {
+  pub excluded: i32;
+  @std.annotation.reflect included: i32;
+}
+
+class Plain { pub field: i32; }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  const auto &Reflection = Analysis.GetReflection();
+  const auto Reflected = [&](std::string_view Name, sema::MetaKind Kind) {
+    const auto Id = Reflection.Find(Name, Kind);
+    EXPECT_TRUE(Id.has_value()) << Name;
+    return Id && Reflection.Get(*Id).RuntimeReflected;
+  };
+  EXPECT_TRUE(Reflected("Whole", sema::MetaKind::Class));
+  EXPECT_TRUE(Reflected("Whole.visible", sema::MetaKind::Field));
+  EXPECT_FALSE(Reflected("Whole.hidden", sema::MetaKind::Field));
+  EXPECT_TRUE(Reflected("Whole.selected", sema::MetaKind::Field));
+  EXPECT_TRUE(Reflected("Partial", sema::MetaKind::Class));
+  EXPECT_FALSE(Reflected("Partial.excluded", sema::MetaKind::Field));
+  EXPECT_TRUE(Reflected("Partial.included", sema::MetaKind::Field));
+  EXPECT_FALSE(Reflected("Plain", sema::MetaKind::Class));
+  EXPECT_FALSE(Reflected("Plain.field", sema::MetaKind::Field));
+}
+
+TEST(Sema, ReflectAnnotationRejectsInvalidTargets) {
+  for (const auto Source : {
+           "@reflect fn wrong() {}",
+           "@interface class Wrong { @reflect const VALUE: i32 = 1; }",
+           "@reflect() @reflect class Wrong {}",
+           "@reflect(1) class Wrong {}",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Parsed = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Parsed.ok());
+    sema::Sema Analysis;
+    EXPECT_FALSE(Analysis.Check(*Parsed.root));
+  }
 }
 
 TEST(Sema, ReflectionReferencesRespectModuleVisibility) {

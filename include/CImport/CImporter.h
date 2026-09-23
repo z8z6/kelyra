@@ -16,4 +16,7 @@ struct ImportResult {
 
 ImportResult ImportHeaders(const std::vector<std::string> &Headers,
                            const std::vector<std::string> &Arguments = {});
+std::string GenerateDefinitions(const ImportResult &Declarations,
+                                const std::vector<std::string> &Headers,
+                                const std::string &ModuleName);
 } // namespace kelyra::cimport

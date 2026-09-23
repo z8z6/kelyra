@@ -1,4 +1,5 @@
 #include "Lexer/Lexer.h"
+#include "Support/BuiltinAnnotation.h"
 
 #include <algorithm>
 #include <iomanip>
@@ -222,6 +223,8 @@ Token Lexer::expect(std::string_view text) {
     DiagnosticKind Kind;
     if (text == "]")
       Kind = DiagnosticKind::ExpectedRightBracket;
+    else if (text == ">")
+      Kind = DiagnosticKind::ExpectedRightAngle;
     else if (text == ")")
       Kind = DiagnosticKind::ExpectedRightParen;
     else if (text == "}")
@@ -255,7 +258,10 @@ Lexer::Ptr Lexer::qualified(TokenKind Kind, bool AllowWildcard) {
       result->Loc.Len = Part.Loc.End() - result->Loc.Offset;
       break;
     }
-    const auto part = name();
+    const auto part =
+        at("annotation") || (Kind == TokenKind::ast_annotation && at("extern"))
+            ? take()
+            : name();
     result->text += ".";
     result->text += spelling(part);
     result->Loc.Len = part.Loc.End() - result->Loc.Offset;
@@ -341,12 +347,22 @@ Lexer::Ptr Lexer::type() {
   } else {
     result = qualified(K::ast_type);
   }
+  if (result->kind == K::ast_type && eat("<")) {
+    auto Generic = node(K::ast_generic_type, result->Loc, result->text);
+    do {
+      add(*Generic, type());
+    } while (eat(","));
+    Generic->Loc.Len = expect(">").Loc.End() - Generic->Loc.Offset;
+    result = std::move(Generic);
+  }
   return result;
 }
 
 Lexer::Ptr Lexer::annotation() {
   const auto Start = expect("@").Loc;
-  auto Result = qualified(K::ast_annotation);
+  auto Result = peek().kind == K::keyword_extern
+                    ? node(K::ast_annotation, take().Loc, "extern")
+                    : qualified(K::ast_annotation);
   const auto NameEnd = Result->Loc.End();
   Result->Loc.Offset = Start.Offset;
   Result->Loc.Line = Start.Line;
@@ -379,6 +395,8 @@ Lexer::Ptr Lexer::annotation() {
 }
 
 int Lexer::binding(std::string_view op) {
+  if (op == "as")
+    return 70;
   if (op == "||")
     return 10;
   if (op == "&&")
@@ -437,10 +455,44 @@ Lexer::Ptr Lexer::expr(int minBp) {
 
   while (true) {
     const auto op = spelling(peek());
+    if (op == "<" && minBp <= 80 &&
+        (lhs->kind == K::ast_name || lhs->kind == K::ast_member)) {
+      const auto SavedPos = pos;
+      const auto SavedDiagnostics = result.diagnostics.size();
+      try {
+        take();
+        std::vector<Ptr> Arguments;
+        do {
+          Arguments.push_back(type());
+        } while (eat(","));
+        const auto End = expect(">").Loc;
+        if (at("(")) {
+          auto Applied = node(K::ast_generic_apply, lhs->Loc);
+          add(*Applied, std::move(lhs));
+          for (auto &Argument : Arguments)
+            add(*Applied, std::move(Argument));
+          Applied->Loc.Len = End.End() - Applied->Loc.Offset;
+          lhs = std::move(Applied);
+          continue;
+        }
+      } catch (const ParseError &) {
+      }
+      pos = SavedPos;
+      result.diagnostics.resize(SavedDiagnostics);
+    }
     const int bp = binding(op);
     if (bp < minBp)
       break;
     const auto operatorToken = take();
+    if (op == "as") {
+      auto expression = node(K::ast_cast, lhs->Loc);
+      add(*expression, std::move(lhs));
+      add(*expression, type());
+      expression->Loc.Len =
+          expression->children.back()->Loc.End() - expression->Loc.Offset;
+      lhs = std::move(expression);
+      continue;
+    }
     if (bp == 80) {
       auto expression = node(op == "("   ? K::ast_call
                              : op == "[" ? K::ast_index
@@ -458,7 +510,7 @@ Lexer::Ptr Lexer::expr(int minBp) {
         add(*expression, expr());
         expression->Loc.Len = expect("]").Loc.End() - expression->Loc.Offset;
       } else {
-        const auto member = name();
+        const auto member = at("annotation") || at("extern") ? take() : name();
         expression->text = spelling(member);
         expression->Loc.Len = member.Loc.End() - expression->Loc.Offset;
       }
@@ -640,10 +692,7 @@ Lexer::Ptr Lexer::stmt() {
   return result;
 }
 
-Lexer::Ptr Lexer::decl() {
-  std::vector<Ptr> annotations;
-  while (at("@"))
-    annotations.push_back(annotation());
+Lexer::Ptr Lexer::decl(std::vector<Ptr> annotations) {
   Token visibility{};
   const bool isPublic = at("pub");
   if (isPublic)
@@ -660,11 +709,20 @@ Lexer::Ptr Lexer::decl() {
                      : spelling(t) == "class" ? K::ast_class
                                               : K::ast_annotation_decl,
                      Loc);
-  result->text = spelling(name());
+  result->text = spelling(
+      result->kind == K::ast_annotation_decl && at("extern") ? take() : name());
   for (auto &annotation : annotations)
     add(*result, std::move(annotation));
   if (isPublic)
     add(*result, node(K::ast_public, visibility.Loc));
+  if (result->kind != K::ast_annotation_decl && eat("<")) {
+    do {
+      const auto Parameter = name();
+      add(*result, node(K::ast_generic_parameter, Parameter.Loc,
+                        std::string(spelling(Parameter))));
+    } while (eat(","));
+    expect(">");
+  }
   if (result->kind == K::ast_annotation_decl) {
     expect("(");
     if (!at(")")) {
@@ -682,6 +740,11 @@ Lexer::Ptr Lexer::decl() {
     expect(")");
     result->Loc.Len = expect(";").Loc.End() - result->Loc.Offset;
   } else if (result->kind == K::ast_class) {
+    const bool IsInterface = std::any_of(
+        result->children.begin(), result->children.end(), [](const Ptr &Child) {
+          return Child->kind == K::ast_annotation &&
+                 IsBuiltinAnnotation(Child->text, "interface");
+        });
     expect("{");
     while (!at("}") && !end()) {
       std::vector<Ptr> memberAnnotations;
@@ -724,22 +787,32 @@ Lexer::Ptr Lexer::decl() {
         expect(")");
         if (member->kind == K::ast_function && eat("->"))
           add(*member, type());
-        add(*member, block());
+        if (IsInterface && eat(";")) {
+          // An interface method may be declared without an implementation.
+        } else {
+          add(*member, block());
+        }
         add(*result, std::move(member));
         continue;
       }
+      const bool Constant = eat("const");
       const auto id = name();
       const auto fieldLoc = !memberAnnotations.empty()
                                 ? memberAnnotations.front()->Loc
                             : memberPublic ? memberVisibility.Loc
                                            : id.Loc;
-      auto field = node(K::ast_field, fieldLoc, std::string(spelling(id)));
+      auto field = node(Constant ? K::ast_const_field : K::ast_field, fieldLoc,
+                        std::string(spelling(id)));
       for (auto &annotation : memberAnnotations)
         add(*field, std::move(annotation));
       if (memberPublic)
         add(*field, node(K::ast_public, memberVisibility.Loc));
       expect(":");
       add(*field, type());
+      if (Constant) {
+        expect("=");
+        add(*field, expr());
+      }
       field->Loc.Len = expect(";").Loc.End() - field->Loc.Offset;
       add(*result, std::move(field));
     }
@@ -759,7 +832,8 @@ Lexer::Ptr Lexer::decl() {
     expect(")");
     if (eat("->"))
       add(*result, type());
-    add(*result, block());
+    if (!eat(";"))
+      add(*result, block());
   }
   return result;
 }
@@ -767,38 +841,57 @@ Lexer::Ptr Lexer::decl() {
 void Lexer::run() {
   result.root =
       node(K::ast_module, {result.File, 0, 1, 1, result.source.size()});
+  std::vector<Ptr> LeadingAnnotations;
+  if (at("@")) {
+    const auto Start = pos;
+    try {
+      while (at("@"))
+        LeadingAnnotations.push_back(annotation());
+    } catch (const ParseError &) {
+      LeadingAnnotations.clear();
+      recover(true, Start);
+    }
+  }
   if (at("module")) {
     const auto start = pos;
     try {
       take();
       auto declaration = qualified(K::ast_module_decl);
+      if (!LeadingAnnotations.empty())
+        declaration->Loc = LeadingAnnotations.front()->Loc;
+      for (auto &Annotation : LeadingAnnotations)
+        add(*declaration, std::move(Annotation));
+      LeadingAnnotations.clear();
       declaration->Loc.Len = expect(";").Loc.End() - declaration->Loc.Offset;
       add(*result.root, std::move(declaration));
     } catch (const ParseError &) {
       recover(true, start);
     }
   }
-  while (at("import")) {
-    const auto start = pos;
-    try {
-      take();
-      auto Import = qualified(K::ast_import, true);
-      if (Import->text == "c" && peek().kind == K::string) {
-        const auto Header = take();
-        const auto Text = spelling(Header);
-        add(*Import, node(K::ast_literal, Header.Loc,
-                          std::string(Text.substr(1, Text.size() - 2))));
-      }
-      Import->Loc.Len = expect(";").Loc.End() - Import->Loc.Offset;
-      add(*result.root, std::move(Import));
-    } catch (const ParseError &) {
-      recover(true, start);
-    }
-  }
+  bool SeenDeclaration = false;
   while (!end()) {
     const auto start = pos;
     try {
-      add(*result.root, decl());
+      std::vector<Ptr> Annotations = std::move(LeadingAnnotations);
+      while (at("@"))
+        Annotations.push_back(annotation());
+      if (at("import") && !SeenDeclaration) {
+        take();
+        auto Import = qualified(K::ast_import, true);
+        for (auto &Annotation : Annotations)
+          add(*Import, std::move(Annotation));
+        if (Import->text == "c" && peek().kind == K::string) {
+          const auto Header = take();
+          const auto Text = spelling(Header);
+          add(*Import, node(K::ast_literal, Header.Loc,
+                            std::string(Text.substr(1, Text.size() - 2))));
+        }
+        Import->Loc.Len = expect(";").Loc.End() - Import->Loc.Offset;
+        add(*result.root, std::move(Import));
+      } else {
+        SeenDeclaration = true;
+        add(*result.root, decl(std::move(Annotations)));
+      }
     } catch (const ParseError &) {
       recover(true, start);
     }
@@ -874,6 +967,8 @@ TokenKind Lexer::keyword(std::string_view s) {
     return K::keyword_fn;
   if (s == "class")
     return K::keyword_class;
+  if (s == "const")
+    return K::keyword_const;
   if (s == "this")
     return K::keyword_this;
   if (s == "annotation")
@@ -898,6 +993,8 @@ TokenKind Lexer::keyword(std::string_view s) {
     return K::keyword_meta;
   if (s == "when")
     return K::keyword_when;
+  if (s == "as")
+    return K::keyword_as;
   if (s == "parallel")
     return K::keyword_parallel;
   if (s == "extern")

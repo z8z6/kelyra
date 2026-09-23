@@ -1,0 +1,9 @@
+import std.annotation;
+
+@std.annotation.interface
+class Answer {
+  const VALUE: i32 = 42;
+}
+
+@std.annotation.main
+fn launch() -> i32 { return Answer.VALUE; }

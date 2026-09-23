@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 project(Kelyra LANGUAGES C CXX)
 
+set(KELYRA_STDLIB_SOURCE_DIR "${PROJECT_SOURCE_DIR}/../kstd/src" CACHE PATH
+  "Kelyra standard library source directory")
+
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -39,7 +42,17 @@ add_subdirectory(src/Sema)
 add_subdirectory(src/CImport)
 add_subdirectory(src/CodeGen)
 
-add_executable(kelyra src/main.cpp src/Driver/ModuleLoader.cpp)
+add_executable(kelyra
+  src/main.cpp
+  src/Driver/Command.cpp
+  src/Driver/Input.cpp
+  src/Driver/CImport.cpp
+  src/Driver/Analysis.cpp
+  src/Driver/Emit.cpp
+  src/Driver/Generics.cpp
+  src/Driver/ModuleLoader.cpp)
+target_compile_definitions(kelyra PRIVATE
+  KELYRA_STDLIB_SOURCE_DIR="${KELYRA_STDLIB_SOURCE_DIR}")
 target_link_libraries(kelyra PRIVATE
   kelyra_codegen
   kelyra_cimport

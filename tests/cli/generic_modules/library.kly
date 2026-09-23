@@ -1,0 +1,11 @@
+module library;
+
+pub class Box<T> {
+  value: T;
+
+  pub init(value: T) { this.value = value; }
+
+  pub fn get() -> T { return value; }
+}
+
+pub fn make<T>(value: T) -> Box<T> { return Box<T>(value); }

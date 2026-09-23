@@ -1,0 +1,4 @@
+module transitive.indirect_function;
+import transitive.middle;
+
+pub fn value() -> i32 { return transitive.leaf.answer(); }

@@ -1,0 +1,8 @@
+@extern("getpid")
+@callconv("stdcall")
+fn process_id() -> c.int;
+
+@main
+fn main() -> i32 {
+  return 0;
+}

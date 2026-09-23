@@ -1,0 +1,3 @@
+@cfg(os="linux", arch="x86_64") module cfg.module_linux;
+
+pub fn answer() -> i32 { return 42; }

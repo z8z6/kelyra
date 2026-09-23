@@ -1,5 +1,7 @@
 #include "Sema/Sema.h"
+#include "BuiltinAnnotations.h"
 #include "SemaInternal.h"
+#include "Support/BuiltinAnnotation.h"
 
 #include <algorithm>
 #include <charconv>
@@ -9,6 +11,22 @@
 using namespace kelyra;
 
 namespace {
+bool IsConstantExpression(const lex::Node &Expression) {
+  using K = lex::TokenKind;
+  if (Expression.kind == K::ast_literal)
+    return true;
+  if (Expression.kind == K::ast_group && Expression.children.size() == 1)
+    return IsConstantExpression(*Expression.children.front());
+  if (Expression.kind == K::ast_unary && Expression.children.size() == 1 &&
+      (Expression.text == "+" || Expression.text == "-" ||
+       Expression.text == "!"))
+    return IsConstantExpression(*Expression.children.front());
+  if (Expression.kind == K::ast_binary && Expression.children.size() == 2)
+    return IsConstantExpression(*Expression.children[0]) &&
+           IsConstantExpression(*Expression.children[1]);
+  return false;
+}
+
 std::string ModuleName(const lex::Node &Module) {
   for (const auto &Child : Module.children)
     if (Child->kind == lex::TokenKind::ast_module_decl)
@@ -18,7 +36,9 @@ std::string ModuleName(const lex::Node &Module) {
 
 std::string Mangle(std::string_view Module, std::string_view Name,
                    bool IsEntrypoint) {
-  if (Module.empty() || IsEntrypoint)
+  if (IsEntrypoint)
+    return "main";
+  if (Module.empty())
     return std::string(Name);
   std::ostringstream Result;
   Result << "_K";
@@ -75,6 +95,30 @@ std::string MetaTypeName(const sema::Type &Type) {
 
 void sema::Sema::Error(const lex::Node &Node, lex::DiagnosticKind Kind) {
   Diagnostics.push_back({Kind, Node.Loc});
+}
+
+void sema::Sema::Warn(const lex::Node &Node, std::string Message) {
+  Warnings.push_back({Node.Loc, std::move(Message)});
+}
+
+void sema::Sema::WarnIfDeprecated(const lex::Node &Use,
+                                  const lex::Node *Declaration) {
+  if (!Declaration)
+    return;
+  for (const auto &Annotation : GetAnnotations(*Declaration)) {
+    if (Annotation.Name != "std.annotation.deprecated")
+      continue;
+    std::string Message =
+        "use of deprecated function '" + Declaration->text + "'";
+    if (!Annotation.Arguments.empty() &&
+        Annotation.Arguments.front().Value.Text.size() > 2) {
+      auto Detail = Annotation.Arguments.front().Value.Text;
+      if (Detail.front() == '"' && Detail.back() == '"')
+        Detail = Detail.substr(1, Detail.size() - 2);
+      Message += ": " + Detail;
+    }
+    Warn(Use, std::move(Message));
+  }
 }
 
 sema::MetaId sema::Sema::RegisterMetaDeclaration(const lex::Node &Node,
@@ -175,6 +219,16 @@ sema::Sema::GetConstructorCall(const lex::Node &Node) const {
   return It == ConstructorCalls.end() ? nullptr : GetClass(It->second);
 }
 
+bool sema::Sema::IsClassTemporary(const lex::Node &Node) const {
+  if (GetConstructorCall(Node))
+    return true;
+  if (Node.kind == lex::TokenKind::ast_group && Node.children.size() == 1)
+    return IsClassTemporary(*Node.children.front());
+  const auto Type = Types.find(&Node);
+  return Node.kind == lex::TokenKind::ast_call && Type != Types.end() &&
+         Type->second.IsClass();
+}
+
 std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
   using K = lex::TokenKind;
   if (Node.kind == K::ast_function_type)
@@ -199,10 +253,12 @@ std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
     const auto Element = ParseBuiltinType(Node.text);
     const auto External = ExternalTypes.find(Node.text);
     std::string ClassName = Node.text;
+    const auto &AccessModule =
+        Node.GenericArgument ? Node.GenericOriginModule : CurrentModule;
     if (!Classes.contains(ClassName) &&
         Node.text.find('.') == std::string::npos)
       ClassName =
-          CurrentModule.empty() ? Node.text : CurrentModule + "." + Node.text;
+          AccessModule.empty() ? Node.text : AccessModule + "." + Node.text;
     const auto Class = Classes.find(ClassName);
     if (!Element && External == ExternalTypes.end() && Class == Classes.end()) {
       Error(Node, lex::DiagnosticKind::UnsupportedType);
@@ -214,8 +270,8 @@ std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
     else if (External != ExternalTypes.end())
       Result = External->second;
     else {
-      if (Class->second.Module != CurrentModule) {
-        const auto Import = Imports.find(CurrentModule);
+      if (Class->second.Module != AccessModule) {
+        const auto Import = Imports.find(AccessModule);
         if (!Class->second.Public || Import == Imports.end() ||
             (!Import->second.contains(Class->second.Module) &&
              !Import->second.contains(Class->second.Module + ".*"))) {
@@ -225,6 +281,10 @@ std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
       }
       Result = Type{BuiltinType::Class, {}};
       Result.ClassName = ClassName;
+    }
+    if (Node.GenericArgument) {
+      Result.GenericArgument = true;
+      Result.GenericOriginModule = Node.GenericOriginModule;
     }
     Types[&Node] = Result;
     return Result;
@@ -367,17 +427,32 @@ void sema::Sema::GenerateSymbolPrefix(const std::vector<ModuleInput> &Modules) {
 }
 
 bool sema::Sema::CheckModules(
-    const std::vector<ModuleInput> &Modules,
+    const std::vector<ModuleInput> &InputModules,
     const std::vector<ExternalFunction> &ExternalDeclarations,
     const std::vector<ExternalType> &ExternalTypeDeclarations) {
   using K = lex::TokenKind;
+  std::vector<ModuleInput> Modules = InputModules;
+  const bool HasBuiltinModule =
+      std::any_of(Modules.begin(), Modules.end(), [](const auto &Input) {
+        return ModuleName(*Input.Ast) == "std.annotation";
+      });
+  BuiltinAnnotations.reset();
+  if (!HasBuiltinModule) {
+    BuiltinAnnotations = lex::Lexer().parse(
+        std::string(BuiltinAnnotationsSource), "std/annotation.kly");
+    if (!BuiltinAnnotations->ok())
+      return false;
+    Modules.push_back({BuiltinAnnotations->root.get(), false, true});
+  }
   Diagnostics.clear();
+  Warnings.clear();
   Reflection.Clear();
   Types.clear();
   Functions.clear();
   Classes.clear();
   AnnotationDeclarations.clear();
   AnnotationInstances.clear();
+  EntrypointCandidates.clear();
   Symbols.clear();
   Callees.clear();
   CWrapperCalls.clear();
@@ -443,6 +518,29 @@ bool sema::Sema::CheckModules(
       Info.QualifiedName =
           Name.empty() ? Child->text : Name + "." + Child->text;
       Info.Public = IsPublic(*Child);
+      Info.IsInterface = std::any_of(
+          Child->children.begin(), Child->children.end(), [](const auto &Part) {
+            return Part->kind == K::ast_annotation &&
+                   IsBuiltinAnnotation(Part->text, "interface");
+          });
+      for (const auto &Part : Child->children) {
+        if (Part->kind != K::ast_annotation ||
+            !IsBuiltinAnnotation(Part->text, "layout"))
+          continue;
+        if (Info.IsInterface) {
+          Error(*Part, lex::DiagnosticKind::InvalidAnnotation);
+          continue;
+        }
+        if (Info.CLayout || Part->children.size() != 1 ||
+            !Part->children.front()->text.empty() ||
+            Part->children.front()->children.size() != 1 ||
+            Part->children.front()->children.front()->kind != K::ast_name ||
+            Part->children.front()->children.front()->text != "c") {
+          Error(*Part, lex::DiagnosticKind::InvalidAnnotation);
+          continue;
+        }
+        Info.CLayout = true;
+      }
       const auto Key = Info.QualifiedName;
       if (ParseBuiltinType(Info.Name) ||
           !Classes.emplace(Key, std::move(Info)).second) {
@@ -483,9 +581,89 @@ bool sema::Sema::CheckModules(
           Owner.empty() ? Function.text
                         : std::string(Owner.substr(Owner.rfind('.') + 1)) +
                               "." + Function.text;
-      Info.Symbol =
-          Mangle(Name, LocalName,
-                 Owner.empty() && Input.IsEntry && Function.text == "main");
+      const bool MainAnnotation =
+          std::any_of(Function.children.begin(), Function.children.end(),
+                      [](const auto &Part) {
+                        return Part->kind == K::ast_annotation &&
+                               IsBuiltinAnnotation(Part->text, "main");
+                      });
+      if (Owner.empty() && MainAnnotation)
+        EntrypointCandidates.push_back(&Function);
+      Info.Symbol = Mangle(Name, LocalName, Owner.empty() && MainAnnotation);
+      if (Owner.empty() && Input.IsEntry && !MainAnnotation &&
+          Function.text == "main" && Name.empty())
+        Info.Symbol = "_K0F4main";
+      const lex::Node *ExternAnnotation = nullptr;
+      const lex::Node *CallConvAnnotation = nullptr;
+      bool HasBody = false;
+      for (const auto &Part : Function.children) {
+        if (Part->kind == K::ast_block)
+          HasBody = true;
+        if (Part->kind == K::ast_annotation &&
+            IsBuiltinAnnotation(Part->text, "extern")) {
+          if (ExternAnnotation)
+            Error(*Part, lex::DiagnosticKind::DuplicateAnnotation);
+          ExternAnnotation = Part.get();
+        }
+        if (Part->kind == K::ast_annotation &&
+            IsBuiltinAnnotation(Part->text, "callconv")) {
+          if (CallConvAnnotation)
+            Error(*Part, lex::DiagnosticKind::DuplicateAnnotation);
+          CallConvAnnotation = Part.get();
+        }
+      }
+      if (ExternAnnotation) {
+        if (!Owner.empty() || HasBody || MainAnnotation)
+          Error(*ExternAnnotation,
+                lex::DiagnosticKind::InvalidExternDeclaration);
+        Info.Symbol = Function.text;
+        if (!ExternAnnotation->children.empty()) {
+          if (ExternAnnotation->children.size() != 1 ||
+              ExternAnnotation->children.front()->kind !=
+                  K::ast_annotation_argument ||
+              !ExternAnnotation->children.front()->text.empty() ||
+              ExternAnnotation->children.front()->children.size() != 1 ||
+              ExternAnnotation->children.front()->children.front()->kind !=
+                  K::ast_literal) {
+            Error(*ExternAnnotation,
+                  lex::DiagnosticKind::InvalidExternDeclaration);
+          } else {
+            const auto &Spelling =
+                ExternAnnotation->children.front()->children.front()->text;
+            if (Spelling.size() < 3 || Spelling.front() != '"' ||
+                Spelling.back() != '"' ||
+                Spelling.find('\\') != std::string::npos)
+              Error(*ExternAnnotation,
+                    lex::DiagnosticKind::InvalidExternDeclaration);
+            else
+              Info.Symbol = Spelling.substr(1, Spelling.size() - 2);
+          }
+        }
+      } else if (!HasBody && (Owner.empty() ||
+                              !Classes.at(std::string(Owner)).IsInterface)) {
+        Error(Function, lex::DiagnosticKind::InvalidExternDeclaration);
+      }
+      Info.Abstract = !HasBody && !Owner.empty() &&
+                      Classes.at(std::string(Owner)).IsInterface;
+      if (CallConvAnnotation) {
+        if (!ExternAnnotation || !Owner.empty() ||
+            CallConvAnnotation->children.size() != 1 ||
+            CallConvAnnotation->children.front()->kind !=
+                K::ast_annotation_argument ||
+            !CallConvAnnotation->children.front()->text.empty() ||
+            CallConvAnnotation->children.front()->children.size() != 1 ||
+            CallConvAnnotation->children.front()->children.front()->kind !=
+                K::ast_literal) {
+          Error(*CallConvAnnotation,
+                lex::DiagnosticKind::InvalidExternDeclaration);
+        } else {
+          const auto &Value =
+              CallConvAnnotation->children.front()->children.front()->text;
+          if (Value != "\"c\"" && Value != "\"system\"")
+            Error(*CallConvAnnotation,
+                  lex::DiagnosticKind::InvalidExternDeclaration);
+        }
+      }
       if (!Owner.empty()) {
         Type Receiver{BuiltinType::Class, {}};
         Receiver.ClassName = Owner;
@@ -512,7 +690,13 @@ bool sema::Sema::CheckModules(
           if (auto Parameter = CheckType(*Part->children.front())) {
             Info.Parameters.push_back(*Parameter);
             Types[Part.get()] = *Parameter;
-            if (Parameter->IsClass())
+            if (ExternAnnotation && !Parameter->IsPointer() &&
+                !IsNumeric(Parameter->Element) &&
+                Parameter->Element != BuiltinType::Bool &&
+                Parameter->Element != BuiltinType::CBool &&
+                Parameter->Element != BuiltinType::Char)
+              Error(*Part, lex::DiagnosticKind::UnsupportedType);
+            if (Parameter->IsClass() && ExternAnnotation)
               Error(*Part, lex::DiagnosticKind::ClassValueOperation);
             if (Parameter->IsVoid() || Parameter->IsResults())
               Error(*Part, lex::DiagnosticKind::UnsupportedType);
@@ -527,8 +711,12 @@ bool sema::Sema::CheckModules(
         } else if (detail::IsTypeNode(Part->kind)) {
           if (auto Return = CheckType(*Part)) {
             Info.Return = *Return;
-            if (Return->IsClass())
-              Error(*Part, lex::DiagnosticKind::ClassValueOperation);
+            if (ExternAnnotation && !Return->IsVoid() && !Return->IsPointer() &&
+                !IsNumeric(Return->Element) &&
+                Return->Element != BuiltinType::Bool &&
+                Return->Element != BuiltinType::CBool &&
+                Return->Element != BuiltinType::Char)
+              Error(*Part, lex::DiagnosticKind::UnsupportedType);
           }
         }
       }
@@ -570,6 +758,8 @@ bool sema::Sema::CheckModules(
                (Member->text == "init" || Member->text == "deinit")))
             Error(*Member, lex::DiagnosticKind::InvalidClass);
           if (Member->kind == K::ast_field) {
+            if (Class.IsInterface)
+              Error(*Member, lex::DiagnosticKind::InvalidClass);
             const auto TypeNode =
                 std::find_if(Member->children.begin(), Member->children.end(),
                              [](const auto &Part) {
@@ -593,15 +783,48 @@ bool sema::Sema::CheckModules(
             }
             continue;
           }
+          if (Member->kind == K::ast_const_field) {
+            if (!Class.IsInterface || Member->children.size() != 2 ||
+                !IsConstantExpression(*Member->children[1]))
+              Error(*Member, lex::DiagnosticKind::InvalidClass);
+            if (Member->children.size() == 2) {
+              auto Value = CheckType(*Member->children[0]);
+              if (Value && (!IsNumeric(Value->Element) &&
+                            Value->Element != BuiltinType::Bool &&
+                            !(Value->IsPointer() &&
+                              Value->Element == BuiltinType::CChar &&
+                              Member->children[1]->kind == K::ast_literal)))
+                Error(*Member, lex::DiagnosticKind::UnsupportedType);
+              if (Value) {
+                CheckExpression(*Member->children[1], *Value);
+                Class.Constants.push_back(
+                    {Member.get(), Member->children[1].get(), Member->text,
+                     *Value, IsPublic(*Member)});
+                Types[Member.get()] = *Value;
+                const auto Id = RegisterMetaDeclaration(
+                    *Member, MetaKind::Field, Name, IsPublic(*Member));
+                Reflection.Records[Id].QualifiedName =
+                    Class.QualifiedName + "." + Member->text;
+                Reflection.Records[Id].Type = GetOrCreateMetaType(*Value);
+                Reflection.Records[*Reflection.GetId(*Child)]
+                    .Children.push_back(Id);
+              }
+            }
+            continue;
+          }
           if (Member->kind != K::ast_function &&
               Member->kind != K::ast_constructor &&
               Member->kind != K::ast_destructor)
             continue;
           if (Member->kind == K::ast_constructor) {
+            if (Class.IsInterface)
+              Error(*Member, lex::DiagnosticKind::InvalidClass);
             if (Class.Constructor)
               Error(*Member, lex::DiagnosticKind::DuplicateFunction);
             Class.Constructor = Member.get();
           } else if (Member->kind == K::ast_destructor) {
+            if (Class.IsInterface)
+              Error(*Member, lex::DiagnosticKind::InvalidClass);
             if (Class.Destructor || IsPublic(*Member) ||
                 std::any_of(Member->children.begin(), Member->children.end(),
                             [](const auto &Part) {
@@ -609,8 +832,22 @@ bool sema::Sema::CheckModules(
                             }))
               Error(*Member, lex::DiagnosticKind::InvalidClass);
             Class.Destructor = Member.get();
+          } else if (Member->kind == K::ast_function &&
+                     Member->text == "copy") {
+            if (Class.IsInterface)
+              Error(*Member, lex::DiagnosticKind::InvalidClass);
+            Class.Copy = Member.get();
+          } else if (Member->kind == K::ast_function &&
+                     Member->text == "move") {
+            if (Class.IsInterface)
+              Error(*Member, lex::DiagnosticKind::InvalidClass);
+            Class.Move = Member.get();
           }
           RegisterFunction(*Member, Class.QualifiedName);
+        }
+        if (Class.IsInterface) {
+          Class.DefaultConstructible = false;
+          continue;
         }
         if (Class.Constructor) {
           Class.ConstructorSymbol = Symbols.contains(Class.Constructor)
@@ -630,6 +867,26 @@ bool sema::Sema::CheckModules(
           Class.DestructorSymbol = Symbols.at(Class.Destructor);
         else
           Class.DestructorSymbol = Mangle(Name, Class.Name + ".deinit", false);
+        const auto ValidateTransfer = [&](const lex::Node *Method,
+                                          std::string_view MethodName,
+                                          std::string &Symbol) {
+          if (!Method) {
+            Symbol =
+                Mangle(Name, Class.Name + "." + std::string(MethodName), false);
+            return;
+          }
+          const auto &Info =
+              Functions.at(Class.QualifiedName + "." + std::string(MethodName));
+          Type Source{BuiltinType::Class, {}};
+          Source.ClassName = Class.QualifiedName;
+          Source.AddPointer();
+          if (Info.Parameters.size() != 2 || Info.Parameters[1] != Source ||
+              !Info.Return.IsVoid())
+            Error(*Method, lex::DiagnosticKind::InvalidClass);
+          Symbol = Info.Symbol;
+        };
+        ValidateTransfer(Class.Copy, "copy", Class.CopySymbol);
+        ValidateTransfer(Class.Move, "move", Class.MoveSymbol);
         continue;
       }
       if (Child->kind != K::ast_function) {
@@ -668,9 +925,43 @@ bool sema::Sema::CheckModules(
   for (const auto &[Node, Instances] : AnnotationInstances)
     Reflection.SetAnnotations(*Node, Instances);
 
+  const auto HasReflectAnnotation = [this](const lex::Node &Node) {
+    const auto &Annotations = GetAnnotations(Node);
+    return std::any_of(Annotations.begin(), Annotations.end(),
+                       [](const AnnotationInstance &Annotation) {
+                         return Annotation.Name == "std.annotation.reflect";
+                       });
+  };
+  for (const auto &Input : Modules) {
+    for (const auto &Child : Input.Ast->children) {
+      if (Child->kind != K::ast_class)
+        continue;
+      const auto ClassId = Reflection.GetId(*Child);
+      if (!ClassId)
+        continue;
+      const bool ReflectClass = HasReflectAnnotation(*Child);
+      bool HasReflectedField = false;
+      for (const auto &Member : Child->children) {
+        if (Member->kind != K::ast_field)
+          continue;
+        const auto FieldId = Reflection.GetId(*Member);
+        if (!FieldId)
+          continue;
+        auto &Field = Reflection.Records[*FieldId];
+        Field.RuntimeReflected =
+            (ReflectClass && Field.Public) || HasReflectAnnotation(*Member);
+        HasReflectedField |= Field.RuntimeReflected;
+      }
+      Reflection.Records[*ClassId].RuntimeReflected =
+          ReflectClass || HasReflectedField;
+    }
+  }
+
   for (const auto &Input : Modules) {
     CurrentModule = ModuleName(*Input.Ast);
     for (const auto &Child : Input.Ast->children) {
+      if (Input.IsExternal && !Child->GenericInstance)
+        continue;
       if (Child->kind != K::ast_function)
         if (Child->kind == K::ast_class) {
           const auto &Class = Classes.at(
@@ -685,7 +976,10 @@ bool sema::Sema::CheckModules(
         } else
           continue;
       CurrentClass.clear();
-      CheckFunction(*Child);
+      if (std::any_of(
+              Child->children.begin(), Child->children.end(),
+              [](const auto &Part) { return Part->kind == K::ast_block; }))
+        CheckFunction(*Child);
     }
   }
   return Diagnostics.empty();
@@ -693,23 +987,30 @@ bool sema::Sema::CheckModules(
 
 bool sema::Sema::CheckEntrypoint(const lex::Node &Module) {
   using K = lex::TokenKind;
-  for (const auto &Function : Module.children) {
-    if (Function->kind != K::ast_function || Function->text != "main")
+  const lex::Node *Entry = nullptr;
+  for (const auto *Function : EntrypointCandidates) {
+    if (Entry) {
+      Error(*Function, lex::DiagnosticKind::InvalidEntrypoint);
       continue;
+    }
+    Entry = Function;
     unsigned Parameters = 0;
     const lex::Node *ReturnTypeNode = nullptr;
+    bool HasBody = false;
     for (const auto &Child : Function->children) {
       if (Child->kind == K::ast_parameter)
         ++Parameters;
       else if (detail::IsTypeNode(Child->kind))
         ReturnTypeNode = Child.get();
+      else if (Child->kind == K::ast_block)
+        HasBody = true;
     }
     const Type Expected{BuiltinType::I32, {}};
-    if (Parameters != 0 || !ReturnTypeNode ||
+    if (!HasBody || Parameters != 0 || !ReturnTypeNode ||
         GetType(*ReturnTypeNode) != Expected)
       Error(*Function, lex::DiagnosticKind::InvalidEntrypoint);
-    return Diagnostics.empty();
   }
-  Error(Module, lex::DiagnosticKind::MissingEntrypoint);
-  return false;
+  if (!Entry)
+    Error(Module, lex::DiagnosticKind::MissingEntrypoint);
+  return Diagnostics.empty();
 }

@@ -14,6 +14,7 @@ namespace kelyra::sema {
 struct ModuleInput {
   const lex::Node *Ast;
   bool IsEntry = false;
+  bool IsExternal = false;
 };
 
 struct ExternalFunction {
@@ -39,6 +40,11 @@ struct CWrapper {
   bool ReturnByAddress = false;
 };
 
+struct Warning {
+  lex::Location Loc;
+  std::string Message;
+};
+
 struct ClassFieldInfo {
   const lex::Node *Node = nullptr;
   std::string Name;
@@ -48,20 +54,35 @@ struct ClassFieldInfo {
   unsigned LayoutIndex = 0;
 };
 
+struct ClassConstantInfo {
+  const lex::Node *Node = nullptr;
+  const lex::Node *Value = nullptr;
+  std::string Name;
+  Type ValueType{BuiltinType::I32, {}};
+  bool Public = false;
+};
+
 struct ClassInfo {
   const lex::Node *Node = nullptr;
   std::string Module;
   std::string Name;
   std::string QualifiedName;
   std::vector<ClassFieldInfo> Fields;
+  std::vector<ClassConstantInfo> Constants;
+  bool IsInterface = false;
   const lex::Node *Constructor = nullptr;
   const lex::Node *Destructor = nullptr;
+  const lex::Node *Copy = nullptr;
+  const lex::Node *Move = nullptr;
   std::string ConstructorSymbol;
   std::string DestructorSymbol;
+  std::string CopySymbol;
+  std::string MoveSymbol;
   bool Public = false;
   // True when the class can be constructed with no arguments, either through
   // an explicit zero-parameter init or the generated default constructor.
   bool DefaultConstructible = false;
+  bool CLayout = false;
   std::uint64_t Size = 0;
   unsigned Alignment = 1;
 };
@@ -106,16 +127,20 @@ class Sema {
     Type Return{BuiltinType::Void, {}};
     bool Public = false;
     bool Variadic = false;
+    bool Abstract = false;
     std::string OwnerClass;
     const ExternalFunction *External = nullptr;
   };
 
   std::vector<lex::Diagnostic> Diagnostics;
+  std::vector<Warning> Warnings;
   ReflectionDatabase Reflection;
   std::unordered_map<const lex::Node *, Type> Types;
   std::unordered_map<std::string, FunctionInfo> Functions;
   std::unordered_map<std::string, ClassInfo> Classes;
   std::unordered_map<std::string, AnnotationInfo> AnnotationDeclarations;
+  std::optional<lex::ParseResult> BuiltinAnnotations;
+  std::vector<const lex::Node *> EntrypointCandidates;
   std::unordered_map<const lex::Node *, std::vector<AnnotationInstance>>
       AnnotationInstances;
   std::unordered_map<const lex::Node *, std::string> Symbols;
@@ -124,6 +149,7 @@ class Sema {
   std::unordered_map<const lex::Node *, std::string> ConstructorCalls;
   std::unordered_map<const lex::Node *, std::pair<std::string, std::size_t>>
       FieldReferences;
+  std::unordered_map<const lex::Node *, const lex::Node *> ConstantReferences;
   std::unordered_set<const lex::Node *> MethodCalls;
   std::unordered_map<const lex::Node *, std::string> FunctionValues;
   std::unordered_set<const lex::Node *> IndirectCalls;
@@ -154,6 +180,8 @@ class Sema {
                                         std::optional<Type> Expected);
 
   void Error(const lex::Node &Node, lex::DiagnosticKind Kind);
+  void Warn(const lex::Node &Node, std::string Message);
+  void WarnIfDeprecated(const lex::Node &Use, const lex::Node *Declaration);
   void GenerateSymbolPrefix(const std::vector<ModuleInput> &Modules);
   void RegisterAnnotation(const lex::Node &Declaration,
                           std::string_view Module);
@@ -186,10 +214,13 @@ class Sema {
                                            std::optional<Type> Expected, bool);
   std::optional<Type> CheckBinaryExpression(const lex::Node &Expression,
                                             std::optional<Type> Expected, bool);
+  std::optional<Type> CheckCastExpression(const lex::Node &Expression,
+                                          std::optional<Type> Expected, bool);
   std::optional<Type> CheckMetaExpression(const lex::Node &Expression,
                                           std::optional<Type> Expected, bool);
   void CheckFunction(const lex::Node &Function);
   void CheckClassMember(const lex::Node &Member, const ClassInfo &Class);
+  void CheckTransferAccess(const Type &Value, bool Move, const lex::Node &Site);
   void CheckBlock(const lex::Node &Block, unsigned LoopDepth = 0);
   void CheckBlockStatement(const lex::Node &Statement, unsigned LoopDepth);
   void CheckLetStatement(const lex::Node &Statement, unsigned LoopDepth);
@@ -222,6 +253,7 @@ public:
   const std::vector<lex::Diagnostic> &GetDiagnostics() const {
     return Diagnostics;
   }
+  const std::vector<Warning> &GetWarnings() const { return Warnings; }
   const Type &GetType(const lex::Node &Node) const { return Types.at(&Node); }
   const std::string &GetSymbol(const lex::Node &Node) const {
     return Symbols.at(&Node);
@@ -238,6 +270,10 @@ public:
   const ClassInfo *GetClass(std::string_view Name) const;
   const ClassInfo *GetClass(const Type &Value) const;
   const ClassFieldInfo *GetField(const lex::Node &Node) const;
+  const lex::Node *GetConstant(const lex::Node &Node) const {
+    const auto It = ConstantReferences.find(&Node);
+    return It == ConstantReferences.end() ? nullptr : It->second;
+  }
   std::size_t GetFieldIndex(const lex::Node &Node) const;
   bool IsMethodCall(const lex::Node &Node) const {
     return MethodCalls.contains(&Node);
@@ -250,6 +286,7 @@ public:
     return IndirectCalls.contains(&Node);
   }
   const ClassInfo *GetConstructorCall(const lex::Node &Node) const;
+  bool IsClassTemporary(const lex::Node &Node) const;
   const std::unordered_map<std::string, ClassInfo> &GetClasses() const {
     return Classes;
   }
