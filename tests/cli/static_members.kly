@@ -1,0 +1,32 @@
+class Counter<T> {
+  @static
+  value: T;
+
+  @static
+  pub fn add(amount: T) -> T {
+    value = value + amount;
+    return value;
+  }
+}
+
+class State {
+  @static
+  pub count: i32;
+
+  @static
+  pub fn bump() -> i32 {
+    count = count + 1;
+    return count;
+  }
+}
+
+@main
+fn main() -> i32 {
+  if Counter<i32>.add(2) != 2 { return 1; }
+  if Counter<i32>.add(3) != 5 { return 2; }
+  if Counter<i64>.add(7) != 7 { return 3; }
+  if Counter<i32>.value != 5 { return 4; }
+  State.count = 9;
+  if State.bump() != 10 { return 5; }
+  return 0;
+}

@@ -1,0 +1,83 @@
+class Pair {
+  first: i32;
+  second: i32;
+
+  init(first: i32, second: i32) {
+    this.first = first;
+    this.second = second;
+  }
+}
+
+class Mixed {
+  number: i32;
+  enabled: bool;
+
+  init(number: i32, enabled: bool) {
+    this.number = number;
+    this.enabled = enabled;
+  }
+}
+
+class Zero {
+  value: i32;
+
+  init() { this.value = 0; }
+}
+
+class Wide {
+  value: i64;
+
+  init(value: i64) { this.value = value; }
+}
+
+class Box<T> {
+  value: T;
+
+  init<Args...>(
+    @forward
+    args: ...Args
+  ) {
+    this.value = T(...args);
+  }
+}
+
+class Parent {
+  pair: Pair;
+
+  init<Args...>(
+    @forward
+    args: ...Args
+  ) {
+    this.pair = Pair(...args);
+  }
+}
+
+class Child: Parent {
+  extra: i32;
+
+  init<Args...>(
+    @forward
+    args: ...Args
+  ) {
+    super(...args);
+    this.extra = 2;
+  }
+}
+
+@main
+fn main() -> i32 {
+  let box = Box<Pair>(20, 22);
+  let nested = Box<Box<Pair>>(20, 22);
+  let mixed = Box<Mixed>(42, true);
+  let zero = Box<Zero>();
+  let wide = Box<Wide>(20 + 22);
+  let child = Child(20, 20);
+  if box.value.first + box.value.second ==
+    child.pair.first + child.pair.second + child.extra && mixed.value.enabled &&
+    mixed.value.number == 42 && zero.value.value == 0 &&
+    nested.value.value.first + nested.value.value.second == 42 &&
+    wide.value.value == 42 {
+    return 42;
+  }
+  return 1;
+}

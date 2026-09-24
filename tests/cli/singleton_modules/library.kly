@@ -1,0 +1,14 @@
+module library;
+
+@singleton
+pub class Counter {
+  value: i32;
+  pub fn next() -> i32 {
+    value = value + 1;
+    return value;
+  }
+}
+
+pub fn pointer() -> *Counter {
+  return Counter.instance();
+}

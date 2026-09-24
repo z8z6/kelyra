@@ -33,7 +33,7 @@ ctest --test-dir build --output-on-failure
 
 内置类型为 `i8/i16/i32/i64/i128/isize`、`u8/u16/u32/u64/u128/usize`、`f32/f64/f128/f256/f512`、`bool` 和 `char`。`usize` 和 `isize` 使用本机指针宽度。`bool` lowering 为 `i1`；`char` 表示 Unicode 标量值并 lowering 为 `i32`。MLIR 没有原生 `f256/f512`，因此它们表示为 `!kelyra.f256` 和 `!kelyra.f512`，目前仅支持函数签名与参数透传，不支持字面量和算术。
 
-`alias Name = Existing;` 声明透明别名，`type Name = Existing;` 声明独立的标量类型。两者都可加 `pub` 并通过模块名引用；独立类型和底层类型之间需要显式 `as` 转换。当前独立类型的底层类型限于不超过 128 位的数值类型。C ABI 类型由标准库 `c.kly` 中的公开别名提供，例如 `c.int`、`c.long` 和 `c.char`。
+`alias Name = Existing;` 声明透明类型别名，也可写成 `alias Pointer<T> = *T;`，在使用时通过 `Pointer<i32>` 指定参数。别名可加 `pub` 并通过模块名引用；别名和目标类型可以直接互用。C ABI 类型由标准库 `c.kly` 中的公开别名提供，例如 `c.int`、`c.long` 和 `c.char`。
 
 前端库本身没有 LLVM 依赖。测试统一使用独立的 GoogleTest 子模块，可按测试套件筛选：
 
@@ -54,9 +54,8 @@ module-decl  = { annotation }, "module", qualified-name, ";" ;
 import       = { annotation }, "import", qualified-name, [ ".", "*" ], ";" ;
 qualified-name = name, { ".", name } ;
 declaration  = { annotation }, [ "pub" ],
-               ( function | class | type-declaration | alias-declaration | annotation-declaration ) ;
-type-declaration = "type", name, "=", type, ";" ;
-alias-declaration = "alias", name, "=", type, ";" ;
+               ( function | class | alias-declaration | annotation-declaration ) ;
+alias-declaration = "alias", name, [ generic-parameters ], "=", type, ";" ;
 annotation   = "@", qualified-name,
                [ "(", [ annotation-arguments ], ")" ] ;
 annotation-arguments = annotation-argument,
@@ -70,10 +69,12 @@ annotation-parameter = name, ":", type, [ "=", expression ] ;
 meta-expression = "meta", "(", ( qualified-name | type ), ")" ;
 function     = "fn", name, [ generic-parameters ], "(", [ parameters ], ")", [ "->", result-type ],
                ( block | ";" ) ;
-generic-parameters = "<", name, { ",", name }, ">" ;
+generic-parameters = "<", generic-parameter,
+                     { ",", generic-parameter }, ">" ;
+generic-parameter = name, [ "..." ] ;
 result-type  = type | "(", type, ",", type, { ",", type }, [ "," ], ")" ;
 parameters   = parameter, { ",", parameter }, [ "," ] ;
-parameter    = name, ":", type ;
+parameter    = { annotation }, name, ":", [ "..." ], type ;
 class        = "class", name, [ generic-parameters ],
                [ ":", type, { ",", type } ], "{", { class-member }, "}" ;
 class-member = { annotation }, [ "pub" ],
@@ -81,7 +82,7 @@ class-member = { annotation }, [ "pub" ],
 (* @interface class 仅允许 constant-field 与 function，后者可用分号省略函数体。 *)
 constant-field = "const", name, ":", type, "=", constant-expression, ";" ;
 field        = name, ":", type, ";" ;
-constructor  = "init", "(", [ parameters ], ")", block ;
+constructor  = "init", [ "<", name, "...", ">" ], "(", [ parameters ], ")", block ;
 destructor   = "deinit", "(", ")", block ;
 type         = "*", type | qualified-name, [ "<", type, { ",", type }, ">" ],
                { "[", integer, "]" }
@@ -268,6 +269,16 @@ let copy = identity<i32>(3);
 仍是比较运算符；泛型调用目前必须显式给出类型实参，不做推导。模板按使用点生成具体实例，
 包括从已编译模块导入的模板；后者仍需提供源文件以读取模板定义。未实例化的泛型类本身
 不能作为类型实参。单个多返回值项暂不支持 class。
+
+构造函数的 `init<Args...>(@forward args: ...Args)` 会从调用实参推导编译期参数包。
+普通泛型函数也支持末尾类型包，但沿用显式类型实参：
+
+```kly
+fn make<Args...>(args: ...Args) -> Pair { return Pair(...args); }
+let pair = make<i32, bool>(42, true);
+```
+
+函数参数包的各元素按值传入；空类型包写作 `make<>()`。运行时同类型可变参数尚未实现。
 
 已实现 `class`、`init`、`deinit`、`copy`、`move` 和确定性作用域 RAII；接收者为 `this`，无歧义时可省略。
 没有写 `init` 的 class 会自动获得一个无参数默认构造函数，按字段声明顺序清零普通字段、

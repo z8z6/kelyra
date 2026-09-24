@@ -54,6 +54,7 @@ class IRGen {
   const sema::ClassInfo *ActiveDestructor = nullptr;
   bool InitializingField = false;
   bool InTransferConstructor = false;
+  const lex::Node *InlineConstructorBlock = nullptr;
   unsigned GlobalStringCount = 0;
   std::set<const lex::Node *> ExternalModules;
 
@@ -117,6 +118,8 @@ class IRGen {
   void EmitDefaultDestructorDeclaration(const sema::ClassInfo &Class);
   void EmitDefaultTransfer(const sema::ClassInfo &Class, bool Move,
                            bool DeclarationOnly);
+  void EmitSingletonAccessor(const sema::ClassInfo &Class,
+                             bool DeclarationOnly);
   void EmitTransfer(const sema::ClassInfo &Class, mlir::Value Target,
                     mlir::Value Source, bool Move, mlir::Location Loc);
   mlir::Value FieldAddress(const sema::ClassInfo &Class, mlir::Value Address,

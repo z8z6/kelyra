@@ -1,0 +1,12 @@
+module library;
+
+pub class Bucket<T> {
+  @static
+  pub value: T;
+
+  @static
+  pub fn add(amount: T) -> T {
+    value = value + amount;
+    return value;
+  }
+}

@@ -134,11 +134,14 @@ void CollectGenericAngles(const Node &Node, std::string_view Source,
       Angles.insert(Node.Loc.End() - 1);
   }
   if (Node.kind == TokenKind::ast_class ||
-      Node.kind == TokenKind::ast_function) {
+      Node.kind == TokenKind::ast_function ||
+      Node.kind == TokenKind::ast_alias_decl ||
+      Node.kind == TokenKind::ast_constructor) {
     const kelyra::lex::Node *First = nullptr;
     const kelyra::lex::Node *Last = nullptr;
     for (const auto &Child : Node.children)
-      if (Child->kind == TokenKind::ast_generic_parameter) {
+      if (Child->kind == TokenKind::ast_generic_parameter ||
+          Child->kind == TokenKind::ast_generic_pack) {
         if (!First)
           First = Child.get();
         Last = Child.get();
@@ -290,6 +293,7 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
   std::vector<bool> StructBraces;
   std::vector<bool> AsmBraces;
   unsigned Parentheses = 0;
+  std::vector<unsigned> AnnotatedParameterDepths;
   TokenKind Previous = TokenKind::end;
   bool AsmChain = false;
   bool BlankAfterComment = false;
@@ -398,6 +402,13 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
     case TokenKind::punc_dot:
     case TokenKind::punc_right_bracket:
     case TokenKind::punc_right_paren:
+      if (Token.kind == TokenKind::punc_right_paren &&
+          !AnnotatedParameterDepths.empty() &&
+          AnnotatedParameterDepths.back() == Parentheses) {
+        Output.NewLine();
+        Output.PopIndent();
+        AnnotatedParameterDepths.pop_back();
+      }
       Output.TrimSpace();
       Output.Write(Text);
       if (Token.kind == TokenKind::punc_right_paren) {
@@ -420,6 +431,15 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       ++Parentheses;
       break;
     case TokenKind::punc_at:
+      if (Parentheses && (Previous == TokenKind::punc_left_paren ||
+                          Previous == TokenKind::punc_comma)) {
+        Output.NewLine();
+        if (AnnotatedParameterDepths.empty() ||
+            AnnotatedParameterDepths.back() != Parentheses) {
+          Output.PushIndent();
+          AnnotatedParameterDepths.push_back(Parentheses);
+        }
+      }
       Output.Write(Text);
       break;
     case TokenKind::keyword_else:

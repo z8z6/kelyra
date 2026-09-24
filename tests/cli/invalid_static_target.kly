@@ -1,0 +1,2 @@
+@static
+fn bad() -> i32 { return 0; }

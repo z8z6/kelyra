@@ -1,0 +1,5 @@
+class Box { value: i32; }
+class Bad {
+  @static
+  value: Box;
+}

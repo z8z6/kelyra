@@ -1,9 +1,90 @@
 #include "CodeGen/IRGen.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
 using namespace kelyra;
+
+void codegen::IRGen::EmitSingletonAccessor(const sema::ClassInfo &Class,
+                                           bool DeclarationOnly) {
+  const auto Loc = GetLocation(Class.Node->Loc);
+  const auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
+  const auto I32 = Builder.getI32Type();
+  mlir::LLVM::GlobalOp Storage;
+  mlir::LLVM::GlobalOp State;
+  if (!DeclarationOnly) {
+    const auto Linkage = Class.Node->GenericInstance
+                             ? mlir::LLVM::Linkage::LinkonceODR
+                             : mlir::LLVM::Linkage::Private;
+    const auto Bytes =
+        mlir::LLVM::LLVMArrayType::get(Builder.getI8Type(), Class.Size);
+    Storage = mlir::LLVM::GlobalOp::create(
+        Builder, Loc, Bytes, false, Linkage, Class.InstanceSymbol + ".storage",
+        Builder.getStringAttr(std::string(Class.Size, '\0')), Class.Alignment);
+    State = mlir::LLVM::GlobalOp::create(
+        Builder, Loc, I32, false, Linkage, Class.InstanceSymbol + ".state",
+        Builder.getI32IntegerAttr(0), alignof(std::uint32_t));
+  }
+  auto Function =
+      mlir::func::FuncOp::create(Builder, Loc, Class.InstanceSymbol,
+                                 Builder.getFunctionType({}, {Pointer}));
+  if (Class.Node->GenericInstance)
+    Function->setAttr("kelyra.generic", Builder.getUnitAttr());
+  if (DeclarationOnly || !Class.Public)
+    Function.setPrivate();
+  if (DeclarationOnly)
+    return;
+
+  auto *Entry = Function.addEntryBlock();
+  auto *Loop = new mlir::Block();
+  auto *Claim = new mlir::Block();
+  auto *Initialize = new mlir::Block();
+  auto *Ready = new mlir::Block();
+  Function.getBody().push_back(Loop);
+  Function.getBody().push_back(Claim);
+  Function.getBody().push_back(Initialize);
+  Function.getBody().push_back(Ready);
+  Builder.setInsertionPointToStart(Entry);
+  auto StorageAddress = mlir::LLVM::AddressOfOp::create(
+      Builder, Loc, Pointer, Storage.getSymNameAttr());
+  auto StateAddress = mlir::LLVM::AddressOfOp::create(Builder, Loc, Pointer,
+                                                      State.getSymNameAttr());
+  auto Zero = mlir::arith::ConstantIntOp::create(Builder, Loc, 0, 32);
+  auto One = mlir::arith::ConstantIntOp::create(Builder, Loc, 1, 32);
+  auto Two = mlir::arith::ConstantIntOp::create(Builder, Loc, 2, 32);
+  mlir::cf::BranchOp::create(Builder, Loc, Loop);
+
+  Builder.setInsertionPointToStart(Loop);
+  auto Loaded = mlir::LLVM::LoadOp::create(
+      Builder, Loc, I32, StateAddress, alignof(std::uint32_t), false, false,
+      false, false, mlir::LLVM::AtomicOrdering::acquire);
+  auto IsReady = mlir::arith::CmpIOp::create(
+      Builder, Loc, mlir::arith::CmpIPredicate::eq, Loaded, Two);
+  mlir::cf::CondBranchOp::create(Builder, Loc, IsReady, Ready, Claim);
+
+  Builder.setInsertionPointToStart(Claim);
+  auto Claimed = mlir::LLVM::AtomicCmpXchgOp::create(
+      Builder, Loc, StateAddress, Zero, One,
+      mlir::LLVM::AtomicOrdering::acq_rel, mlir::LLVM::AtomicOrdering::acquire,
+      llvm::StringRef(), alignof(std::uint32_t));
+  auto Won =
+      mlir::LLVM::ExtractValueOp::create(Builder, Loc, Claimed, std::size_t{1});
+  mlir::cf::CondBranchOp::create(Builder, Loc, Won, Initialize, Loop);
+
+  Builder.setInsertionPointToStart(Initialize);
+  mlir::func::CallOp::create(Builder, Loc, Class.ConstructorSymbol,
+                             mlir::TypeRange{},
+                             mlir::ValueRange{StorageAddress});
+  mlir::LLVM::StoreOp::create(Builder, Loc, Two, StateAddress,
+                              alignof(std::uint32_t), false, false, false,
+                              mlir::LLVM::AtomicOrdering::release);
+  mlir::cf::BranchOp::create(Builder, Loc, Ready);
+
+  Builder.setInsertionPointToStart(Ready);
+  mlir::func::ReturnOp::create(Builder, Loc, StorageAddress.getResult());
+}
 
 mlir::Value codegen::IRGen::FieldAddress(const sema::ClassInfo &Class,
                                          mlir::Value Address, std::size_t Index,
@@ -19,6 +100,50 @@ mlir::Value codegen::IRGen::FieldAddress(const sema::ClassInfo &Class,
 
 void codegen::IRGen::EmitConstruction(const lex::Node &Expression,
                                       mlir::Value Address) {
+  if (const auto *Constructor = Analysis.GetInlineConstructor(Expression)) {
+    const auto *Class = Analysis.GetConstructorCall(Expression);
+    if (!Class)
+      Class = Analysis.GetBaseConstructorCall(Expression);
+    Scopes.emplace_back();
+    Cleanups.emplace_back();
+    for (std::size_t I = 1; I < Expression.children.size(); ++I) {
+      const auto &Argument = *Expression.children[I];
+      const auto &Type = Analysis.GetType(Argument);
+      mlir::Value Storage;
+      if (Type.IsClass()) {
+        Storage = EmitClassSourceAddress(Argument).first;
+      } else {
+        Storage = CreateAlloca(Type, GetLocation(Argument.Loc));
+        mlir::LLVM::StoreOp::create(Builder, GetLocation(Argument.Loc),
+                                    EmitExpression(Argument), Storage);
+      }
+      Scopes.back().emplace("$forward" + std::to_string(I - 1),
+                            Variable{Type, Storage, {}});
+    }
+    sema::Type Receiver{sema::BuiltinType::Class, {}};
+    Receiver.ClassName = Class->QualifiedName;
+    Receiver.AddPointer();
+    Scopes.back().emplace("this", Variable{Receiver, {}, Address});
+    const auto *PreviousClass = CurrentClass;
+    const auto PreviousTransfer = InTransferConstructor;
+    const auto *PreviousBlock = InlineConstructorBlock;
+    CurrentClass = Class;
+    InTransferConstructor = true;
+    for (const auto &Child : Constructor->children)
+      if (Child->kind == lex::TokenKind::ast_block) {
+        InlineConstructorBlock = Child.get();
+        if (Class->UserFieldCount == 0)
+          EmitVirtualSlots(*Class, Address, GetLocation(Expression.Loc));
+        EmitBlock(*Child);
+        break;
+      }
+    InlineConstructorBlock = PreviousBlock;
+    InTransferConstructor = PreviousTransfer;
+    CurrentClass = PreviousClass;
+    Cleanups.pop_back();
+    Scopes.pop_back();
+    return;
+  }
   llvm::SmallVector<mlir::Value> Arguments{Address};
   for (std::size_t I = 1; I < Expression.children.size(); ++I)
     Arguments.push_back(Analysis.GetType(*Expression.children[I]).IsClass()
@@ -36,6 +161,8 @@ codegen::IRGen::EmitClassSourceAddress(const lex::Node &Expression) {
     return EmitClassSourceAddress(*Expression.children.front());
   if (!Analysis.IsClassTemporary(Expression))
     return {EmitAddress(Expression), false};
+  if (Analysis.IsForwardTemporary(Expression))
+    return {EmitAddress(Expression), true};
   auto Address =
       CreateAlloca(Analysis.GetType(Expression), GetLocation(Expression.Loc));
   if (Analysis.GetConstructorCall(Expression))

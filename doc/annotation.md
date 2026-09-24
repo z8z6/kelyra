@@ -35,7 +35,7 @@ fn create_user() -> i32 {
 
 ```ebnf
 declaration = { annotation }, [ "pub" ],
-              ( function | class | annotation-declaration ) ;
+              ( function | class | alias-declaration | annotation-declaration ) ;
 
 annotation = "@", qualified-name,
              [ "(", [ annotation-arguments ], ")" ] ;
@@ -124,7 +124,10 @@ IRGen 只读取 Sema 产生的强类型属性，不重新解析注解 AST。
 annotation serializable();
 ```
 
-当前支持 `function`、`class`、`field`、`method`、`constructor`、`destructor` 和 `annotation`。`module`、`parameter`、`local`、`statement` 和 `expression` 留待后续实现。
+当前支持 `function`、`class`、`field`、`method`、`constructor`、`destructor`、`parameter` 和 `annotation`。`module`、`local`、`statement` 和 `expression` 留待后续实现。
+
+内置 `@forward` 的声明目标是 `parameter`，目前只允许标注构造函数的编译期参数包，
+表示按调用处的值类别转发各个实参。
 
 ### `@repeatable`
 
@@ -143,7 +146,7 @@ annotation serializable();
 已实现的内建注解声明位于标准库的
 [`std.annotation`](../../kstd/src/std/annotation.kly) 模块。
 编译器在编译期隐式加载该模块，因此现有 `@cfg`、`@interface`、`@layout`、
-`@final`、`@virtual`、`@override`、
+`@final`、`@singleton`、`@static`、`@virtual`、`@override`、
 `@extern`、`@callconv`、`@main`、`@inline`、`@deprecated`、`@reflect`、`@target`、
 `@repeatable` 和 `@retention` 短名称无需
 显式 `import`。也可以使用 `@std.annotation.interface` 等限定名。

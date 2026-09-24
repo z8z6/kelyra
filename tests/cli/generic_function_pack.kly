@@ -1,0 +1,32 @@
+class Pair {
+  first: i32;
+  second: bool;
+
+  init(first: i32, second: bool) {
+    this.first = first;
+    this.second = second;
+  }
+}
+
+fn make_pair<Args...>(args: ...Args) -> Pair {
+  return Pair(...args);
+}
+
+fn answer() -> i32 { return 42; }
+
+fn invoke<Args...>(args: ...Args) -> i32 { return answer(...args); }
+
+fn check<T, Args...>(expected: T, args: ...Args) -> i32 {
+  let pair = make_pair<i32, bool>(...args);
+  if pair.first == expected && pair.second { return 42; }
+  return 1;
+}
+
+@main
+fn main() -> i32 {
+  let pair = make_pair<i32, bool>(42, true);
+  if pair.first == 42 && pair.second && invoke<>() == 42 {
+    return check<i32, i32, bool>(42, 42, true);
+  }
+  return 1;
+}

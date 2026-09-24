@@ -1,2 +1,0 @@
-class Record { value: i32; }
-type RecordId = Record;

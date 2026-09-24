@@ -78,7 +78,6 @@ struct Type {
   std::string CName;
   std::string CSpelling;
   std::string ClassName;
-  std::string NominalName;
   // Access to a type supplied to a generic is checked in its use module,
   // not in the module that owns the generic template.
   bool GenericArgument = false;
@@ -139,9 +138,8 @@ struct Type {
   bool operator==(const Type &Other) const {
     return Element == Other.Element && Dimensions == Other.Dimensions &&
            PointerDepth == Other.PointerDepth && CName == Other.CName &&
-           ClassName == Other.ClassName && NominalName == Other.NominalName &&
-           Results == Other.Results && Parameters == Other.Parameters &&
-           Modifiers == Other.Modifiers;
+           ClassName == Other.ClassName && Results == Other.Results &&
+           Parameters == Other.Parameters && Modifiers == Other.Modifiers;
   }
 };
 
@@ -249,8 +247,6 @@ inline bool IsNumeric(BuiltinType Type) {
 }
 
 inline bool IsCInteropCompatible(const Type &Left, const Type &Right) {
-  if (!Left.NominalName.empty() || !Right.NominalName.empty())
-    return false;
   const auto IsCType = [](BuiltinType Value) {
     return Value >= BuiltinType::CChar && Value < BuiltinType::CRecord;
   };

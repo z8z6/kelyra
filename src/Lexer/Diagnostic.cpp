@@ -33,7 +33,7 @@ constexpr std::array DiagnosticInfos = {
     DiagnosticInfo{"K0002", "expected '}' before declaration"},
     DiagnosticInfo{"K0002", "expected type annotation or initializer"},
     DiagnosticInfo{"K0002", "invalid assignment target"},
-    DiagnosticInfo{"K0002", "expected 'fn', 'class', or 'annotation'"},
+    DiagnosticInfo{"K0002", "expected 'fn', 'class', 'alias', or 'annotation'"},
     DiagnosticInfo{"K0002", "expected end of expression"},
     DiagnosticInfo{"K0004", "duplicate function"},
     DiagnosticInfo{"K0004", "duplicate parameter"},

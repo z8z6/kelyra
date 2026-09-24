@@ -121,6 +121,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return ";";
   case TokenKind::punc_dot:
     return ".";
+  case TokenKind::punc_ellipsis:
+    return "...";
   case TokenKind::punc_at:
     return "@";
   case TokenKind::comment:
@@ -147,16 +149,20 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Function";
   case TokenKind::ast_generic_parameter:
     return "GenericParameter";
+  case TokenKind::ast_generic_pack:
+    return "GenericPack";
   case TokenKind::ast_generic_type:
     return "GenericType";
   case TokenKind::ast_generic_apply:
     return "GenericApply";
   case TokenKind::ast_parameter:
     return "Parameter";
+  case TokenKind::ast_parameter_pack:
+    return "ParameterPack";
+  case TokenKind::ast_spread:
+    return "Spread";
   case TokenKind::ast_class:
     return "Class";
-  case TokenKind::ast_type_decl:
-    return "TypeDecl";
   case TokenKind::ast_alias_decl:
     return "AliasDecl";
   case TokenKind::ast_base_type:

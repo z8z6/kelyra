@@ -14,6 +14,55 @@ Kelyra 不同时保留 `struct`：原有 Kelyra `struct` 声明和关键字已�
 当前实现提供单继承、虚方法分派、单一构造函数、可选析构函数，以及可自定义的复制/移动构造方法。
 不包含异常、运算符重载或隐式堆分配。
 
+## 单例类
+
+`@singleton` 类通过 `Class.instance()` 返回唯一实例的指针。首次访问时运行无参数
+`init`，并发访问只初始化一次。直接调用 `Class()`、按值复制单例，以及继承单例类
+都会报错。单例类可以省略 `init`，由编译器生成默认初始化。
+
+```kelyra
+@singleton
+class Registry {
+  count: i32;
+
+  pub fn next() -> i32 {
+    count = count + 1;
+    return count;
+  }
+}
+
+let registry: *Registry = Registry.instance();
+let id = registry.next();
+```
+
+实例的存储持续到进程结束，编译器不会在退出时自动调用它的 `deinit`。
+`init` 不应直接或间接调用本类的 `instance()`。
+泛型单例类按具体类型分别拥有实例，例如 `Cache<i32>.instance()` 和
+`Cache<u8>.instance()` 返回不同对象。
+
+## 静态成员
+
+`@static` 可标注类字段和方法。静态字段不计入对象布局，从零初始化，并在程序运行期间
+保留；泛型类的每个具体类型各有一份，例如 `Counter<i32>.value` 和
+`Counter<i64>.value` 互不影响。静态方法没有 `this`，通过 `Class.method()` 调用。
+字段和方法仍由 `pub` 控制模块外可见性。静态字段目前支持数值、布尔、字符、指针及其
+定长数组；class 值需要明确的初始化和析构语义，暂不支持作为静态字段。
+
+```kelyra
+class Counter<T> {
+  @static
+  value: T;
+
+  @static
+  pub fn add(amount: T) -> T {
+    value = value + amount;
+    return value;
+  }
+}
+
+let first = Counter<i32>.add(1);
+```
+
 ## 基本语法
 
 ```kelyra
@@ -62,7 +111,7 @@ method            = "fn", name, "(", [ parameters ], ")",
                     [ "->", result-type ], block ;
 copy-method       = "fn", "copy", "(", name, ":", "*", class-name, ")", block ;
 move-method       = "fn", "move", "(", name, ":", "*", class-name, ")", block ;
-constructor       = "init", "(", [ parameters ], ")", block ;
+constructor       = "init", [ "<", name, "...", ">" ], "(", [ parameters ], ")", block ;
 destructor        = "deinit", "(", ")", block ;
 construction      = qualified-name, "(", [ arguments ], ")" ;
 ```
@@ -71,6 +120,27 @@ construction      = qualified-name, "(", [ arguments ], ")" ;
 一个 class 最多有一个 `init`，最多有一个 `deinit`。没有写 `init` 时，编译器生成一个
 无参数默认构造函数：按字段声明顺序，普通字段清零，class 类型字段调用其自身的默认
 构造函数。因此字段类型必须可以无参数构造；否则必须在 `init` 中显式构造该字段。
+
+构造函数也可以使用编译期参数包转发实参：
+
+```kly
+class Box<T> {
+  value: T;
+
+  pub init<Args...>(
+    @forward
+    args: ...Args
+  ) {
+    this.value = T(...args);
+  }
+}
+```
+
+`Args...` 按调用处的各个实参分别推导类型，允许不同类型及零个实参。
+`@forward` 只用于构造函数的参数包；`...args` 在调用位置展开，且一个构造函数体
+只能展开一次。编译器先按从左到右的顺序求值，再转发给目标构造函数。左值按目标签名
+复制，临时类值按目标签名移动。也可以用 `super(...args)` 转发给基类构造函数。
+参数包不允许作为普通值使用，构造函数体不能提前 `return`。
 没有 `deinit` 时编译器生成空析构体，但仍会析构 class 类型的字段。首版不提供构造
 函数重载；替代构造路径写成接受对象指针的普通模块函数。
 

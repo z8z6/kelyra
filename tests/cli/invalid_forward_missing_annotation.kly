@@ -1,0 +1,9 @@
+class Bad {
+  value: i32;
+
+  init<Args...>(args: ...Args) {
+    this.value = 0;
+  }
+}
+
+fn main() -> i32 { return 0; }

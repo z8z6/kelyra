@@ -41,9 +41,10 @@ void codegen::IRGen::EmitBlock(const lex::Node &Block) {
     if (HasTerminator(Builder.getInsertionBlock()))
       break;
     const bool PreviousInitializing = InitializingField;
-    InitializingField = InTransferConstructor && CurrentClass &&
-                        Cleanups.size() == 2 &&
-                        Index < CurrentClass->UserFieldCount;
+    InitializingField =
+        InTransferConstructor && CurrentClass &&
+        (Cleanups.size() == 2 || InlineConstructorBlock == &Block) &&
+        Index < CurrentClass->UserFieldCount;
     EmitStatement(*Statement);
     if (InTransferConstructor && CurrentClass &&
         Index + 1 == CurrentClass->UserFieldCount &&

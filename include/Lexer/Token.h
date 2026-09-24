@@ -66,6 +66,7 @@ enum class TokenKind {
   punc_colon,               // :
   punc_semicolon,           // ;
   punc_dot,                 // .
+  punc_ellipsis,            // ...
   punc_at,                  // @
   comment,                  // //... or /*...*/
   end,                      // end of input
@@ -79,11 +80,13 @@ enum class TokenKind {
   ast_annotation_argument,  // AST annotation argument
   ast_function,             // AST function declaration
   ast_generic_parameter,    // AST declaration type parameter
+  ast_generic_pack,         // AST declaration type parameter pack
   ast_generic_type,         // AST named type with type arguments
   ast_generic_apply,        // AST explicit type arguments on a callee
   ast_parameter,            // AST function parameter
+  ast_parameter_pack,       // AST function parameter pack
+  ast_spread,               // AST ...expression
   ast_class,                // AST class declaration
-  ast_type_decl,            // AST nominal type definition
   ast_alias_decl,           // AST transparent type alias
   ast_base_type,            // AST inherited class or interface type
   ast_const_field,          // AST interface constant field

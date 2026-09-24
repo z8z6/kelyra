@@ -40,6 +40,8 @@ sema::Sema::CheckFunctionValue(const lex::Node &Node,
   const auto Key =
       Qualified || CurrentModule.empty() ? Name : CurrentModule + "." + Name;
   auto Function = Functions.find(Key);
+  if (Function == Functions.end() && Qualified && !CurrentModule.empty())
+    Function = Functions.find(CurrentModule + "." + Name);
   const auto Import = Imports.find(CurrentModule);
   if (!Qualified && Function == Functions.end() && Import != Imports.end()) {
     for (const auto &Module : Import->second) {
@@ -69,7 +71,7 @@ sema::Sema::CheckFunctionValue(const lex::Node &Node,
     Error(Node, lex::DiagnosticKind::PrivateDeclaration);
     return std::nullopt;
   }
-  if (Info.External || !Info.OwnerClass.empty()) {
+  if (Info.External || (!Info.OwnerClass.empty() && !Info.Static)) {
     Error(Node, lex::DiagnosticKind::UnsupportedExpression);
     return std::nullopt;
   }

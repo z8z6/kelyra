@@ -1,0 +1,3 @@
+alias Identity<T> = T;
+
+fn use(value: Identity<i32, i64>) -> i32 { return value; }

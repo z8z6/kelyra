@@ -1,0 +1,22 @@
+module library;
+
+pub class Pair {
+  pub first: i32;
+  pub second: i32;
+
+  pub init(first: i32, second: i32) {
+    this.first = first;
+    this.second = second;
+  }
+}
+
+pub class Box<T> {
+  pub value: T;
+
+  pub init<Args...>(
+    @forward
+    args: ...Args
+  ) {
+    this.value = T(...args);
+  }
+}

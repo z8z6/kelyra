@@ -1,0 +1,3 @@
+module library;
+
+pub alias Identity<T> = T;

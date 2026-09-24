@@ -36,6 +36,7 @@ void sema::Sema::RegisterAnnotation(const lex::Node &Declaration,
       (Declaration.text == "layout" || Declaration.text == "cfg" ||
        Declaration.text == "extern" || Declaration.text == "callconv" ||
        Declaration.text == "interface" || Declaration.text == "final" ||
+       Declaration.text == "forward" || Declaration.text == "static" ||
        Declaration.text == "virtual" || Declaration.text == "override" ||
        Declaration.text == "main" || Declaration.text == "reflect" ||
        Declaration.text == "inline" || Declaration.text == "deprecated" ||
@@ -254,6 +255,8 @@ void sema::Sema::CheckAnnotationDefinition(const lex::Node &Declaration) {
           Info.Targets |= AnnotationConstructor;
         else if (Target == "destructor")
           Info.Targets |= AnnotationDestructor;
+        else if (Target == "parameter")
+          Info.Targets |= AnnotationParameterTarget;
         else
           Error(*Argument, lex::DiagnosticKind::InvalidAnnotation);
       }
@@ -314,8 +317,10 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
           ? AnnotationField
       : Target.kind == K::ast_constructor ? AnnotationConstructor
       : Target.kind == K::ast_destructor  ? AnnotationDestructor
-      : Target.kind == K::ast_class       ? AnnotationClass
-                                          : AnnotationDeclaration;
+      : Target.kind == K::ast_parameter || Target.kind == K::ast_parameter_pack
+          ? AnnotationParameterTarget
+      : Target.kind == K::ast_class ? AnnotationClass
+                                    : AnnotationDeclaration;
   std::unordered_set<const lex::Node *> Seen;
   bool SeenInterface = false;
   for (const auto &Annotation : Target.children) {
@@ -323,6 +328,9 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
       continue;
     const auto *Resolved = ResolveAnnotation(*Annotation);
     if (!Resolved && (IsBuiltinAnnotation(Annotation->text, "interface") ||
+                      IsBuiltinAnnotation(Annotation->text, "singleton") ||
+                      IsBuiltinAnnotation(Annotation->text, "static") ||
+                      IsBuiltinAnnotation(Annotation->text, "forward") ||
                       IsBuiltinAnnotation(Annotation->text, "layout") ||
                       IsBuiltinAnnotation(Annotation->text, "extern") ||
                       IsBuiltinAnnotation(Annotation->text, "callconv") ||
@@ -346,6 +354,27 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
     }
     if (IsBuiltinAnnotation(Annotation->text, "final")) {
       if (Target.kind != K::ast_class)
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
+      if (!Annotation->children.empty())
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotation);
+      continue;
+    }
+    if (IsBuiltinAnnotation(Annotation->text, "singleton")) {
+      if (Target.kind != K::ast_class)
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
+      if (!Annotation->children.empty())
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotation);
+      continue;
+    }
+    if (IsBuiltinAnnotation(Annotation->text, "static")) {
+      if (Target.kind != K::ast_field && Target.kind != K::ast_function)
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
+      if (!Annotation->children.empty())
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotation);
+      continue;
+    }
+    if (IsBuiltinAnnotation(Annotation->text, "forward")) {
+      if (Target.kind != K::ast_parameter_pack)
         Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
       if (!Annotation->children.empty())
         Error(*Annotation, lex::DiagnosticKind::InvalidAnnotation);

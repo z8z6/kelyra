@@ -4,6 +4,7 @@
 #include "Sema/Reflection.h"
 #include "Sema/Type.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -63,6 +64,14 @@ struct ClassConstantInfo {
   bool Public = false;
 };
 
+struct ClassStaticFieldInfo {
+  const lex::Node *Node = nullptr;
+  std::string Name;
+  Type Value{BuiltinType::I32, {}};
+  std::string Symbol;
+  bool Public = false;
+};
+
 struct ClassInfo {
   const lex::Node *Node = nullptr;
   std::string Module;
@@ -77,14 +86,17 @@ struct ClassInfo {
   std::size_t OwnFieldStart = 0;
   std::size_t UserFieldCount = 0;
   std::vector<ClassFieldInfo> Fields;
+  std::vector<ClassStaticFieldInfo> StaticFields;
   std::vector<ClassConstantInfo> Constants;
   bool IsInterface = false;
   bool Final = false;
+  bool Singleton = false;
   const lex::Node *Constructor = nullptr;
   const lex::Node *Destructor = nullptr;
   const lex::Node *Copy = nullptr;
   const lex::Node *Move = nullptr;
   std::string ConstructorSymbol;
+  std::string InstanceSymbol;
   std::string DestructorSymbol;
   std::string CopySymbol;
   std::string MoveSymbol;
@@ -106,6 +118,7 @@ class Sema {
     AnnotationMethod = 1u << 4,
     AnnotationConstructor = 1u << 5,
     AnnotationDestructor = 1u << 6,
+    AnnotationParameterTarget = 1u << 7,
   };
 
   enum class AnnotationRetention { Source, Compile };
@@ -123,7 +136,7 @@ class Sema {
     unsigned Targets = AnnotationFunction | AnnotationClass |
                        AnnotationDeclaration | AnnotationField |
                        AnnotationMethod | AnnotationConstructor |
-                       AnnotationDestructor;
+                       AnnotationDestructor | AnnotationParameterTarget;
     AnnotationRetention Retention = AnnotationRetention::Compile;
     bool Public = false;
     bool Repeatable = false;
@@ -140,6 +153,7 @@ class Sema {
     bool Abstract = false;
     bool Virtual = false;
     bool Override = false;
+    bool Static = false;
     std::string OwnerClass;
     const ExternalFunction *External = nullptr;
   };
@@ -149,7 +163,6 @@ class Sema {
     std::string Module;
     std::string QualifiedName;
     bool Public = false;
-    bool Nominal = false;
     unsigned State = 0;
     std::optional<Type> Resolved;
   };
@@ -172,6 +185,9 @@ class Sema {
   std::unordered_map<const lex::Node *, std::size_t> CWrapperCalls;
   std::unordered_map<const lex::Node *, std::string> ConstructorCalls;
   std::unordered_map<const lex::Node *, std::string> BaseConstructorCalls;
+  std::unordered_map<const lex::Node *, std::unique_ptr<lex::Node>>
+      InlineConstructors;
+  std::unordered_set<const lex::Node *> ForwardTemporaries;
   std::unordered_map<const lex::Node *, std::pair<std::string, std::size_t>>
       VirtualCalls;
   std::unordered_map<const lex::Node *, std::string> InterfaceConversions;
@@ -179,6 +195,8 @@ class Sema {
       InterfaceCalls;
   std::unordered_map<const lex::Node *, std::pair<std::string, std::size_t>>
       FieldReferences;
+  std::unordered_map<const lex::Node *, std::pair<std::string, std::size_t>>
+      StaticFieldReferences;
   std::unordered_map<const lex::Node *, const lex::Node *> ConstantReferences;
   std::unordered_set<const lex::Node *> MethodCalls;
   std::unordered_map<const lex::Node *, std::string> FunctionValues;
@@ -251,6 +269,8 @@ class Sema {
                                           std::optional<Type> Expected, bool);
   void CheckFunction(const lex::Node &Function);
   void CheckClassMember(const lex::Node &Member, const ClassInfo &Class);
+  bool CheckForwardConstructor(const lex::Node &Expression,
+                               const ClassInfo &Class);
   void CheckTransferAccess(const Type &Value, bool Move, const lex::Node &Site);
   void CheckBlock(const lex::Node &Block, unsigned LoopDepth = 0);
   void CheckBlockStatement(const lex::Node &Statement, unsigned LoopDepth);
@@ -301,6 +321,7 @@ public:
   const ClassInfo *GetClass(std::string_view Name) const;
   const ClassInfo *GetClass(const Type &Value) const;
   const ClassFieldInfo *GetField(const lex::Node &Node) const;
+  const ClassStaticFieldInfo *GetStaticField(const lex::Node &Node) const;
   const lex::Node *GetConstant(const lex::Node &Node) const {
     const auto It = ConstantReferences.find(&Node);
     return It == ConstantReferences.end() ? nullptr : It->second;
@@ -321,6 +342,13 @@ public:
     return IndirectCalls.contains(&Node);
   }
   const ClassInfo *GetConstructorCall(const lex::Node &Node) const;
+  const lex::Node *GetInlineConstructor(const lex::Node &Node) const {
+    const auto It = InlineConstructors.find(&Node);
+    return It == InlineConstructors.end() ? nullptr : It->second.get();
+  }
+  bool IsForwardTemporary(const lex::Node &Node) const {
+    return ForwardTemporaries.contains(&Node);
+  }
   const ClassInfo *GetBaseConstructorCall(const lex::Node &Node) const {
     const auto It = BaseConstructorCalls.find(&Node);
     return It == BaseConstructorCalls.end() ? nullptr : GetClass(It->second);

@@ -111,6 +111,7 @@ TEST(Frontend, GenericSyntaxAndFormatting) {
   auto Parsed =
       lexer.parse("class Box<T>{value:T;init(value:T){this.value=value;}}"
                   "class Pair<T,U>{first:T;second:U;}"
+                  "alias Ptr<T> = *T;"
                   "fn identity<T>(value:T)->T{return value;}"
                   "fn use()->i32{let pair:Pair<i32,Box<i32>> = "
                   "Pair<i32,Box<i32>>(1,Box<i32>(42));"
@@ -121,10 +122,55 @@ TEST(Frontend, GenericSyntaxAndFormatting) {
   EXPECT_NE(Formatted.find("class Box<T> {"), std::string::npos);
   EXPECT_NE(Formatted.find("fn identity<T>(value: T) -> T"), std::string::npos);
   EXPECT_NE(Formatted.find("class Pair<T, U> {"), std::string::npos);
+  EXPECT_NE(Formatted.find("alias Ptr<T> = *T;"), std::string::npos);
   EXPECT_NE(Formatted.find("Pair<i32, Box<i32>>(1, Box<i32>(42))"),
             std::string::npos);
   EXPECT_NE(Formatted.find("Box<i32>(identity<i32>(42))"), std::string::npos);
   auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, GenericClassMemberCall) {
+  auto Parsed = lexer.parseExpression("Cache<i32>.instance()");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Ast = lexer.dumpAst(*Parsed.root);
+  EXPECT_NE(Ast.find("GenericApply"), std::string::npos);
+  EXPECT_NE(Ast.find("instance"), std::string::npos);
+}
+
+TEST(Frontend, ForwardConstructorSyntaxAndFormatting) {
+  const auto Parsed =
+      lexer.parse("class Box<T>{value:T;init<Args...>(@forward args:...Args)"
+                  "{this.value=T(...args);}}");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Ast = lexer.dumpAst(*Parsed.root);
+  EXPECT_NE(Ast.find("GenericPack"), std::string::npos);
+  EXPECT_NE(Ast.find("ParameterPack"), std::string::npos);
+  EXPECT_NE(Ast.find("Spread"), std::string::npos);
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(
+      Formatted.find("init<Args...>(\n    @forward\n    args: ...Args\n  )"),
+      std::string::npos);
+  const auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, GenericFunctionPackSyntax) {
+  const auto Parsed = lexer.parse(
+      "fn invoke<Args...>(args:...Args)->i32{return answer(...args);}"
+      "fn answer()->i32{return 42;}"
+      "fn use()->i32{return invoke<>();}");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Ast = lexer.dumpAst(*Parsed.root);
+  EXPECT_NE(Ast.find("GenericPack"), std::string::npos);
+  EXPECT_NE(Ast.find("ParameterPack"), std::string::npos);
+  EXPECT_NE(Ast.find("Spread"), std::string::npos);
+  EXPECT_NE(Ast.find("GenericApply"), std::string::npos);
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("invoke<>()"), std::string::npos);
+  const auto Again = lexer.parse(Formatted);
   ASSERT_TRUE(Again.ok());
   EXPECT_EQ(Format(Again), Formatted);
 }

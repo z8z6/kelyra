@@ -1,5 +1,6 @@
 #include "Sema/Sema.h"
 #include "SemaInternal.h"
+#include "Support/BuiltinAnnotation.h"
 
 #include <algorithm>
 #include <bit>
@@ -11,6 +12,94 @@ using namespace kelyra;
 using K = lex::TokenKind;
 
 namespace {
+std::unique_ptr<lex::Node> CloneNode(const lex::Node &Source) {
+  auto Result = std::make_unique<lex::Node>();
+  Result->kind = Source.kind;
+  Result->Loc = Source.Loc;
+  Result->text = Source.text;
+  Result->height = Source.height;
+  Result->GenericInstance = Source.GenericInstance;
+  Result->GenericArgument = Source.GenericArgument;
+  Result->GenericOriginModule = Source.GenericOriginModule;
+  for (const auto &Child : Source.children)
+    Result->children.push_back(CloneNode(*Child));
+  return Result;
+}
+
+bool IsNumericConstant(const lex::Node &Value) {
+  if (Value.kind == K::ast_literal)
+    return !Value.text.empty() && Value.text.front() >= '0' &&
+           Value.text.front() <= '9';
+  if (Value.kind == K::ast_group && Value.children.size() == 1)
+    return IsNumericConstant(*Value.children.front());
+  if (Value.kind == K::ast_unary && Value.children.size() == 1 &&
+      (Value.text == "+" || Value.text == "-"))
+    return IsNumericConstant(*Value.children.front());
+  if (Value.kind == K::ast_binary && Value.children.size() == 2 &&
+      (Value.text == "+" || Value.text == "-" || Value.text == "*" ||
+       Value.text == "/" || Value.text == "%"))
+    return IsNumericConstant(*Value.children[0]) &&
+           IsNumericConstant(*Value.children[1]);
+  return false;
+}
+
+bool ExpandForwardPack(std::unique_ptr<lex::Node> &Node,
+                       std::string_view PackName,
+                       const std::vector<const lex::Node *> &Arguments,
+                       const std::vector<bool> &Temporary,
+                       std::unordered_set<const lex::Node *> &TemporaryNodes,
+                       unsigned &Spreads) {
+  if (Node->kind == K::ast_name && Node->text == PackName)
+    return false;
+  for (auto &Child : Node->children) {
+    if (Child->kind != K::ast_call)
+      if (!ExpandForwardPack(Child, PackName, Arguments, Temporary,
+                             TemporaryNodes, Spreads))
+        return false;
+    if (Child->kind != K::ast_call)
+      continue;
+    std::vector<std::unique_ptr<lex::Node>> Rewritten;
+    for (auto &Argument : Child->children) {
+      if (Argument->kind == K::ast_spread) {
+        if (Argument->children.size() != 1 ||
+            Argument->children.front()->kind != K::ast_name ||
+            Argument->children.front()->text != PackName)
+          return false;
+        ++Spreads;
+        for (std::size_t I = 0; I < Arguments.size(); ++I) {
+          if (IsNumericConstant(*Arguments[I])) {
+            Rewritten.push_back(CloneNode(*Arguments[I]));
+            continue;
+          }
+          auto Name = std::make_unique<lex::Node>(
+              lex::Node{K::ast_name,
+                        Argument->Loc,
+                        "$forward" + std::to_string(I),
+                        {},
+                        1});
+          if (Temporary[I])
+            TemporaryNodes.insert(Name.get());
+          Rewritten.push_back(std::move(Name));
+        }
+      } else {
+        if (!ExpandForwardPack(Argument, PackName, Arguments, Temporary,
+                               TemporaryNodes, Spreads))
+          return false;
+        Rewritten.push_back(std::move(Argument));
+      }
+    }
+    Child->children = std::move(Rewritten);
+  }
+  return true;
+}
+
+bool ContainsReturn(const lex::Node &Node) {
+  if (Node.kind == K::ast_return)
+    return true;
+  return std::any_of(Node.children.begin(), Node.children.end(),
+                     [](const auto &Child) { return ContainsReturn(*Child); });
+}
+
 unsigned CFieldAlignment(const sema::Type &Type) {
   using T = sema::BuiltinType;
   if (Type.IsPointer() || Type.IsFunction())
@@ -62,6 +151,111 @@ unsigned CFieldAlignment(const sema::Type &Type) {
 }
 } // namespace
 
+bool sema::Sema::CheckForwardConstructor(const lex::Node &Expression,
+                                         const ClassInfo &Class) {
+  const auto &Constructor = *Class.Constructor;
+  const lex::Node *Pack = nullptr;
+  const lex::Node *Parameter = nullptr;
+  for (const auto &Child : Constructor.children) {
+    if (Child->kind == K::ast_generic_pack) {
+      if (Pack)
+        return Error(Constructor, lex::DiagnosticKind::InvalidClass), false;
+      Pack = Child.get();
+    } else if (Child->kind == K::ast_parameter_pack) {
+      if (Parameter)
+        return Error(Constructor, lex::DiagnosticKind::InvalidClass), false;
+      Parameter = Child.get();
+    } else if (Child->kind == K::ast_generic_parameter ||
+               Child->kind == K::ast_parameter) {
+      return Error(*Child, lex::DiagnosticKind::InvalidClass), false;
+    }
+  }
+  if (!Pack || !Parameter || Parameter->children.empty() ||
+      Parameter->children.back()->kind != K::ast_type ||
+      Parameter->children.back()->text != Pack->text ||
+      !std::any_of(Parameter->children.begin(), Parameter->children.end(),
+                   [](const auto &Child) {
+                     return Child->kind == K::ast_annotation &&
+                            IsBuiltinAnnotation(Child->text, "forward");
+                   }))
+    return Error(Constructor, lex::DiagnosticKind::InvalidClass), false;
+
+  std::vector<Type> ArgumentTypes;
+  std::vector<bool> Temporary;
+  for (std::size_t I = 1; I < Expression.children.size(); ++I) {
+    const auto &Argument = *Expression.children[I];
+    const auto *Previous = ConstructionContext;
+    ConstructionContext = &Argument;
+    auto Value = CheckExpression(Argument);
+    ConstructionContext = Previous;
+    if (!Value)
+      return false;
+    ArgumentTypes.push_back(*Value);
+    Temporary.push_back(Value->IsClass() && IsClassTemporary(Argument));
+    if (Value->IsClass())
+      CheckTransferAccess(*Value, Temporary.back(), Argument);
+  }
+
+  auto Specialized = CloneNode(Constructor);
+  if (ContainsReturn(*Specialized))
+    return Error(Constructor, lex::DiagnosticKind::InvalidClass), false;
+  std::erase_if(Specialized->children, [](const auto &Child) {
+    return Child->kind == K::ast_generic_pack ||
+           Child->kind == K::ast_parameter_pack;
+  });
+  for (std::size_t I = 0; I < ArgumentTypes.size(); ++I) {
+    auto Name =
+        std::make_unique<lex::Node>(lex::Node{K::ast_parameter,
+                                              Expression.children[I + 1]->Loc,
+                                              "$forward" + std::to_string(I),
+                                              {},
+                                              1});
+    Types[Name.get()] = ArgumentTypes[I];
+    auto Body = std::find_if(
+        Specialized->children.begin(), Specialized->children.end(),
+        [](const auto &Part) { return Part->kind == K::ast_block; });
+    Specialized->children.insert(Body, std::move(Name));
+  }
+  unsigned Spreads = 0;
+  std::vector<const lex::Node *> Arguments;
+  for (std::size_t I = 1; I < Expression.children.size(); ++I)
+    Arguments.push_back(Expression.children[I].get());
+  for (auto &Child : Specialized->children)
+    if (Child->kind == K::ast_block &&
+        !ExpandForwardPack(Child, Parameter->text, Arguments, Temporary,
+                           ForwardTemporaries, Spreads))
+      return Error(*Child, lex::DiagnosticKind::UnsupportedExpression), false;
+  if (Spreads != 1)
+    return Error(Constructor, lex::DiagnosticKind::InvalidClass), false;
+
+  Types[Specialized.get()] = Type{BuiltinType::Void, {}};
+  auto *Body = Specialized.get();
+  InlineConstructors.emplace(&Expression, std::move(Specialized));
+  auto SavedScopes = std::move(Scopes);
+  auto SavedReturn = ReturnType;
+  auto SavedModule = CurrentModule;
+  auto SavedClass = CurrentClass;
+  auto *SavedConstructor = CurrentConstructor;
+  auto *SavedContext = ConstructionContext;
+  auto *SavedTarget = InitializingTarget;
+  const auto SavedFields = InitializedFields;
+  const auto SavedFieldBase = CheckingFieldBase;
+  const auto SavedDestructor = InDestructor;
+  CurrentModule = Class.Module;
+  CheckClassMember(*Body, Class);
+  Scopes = std::move(SavedScopes);
+  ReturnType = SavedReturn;
+  CurrentModule = std::move(SavedModule);
+  CurrentClass = std::move(SavedClass);
+  CurrentConstructor = SavedConstructor;
+  ConstructionContext = SavedContext;
+  InitializingTarget = SavedTarget;
+  InitializedFields = SavedFields;
+  CheckingFieldBase = SavedFieldBase;
+  InDestructor = SavedDestructor;
+  return true;
+}
+
 void sema::Sema::CheckClassLayouts() {
   std::unordered_map<std::string, unsigned> States;
   std::function<bool(ClassInfo &)> Visit = [&](ClassInfo &Class) {
@@ -80,6 +274,11 @@ void sema::Sema::CheckClassLayouts() {
       return false;
     }
     for (auto &Field : Class.Fields) {
+      if (Field.Value.IsClass() &&
+          Classes.at(Field.Value.ClassName).Singleton) {
+        Error(*Field.Node, lex::DiagnosticKind::ClassValueOperation);
+        return false;
+      }
       if (Field.Value.IsClass() && !Visit(Classes.at(Field.Value.ClassName)))
         return false;
       if (Field.Value.IsClass()) {
@@ -215,7 +414,13 @@ void sema::Sema::CheckClassMember(const lex::Node &Member,
   Type Receiver{BuiltinType::Class, {}};
   Receiver.ClassName = Class.QualifiedName;
   Receiver.AddPointer();
-  Scopes.back().emplace("this", Receiver);
+  const bool Static = std::any_of(
+      Member.children.begin(), Member.children.end(), [](const auto &Part) {
+        return Part->kind == K::ast_annotation &&
+               IsBuiltinAnnotation(Part->text, "static");
+      });
+  if (!Static)
+    Scopes.back().emplace("this", Receiver);
 
   const lex::Node *Body = nullptr;
   const auto &Result = Types.at(&Member);
@@ -305,6 +510,10 @@ void sema::Sema::CheckTransferAccess(const Type &Value, bool Move,
   if (!Value.IsClass())
     return;
   const auto *Class = GetClass(Value);
+  if (Class && Class->Singleton) {
+    Error(Site, lex::DiagnosticKind::ClassValueOperation);
+    return;
+  }
   const auto &AccessModule =
       Value.GenericArgument ? Value.GenericOriginModule : CurrentModule;
   if (!Class || Class->Module == AccessModule)

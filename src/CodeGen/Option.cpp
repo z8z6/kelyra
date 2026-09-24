@@ -13,9 +13,12 @@ bool codegen::IRGen::EmitOptionIntrinsic(const lex::Node &Function,
   if (!Id)
     return false;
   const auto &Name = Analysis.GetReflection().Get(*Id).QualifiedName;
-  const bool Size = Name.starts_with("std.option.__size_of__G");
-  const bool Copy = Name.starts_with("std.option.__init_copy__G");
-  const bool Drop = Name.starts_with("std.option.__drop_at__G");
+  const bool Size = Name.starts_with("std.option.__size_of__G") ||
+                    Name.starts_with("std.result.__size_of__G");
+  const bool Copy = Name.starts_with("std.option.__init_copy__G") ||
+                    Name.starts_with("std.result.__init_copy__G");
+  const bool Drop = Name.starts_with("std.option.__drop_at__G") ||
+                    Name.starts_with("std.result.__drop_at__G");
   if (!Size && !Copy && !Drop)
     return false;
   if (DeclarationOnly) {

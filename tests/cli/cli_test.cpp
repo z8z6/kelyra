@@ -517,13 +517,13 @@ TEST(CLI, DumpClassLayout) {
       "+8 size=8 align=8 index=2 $virtual.read: fn", "");
 }
 
-TEST(CLI, TypeDefinitionsAndAliases) {
+TEST(CLI, GenericAliases) {
   llvm::SmallString<128> ExecutablePath;
   llvm::sys::fs::createUniquePath("kelyra-types-%%%%%%%%", ExecutablePath,
                                   true);
   llvm::FileRemover RemoveExecutable(ExecutablePath);
   run({"--emit-exe", "-o", ExecutablePath,
-       KELYRA_TEST_DIR "/type_declarations.kly"},
+       KELYRA_TEST_DIR "/generic_aliases.kly"},
       0, "", "");
   llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
   std::string Error;
@@ -533,9 +533,20 @@ TEST(CLI, TypeDefinitionsAndAliases) {
       << Error;
 }
 
-TEST(CLI, RejectImplicitNominalConversion) {
-  run({"--check", KELYRA_TEST_DIR "/invalid_nominal_implicit.kly"}, 1, "",
-      "type mismatch");
+TEST(CLI, GenericAliasAcrossModules) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-alias-module-%%%%%%%%",
+                                  ExecutablePath, true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath,
+       KELYRA_TEST_DIR "/alias_modules/main.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
 }
 
 TEST(CLI, RejectRecursiveTypeAlias) {
@@ -543,9 +554,157 @@ TEST(CLI, RejectRecursiveTypeAlias) {
       "unknown builtin type");
 }
 
-TEST(CLI, RejectNominalClassDefinition) {
-  run({"--check", KELYRA_TEST_DIR "/invalid_nominal_class.kly"}, 1, "",
+TEST(CLI, RejectGenericAliasArityMismatch) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_alias_arity.kly"}, 1, "",
+      "wrong number of generic type arguments");
+}
+
+TEST(CLI, RejectRemovedTypeDeclaration) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_type_declaration.kly"}, 1, "",
+      "expected 'fn', 'class', 'alias', or 'annotation'");
+}
+
+TEST(CLI, SingletonClass) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-singleton-%%%%%%%%", ExecutablePath,
+                                  true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath, KELYRA_TEST_DIR "/singleton.kly"}, 0,
+      "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
+
+TEST(CLI, SingletonAcrossLinkedModules) {
+  llvm::SmallString<128> ObjectPath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("kelyra-singleton-library",
+                                                  "o", ObjectPath));
+  llvm::FileRemover RemoveObject(ObjectPath);
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-singleton-linked-%%%%%%%%",
+                                  ExecutablePath, true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-obj", "-o", ObjectPath,
+       KELYRA_TEST_DIR "/singleton_modules/library.kly"},
+      0, "", "");
+  const auto External = "--external-path=" KELYRA_TEST_DIR "/singleton_modules";
+  const auto LinkInput = std::string("--link-input=") + ObjectPath.str().str();
+  run({"--emit-exe", External, LinkInput, "-o", ExecutablePath,
+       KELYRA_TEST_DIR "/singleton_modules/main.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
+
+TEST(CLI, RejectSingletonConstructionAndCopy) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_singleton_construct.kly"}, 1, "",
+      "class value");
+  run({"--check", KELYRA_TEST_DIR "/invalid_singleton_copy.kly"}, 1, "",
+      "class value");
+}
+
+TEST(CLI, RejectSingletonWithoutDefaultInitializer) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_singleton_initializer.kly"}, 1, "",
+      "invalid class");
+}
+
+TEST(CLI, RejectSingletonInheritance) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_singleton_inheritance.kly"}, 1, "",
+      "invalid class");
+}
+
+TEST(CLI, GenericSingleton) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-generic-singleton-%%%%%%%%",
+                                  ExecutablePath, true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath,
+       KELYRA_TEST_DIR "/generic_singleton.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
+
+TEST(CLI, GenericConstructorForwarding) {
+  for (const auto *Source :
+       {"generic_constructor_forward.kly",
+        "generic_constructor_forward_class.kly", "forward_modules/main.kly"}) {
+    llvm::SmallString<128> ExecutablePath;
+    llvm::sys::fs::createUniquePath("kelyra-forward-%%%%%%%%", ExecutablePath,
+                                    true);
+    llvm::FileRemover RemoveExecutable(ExecutablePath);
+    const auto Input = std::string(KELYRA_TEST_DIR) + "/" + Source;
+    run({"--emit-exe", "-o", ExecutablePath, Input}, 0, "", "");
+    llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+    std::string Error;
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                        10, 0, &Error),
+              42)
+        << Source << ": " << Error;
+  }
+}
+
+TEST(CLI, GenericFunctionParameterPack) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-function-pack-%%%%%%%%",
+                                  ExecutablePath, true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath,
+       KELYRA_TEST_DIR "/generic_function_pack.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
+
+TEST(CLI, StaticClassMembers) {
+  for (const auto *Source : {"static_members.kly", "static_modules/main.kly"}) {
+    llvm::SmallString<128> ExecutablePath;
+    llvm::sys::fs::createUniquePath("kelyra-static-%%%%%%%%", ExecutablePath,
+                                    true);
+    llvm::FileRemover RemoveExecutable(ExecutablePath);
+    const auto Input = std::string(KELYRA_TEST_DIR) + "/" + Source;
+    run({"--emit-exe", "-o", ExecutablePath, Input}, 0, "", "");
+    llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+    std::string Error;
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                        10, 0, &Error),
+              0)
+        << Source << ": " << Error;
+  }
+}
+
+TEST(CLI, RejectInvalidStaticMembers) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_static_target.kly"}, 1, "",
+      "invalid class");
+  run({"--check", KELYRA_TEST_DIR "/invalid_static_receiver.kly"}, 1, "",
+      "unknown name");
+  run({"--check", KELYRA_TEST_DIR "/invalid_static_instance_call.kly"}, 1, "",
+      "ordinary methods");
+  run({"--check", KELYRA_TEST_DIR "/invalid_static_value.kly"}, 1, "",
       "unknown builtin type");
+}
+
+TEST(CLI, RejectInvalidForwardConstructors) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_forward_missing_annotation.kly"}, 1,
+      "", "invalid class");
+  run({"--check", KELYRA_TEST_DIR "/invalid_forward_parameter_target.kly"}, 1,
+      "", "annotation is not valid on this declaration");
 }
 
 TEST(CLI, CTypesComeFromStandardLibrary) {

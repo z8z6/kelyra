@@ -82,6 +82,7 @@ struct Template {
   SourceModule *Module = nullptr;
   std::string ModuleName;
   std::vector<std::string> Parameters;
+  bool Pack = false;
 };
 
 class GenericExpander {
@@ -114,6 +115,25 @@ class GenericExpander {
   static void Substitute(
       std::unique_ptr<lex::Node> &Node,
       const std::unordered_map<std::string, const lex::Node *> &Bindings) {
+    if (Node->kind == K::ast_call && !Node->children.empty() &&
+        Node->children.front()->kind == K::ast_name) {
+      const auto Found = Bindings.find(Node->children.front()->text);
+      if (Found != Bindings.end()) {
+        if (Found->second->kind == K::ast_type) {
+          Node->children.front()->text = Found->second->text;
+        } else if (Found->second->kind == K::ast_generic_type) {
+          auto Apply = std::make_unique<lex::Node>();
+          Apply->kind = K::ast_generic_apply;
+          Apply->Loc = Node->children.front()->Loc;
+          auto Callee = Clone(*Node->children.front());
+          Callee->text = Found->second->text;
+          Apply->children.push_back(std::move(Callee));
+          for (const auto &Argument : Found->second->children)
+            Apply->children.push_back(Clone(*Argument));
+          Node->children.front() = std::move(Apply);
+        }
+      }
+    }
     if (Node->kind == K::ast_type) {
       const auto Found = Bindings.find(Node->text);
       if (Found != Bindings.end()) {
@@ -140,11 +160,44 @@ class GenericExpander {
       BindArgument(*Child, Module);
   }
 
+  static bool ExpandPackUses(std::unique_ptr<lex::Node> &Node,
+                             std::string_view PackName, std::size_t Count) {
+    if (Node->kind == K::ast_name && Node->text == PackName)
+      return false;
+    for (auto &Child : Node->children) {
+      if (Child->kind != K::ast_call && !ExpandPackUses(Child, PackName, Count))
+        return false;
+      if (Child->kind != K::ast_call)
+        continue;
+      std::vector<std::unique_ptr<lex::Node>> Rewritten;
+      for (auto &Argument : Child->children) {
+        if (Argument->kind == K::ast_spread) {
+          if (Argument->children.size() != 1 ||
+              Argument->children.front()->kind != K::ast_name ||
+              Argument->children.front()->text != PackName)
+            return false;
+          for (std::size_t I = 0; I < Count; ++I) {
+            auto Name = Clone(*Argument->children.front());
+            Name->text = "$pack" + std::to_string(I);
+            Rewritten.push_back(std::move(Name));
+          }
+        } else {
+          if (!ExpandPackUses(Argument, PackName, Count))
+            return false;
+          Rewritten.push_back(std::move(Argument));
+        }
+      }
+      Child->children = std::move(Rewritten);
+    }
+    return true;
+  }
+
   std::string Instantiate(const Template &Source,
                           const std::vector<const lex::Node *> &Arguments,
                           const lex::Location &Loc,
                           std::string_view CallerModule) {
-    if (Arguments.size() != Source.Parameters.size()) {
+    if ((!Source.Pack && Arguments.size() != Source.Parameters.size()) ||
+        (Source.Pack && Arguments.size() + 1 < Source.Parameters.size())) {
       Error(Loc, "wrong number of generic type arguments");
       return {};
     }
@@ -177,13 +230,63 @@ class GenericExpander {
     Declaration->text = Name;
     Declaration->GenericInstance = true;
     std::unordered_map<std::string, const lex::Node *> Bindings;
-    for (std::size_t I = 0; I < Arguments.size(); ++I)
+    for (std::size_t I = 0; I < Source.Parameters.size() - Source.Pack; ++I)
       Bindings.emplace(Source.Parameters[I], BoundArguments[I].get());
     std::erase_if(Declaration->children, [](const auto &Child) {
-      return Child->kind == K::ast_generic_parameter;
+      return Child->kind == K::ast_generic_parameter ||
+             Child->kind == K::ast_generic_pack;
     });
     for (auto &Child : Declaration->children)
       Substitute(Child, Bindings);
+    if (Source.Pack) {
+      const auto PackTypeName = Source.Parameters.back();
+      const auto Count = Arguments.size() - (Source.Parameters.size() - 1);
+      auto Parameter =
+          std::find_if(Declaration->children.begin(),
+                       Declaration->children.end(), [](const auto &Child) {
+                         return Child->kind == K::ast_parameter_pack;
+                       });
+      if (Parameter == Declaration->children.end() ||
+          (*Parameter)->children.empty() ||
+          (*Parameter)->children.back()->kind != K::ast_type ||
+          (*Parameter)->children.back()->text != PackTypeName ||
+          std::any_of(std::next(Parameter), Declaration->children.end(),
+                      [](const auto &Child) {
+                        return Child->kind == K::ast_parameter ||
+                               Child->kind == K::ast_parameter_pack;
+                      })) {
+        Error(Loc, "generic parameter pack requires a trailing parameter pack");
+        return {};
+      }
+      for (const auto &Child : (*Parameter)->children)
+        if (Child->kind == K::ast_annotation &&
+            (Child->text == "forward" ||
+             Child->text == "std.annotation.forward")) {
+          Error(Child->Loc,
+                "@forward on function parameter packs is not supported");
+          return {};
+        }
+      const auto Position =
+          std::distance(Declaration->children.begin(), Parameter);
+      const auto PackVariableName = (*Parameter)->text;
+      Declaration->children.erase(Parameter);
+      for (std::size_t I = 0; I < Count; ++I) {
+        auto Concrete = std::make_unique<lex::Node>();
+        Concrete->kind = K::ast_parameter;
+        Concrete->Loc = Loc;
+        Concrete->text = "$pack" + std::to_string(I);
+        Concrete->children.push_back(
+            Clone(*BoundArguments[Source.Parameters.size() - 1 + I]));
+        Declaration->children.insert(
+            Declaration->children.begin() + Position + I, std::move(Concrete));
+      }
+      for (auto &Child : Declaration->children)
+        if (Child->kind == K::ast_block &&
+            !ExpandPackUses(Child, PackVariableName, Count)) {
+          Error(Child->Loc, "invalid parameter pack use");
+          return {};
+        }
+    }
     auto *Generated = Declaration.get();
     Source.Module->Parsed.root->children.push_back(std::move(Declaration));
     Work.emplace_back(Generated, Source.ModuleName);
@@ -200,12 +303,13 @@ class GenericExpander {
     const auto Name = Apply ? CalleeName(*Callee) : Node->text;
     const auto *Source = FindTemplate(Name, Module);
     if (!Source) {
-      Error(Node->Loc, "unknown generic class or function");
+      Error(Node->Loc, "unknown generic class, function, or alias");
       return;
     }
     if ((Apply && Source->Declaration->kind != K::ast_function &&
          Source->Declaration->kind != K::ast_class) ||
-        (!Apply && Source->Declaration->kind != K::ast_class)) {
+        (!Apply && Source->Declaration->kind != K::ast_class &&
+         Source->Declaration->kind != K::ast_alias_decl)) {
       Error(Node->Loc, "invalid generic use");
       return;
     }
@@ -239,9 +343,15 @@ public:
       auto &Declarations = Module.Parsed.root->children;
       for (auto It = Declarations.begin(); It != Declarations.end();) {
         std::vector<std::string> Parameters;
+        bool Pack = false;
         for (const auto &Child : (*It)->children)
-          if (Child->kind == K::ast_generic_parameter)
+          if (Child->kind == K::ast_generic_parameter ||
+              Child->kind == K::ast_generic_pack) {
+            if (Pack)
+              Error(Child->Loc, "generic type pack must be last");
+            Pack = Child->kind == K::ast_generic_pack;
             Parameters.push_back(Child->text);
+          }
         if (Parameters.empty()) {
           Work.emplace_back(It->get(), Name);
           ++It;
@@ -253,7 +363,10 @@ public:
             Error((*It)->Loc, "duplicate generic type parameter");
         const auto Key = Name.empty() ? (*It)->text : Name + "." + (*It)->text;
         const auto Loc = (*It)->Loc;
-        Template Source{std::move(*It), &Module, Name, std::move(Parameters)};
+        if (Pack && (*It)->kind != K::ast_function)
+          Error(Loc, "generic type packs are only supported on functions");
+        Template Source{std::move(*It), &Module, Name, std::move(Parameters),
+                        Pack};
         if (!Templates.emplace(Key, std::move(Source)).second)
           Error(Loc, "duplicate generic declaration");
         It = Declarations.erase(It);

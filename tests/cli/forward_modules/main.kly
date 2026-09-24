@@ -1,0 +1,7 @@
+import library;
+
+@main
+fn main() -> i32 {
+  let box = library.Box<library.Pair>(20, 22);
+  return box.value.first + box.value.second;
+}

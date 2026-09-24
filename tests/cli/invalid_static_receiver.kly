@@ -1,0 +1,6 @@
+class Bad {
+  value: i32;
+
+  @static
+  fn read() -> i32 { return this.value; }
+}

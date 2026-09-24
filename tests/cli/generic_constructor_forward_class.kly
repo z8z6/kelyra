@@ -1,0 +1,64 @@
+class Token {
+  value: i32;
+
+  init(value: i32) { this.value = value; }
+
+  fn copy(other: *Token) { this.value = other.value + 1; }
+
+  fn move(other: *Token) {
+    this.value = other.value + 10;
+    other.value = 0;
+  }
+}
+
+class Holder {
+  token: Token;
+
+  init(token: Token) { this.token = token; }
+}
+
+class Box<T> {
+  value: T;
+
+  init<Args...>(
+    @forward
+    args: ...Args
+  ) {
+    this.value = T(...args);
+  }
+}
+
+class BaseHolder {
+  item: Holder;
+
+  init(item: Holder) { this.item = item; }
+}
+
+class ChildHolder: BaseHolder {
+  extra: i32;
+
+  init<Args...>(
+    @forward
+    args: ...Args
+  ) {
+    super(...args);
+    this.extra = 0;
+  }
+}
+
+@main
+fn main() -> i32 {
+  let source = Token(1);
+  let direct_lvalue = Holder(source);
+  let forwarded_lvalue = Box<Holder>(source);
+  let direct_temporary = Holder(Token(1));
+  let forwarded_temporary = Box<Holder>(Token(1));
+  let direct_super = BaseHolder(Holder(Token(1)));
+  let forwarded_super = ChildHolder(Holder(Token(1)));
+  if direct_lvalue.token.value == forwarded_lvalue.value.token.value &&
+    direct_temporary.token.value == forwarded_temporary.value.token.value &&
+    direct_super.item.token.value == forwarded_super.item.token.value {
+    return 42;
+  }
+  return 1;
+}

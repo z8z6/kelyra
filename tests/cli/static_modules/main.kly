@@ -1,0 +1,10 @@
+import library;
+
+@main
+fn main() -> i32 {
+  if library.Bucket<i32>.add(5) != 5 { return 1; }
+  if library.Bucket<i32>.add(7) != 12 { return 2; }
+  if library.Bucket<i64>.add(9) != 9 { return 3; }
+  if library.Bucket<i32>.value != 12 { return 4; }
+  return 0;
+}

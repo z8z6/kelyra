@@ -1,0 +1,47 @@
+alias Count = usize;
+
+alias Identity<T> = T;
+
+alias Wrapped<T> = Identity<T>;
+
+alias Pointer<T> = *T;
+
+alias Boxed<T> = Box<T>;
+
+alias Callback<T> = fn(T) -> T;
+
+class Box<T> {
+  value: T;
+  init(value: T) {
+    this.value = value;
+  }
+  fn get() -> T {
+    return value;
+  }
+}
+
+fn add(left: Identity<i32>, right: Wrapped<i32>) -> i32 {
+  return left + right;
+}
+
+fn read(value: Pointer<i32>) -> i32 {
+  return *value;
+}
+
+fn apply(callback: Callback<i32>, value: i32) -> i32 {
+  return callback(value);
+}
+
+fn plus_one(value: i32) -> i32 {
+  return value + 1;
+}
+
+@main
+fn main() -> i32 {
+  let first: i32 = 20;
+  let pointer: Pointer<i32> = &first;
+  let box: Boxed<i32> = Box<i32>(read(pointer));
+  let result = apply(plus_one, add(box.get(), 21));
+  let number: Count = result as usize;
+  return number as i32;
+}

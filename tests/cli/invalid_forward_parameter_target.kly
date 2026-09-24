@@ -1,0 +1,9 @@
+class Bad {
+  value: i32;
+
+  init(@forward value: i32) {
+    this.value = value;
+  }
+}
+
+fn main() -> i32 { return 0; }

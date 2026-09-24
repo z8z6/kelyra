@@ -154,7 +154,7 @@ mlir::Value codegen::IRGen::EmitNameExpression(const lex::Node &Expression) {
   const auto Loc = GetLocation(Expression.Loc);
   const auto &SemanticType = Analysis.GetType(Expression);
   const auto Type = GetType(SemanticType);
-  if (Analysis.GetField(Expression))
+  if (Analysis.GetField(Expression) || Analysis.GetStaticField(Expression))
     return mlir::LLVM::LoadOp::create(Builder, Loc, Type,
                                       EmitAddress(Expression));
   auto *Variable = FindVariable(Expression.text);
@@ -190,9 +190,17 @@ mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
 mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
   const auto Loc = GetLocation(Expression.Loc);
   if (Analysis.GetBaseConstructorCall(Expression)) {
+    if (Analysis.GetInlineConstructor(Expression)) {
+      EmitConstruction(Expression, FindVariable("this")->DirectValue);
+      return {};
+    }
     llvm::SmallVector<mlir::Value> Args{FindVariable("this")->DirectValue};
-    for (std::size_t I = 1; I < Expression.children.size(); ++I)
-      Args.push_back(EmitExpression(*Expression.children[I]));
+    for (std::size_t I = 1; I < Expression.children.size(); ++I) {
+      const auto &Argument = *Expression.children[I];
+      Args.push_back(Analysis.GetType(Argument).IsClass()
+                         ? EmitClassArgument(Argument)
+                         : EmitExpression(Argument));
+    }
     mlir::func::CallOp::create(Builder, Loc, Analysis.GetCallee(Expression),
                                mlir::TypeRange{}, Args);
     return {};

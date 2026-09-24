@@ -51,6 +51,7 @@
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <memory>
 #include <system_error>
@@ -272,6 +273,10 @@ mlir::Value codegen::IRGen::CreateAlloca(const sema::Type &Type,
 
 mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
   using K = lex::TokenKind;
+  if (const auto *Field = Analysis.GetStaticField(Expression))
+    return mlir::LLVM::AddressOfOp::create(
+        Builder, GetLocation(Expression.Loc),
+        mlir::LLVM::LLVMPointerType::get(&Context), Field->Symbol);
   if (Analysis.GetField(Expression)) {
     mlir::Value Address;
     const sema::ClassInfo *Owner = CurrentClass;
@@ -355,7 +360,13 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
   }
 
   llvm::SmallVector<mlir::Type> ParameterTypes;
-  if (Owner)
+  const bool Static =
+      Owner && std::any_of(Function.children.begin(), Function.children.end(),
+                           [](const auto &Part) {
+                             return Part->kind == K::ast_annotation &&
+                                    IsBuiltinAnnotation(Part->text, "static");
+                           });
+  if (Owner && !Static)
     ParameterTypes.push_back(mlir::LLVM::LLVMPointerType::get(&Context));
   for (const auto *Parameter : Parameters)
     ParameterTypes.push_back(GetType(Analysis.GetType(*Parameter)));
@@ -404,8 +415,8 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
   InTransferConstructor =
       Owner && (Function.kind == K::ast_constructor ||
                 Function.text == "copy" || Function.text == "move");
-  const unsigned Offset = Owner ? 1 : 0;
-  if (Owner) {
+  const unsigned Offset = Owner && !Static ? 1 : 0;
+  if (Owner && !Static) {
     sema::Type Receiver{sema::BuiltinType::Class, {}};
     Receiver.ClassName = Owner->QualifiedName;
     Receiver.AddPointer();
@@ -509,10 +520,47 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
           if (Candidate.Node == Child.get())
             Class = &Candidate;
         assert(Class);
+        for (const auto &Field : Class->StaticFields) {
+          Builder.setInsertionPointToEnd(Result.getBody());
+          auto Value = Field.Value;
+          std::uint64_t Count = 1;
+          while (Value.IsArray()) {
+            Count *= Value.Modifiers.front().Length;
+            Value = Value.Indexed();
+          }
+          const auto Bytes =
+              Count * (Value.IsPointer() ? sizeof(void *)
+                                         : (sema::GetBitWidth(Value) + 7) / 8);
+          const auto Alignment =
+              Value.IsPointer()
+                  ? alignof(void *)
+                  : std::max<std::uint64_t>(
+                        1, std::max<std::uint64_t>(
+                               sema::GetAlignment(Value),
+                               std::bit_floor(
+                                   std::min<std::uint64_t>(Bytes, 16))));
+          const auto Linkage = Child->GenericInstance
+                                   ? mlir::LLVM::Linkage::LinkonceODR
+                               : DeclarationOnly ? mlir::LLVM::Linkage::External
+                               : Field.Public    ? mlir::LLVM::Linkage::External
+                                                 : mlir::LLVM::Linkage::Private;
+          mlir::LLVM::GlobalOp::create(
+              Builder, GetLocation(Field.Node->Loc),
+              mlir::LLVM::LLVMArrayType::get(Builder.getI8Type(), Bytes), false,
+              Linkage, Field.Symbol,
+              DeclarationOnly ? mlir::Attribute()
+                              : Builder.getStringAttr(std::string(Bytes, '\0')),
+              Alignment);
+        }
         for (const auto &Member : Child->children)
           if (Member->kind == K::ast_function ||
               Member->kind == K::ast_constructor ||
               Member->kind == K::ast_destructor) {
+            if (std::any_of(Member->children.begin(), Member->children.end(),
+                            [](const auto &Part) {
+                              return Part->kind == K::ast_generic_pack;
+                            }))
+              continue;
             Builder.setInsertionPointToEnd(Result.getBody());
             EmitFunction(*Member, Class, DeclarationOnly);
           }
@@ -537,6 +585,10 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
         if (!Class->IsInterface && !Class->Move) {
           Builder.setInsertionPointToEnd(Result.getBody());
           EmitDefaultTransfer(*Class, true, DeclarationOnly);
+        }
+        if (Class->Singleton) {
+          Builder.setInsertionPointToEnd(Result.getBody());
+          EmitSingletonAccessor(*Class, DeclarationOnly);
         }
         continue;
       }

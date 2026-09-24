@@ -1,0 +1,16 @@
+@singleton
+class Cache<T> {
+  value: T;
+}
+
+@main
+fn main() -> i32 {
+  let first = Cache<i32>.instance();
+  let again = Cache<i32>.instance();
+  let other = Cache<u8>.instance();
+  if first as usize == again as usize && first as usize != other as usize {
+    first.value = 42;
+    return again.value;
+  }
+  return 1;
+}

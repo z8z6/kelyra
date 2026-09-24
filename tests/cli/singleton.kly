@@ -1,0 +1,18 @@
+@singleton
+class Counter {
+  value: i32;
+  init() {
+    value = 0;
+  }
+  fn next() -> i32 {
+    value = value + 1;
+    return value;
+  }
+}
+
+@main
+fn main() -> i32 {
+  let first: *Counter = Counter.instance();
+  let second: *Counter = Counter.instance();
+  return first.next() + second.next() + 39;
+}

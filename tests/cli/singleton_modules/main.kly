@@ -1,0 +1,10 @@
+module main;
+
+import library;
+
+@main
+fn main() -> i32 {
+  let first = library.Counter.instance();
+  let second = library.pointer();
+  return first.next() + second.next() + 39;
+}
