@@ -1,0 +1,45 @@
+@interface
+class Readable {
+  pub fn read() -> i32;
+}
+
+class Base {
+  value: i32;
+
+  pub init(value: i32) {
+    this.value = value;
+  }
+
+  @virtual
+  pub fn read() -> i32 {
+    return value;
+  }
+}
+
+class Child: Base, Readable {
+  extra: i32;
+
+  pub init(value: i32) {
+    super(value);
+    extra = 1;
+  }
+
+  @override
+  pub fn read() -> i32 {
+    return super.read() + extra;
+  }
+}
+
+fn through_base(value: *Base) -> i32 {
+  return value.read();
+}
+
+@main
+fn main() -> i32 {
+  let child = Child(41);
+  let base: *Base = &child;
+  if through_base(base) != 42 {
+    return 1;
+  }
+  return child.read();
+}

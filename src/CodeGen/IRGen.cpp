@@ -165,6 +165,15 @@ mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
     return mlir::LLVM::LLVMArrayType::get(GetType(Type.Indexed()),
                                           Type.ArrayLength());
   }
+  if (Type.IsPointer() && Type.PointerDepth == 1 && Type.Element == T::Class) {
+    const auto *Class = Analysis.GetClass(Type.ClassName);
+    if (Class && Class->IsInterface) {
+      auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
+      llvm::SmallVector<mlir::Type> Fields(Class->InterfaceMethods.size() + 1,
+                                           Pointer);
+      return mlir::LLVM::LLVMStructType::getLiteral(&Context, Fields);
+    }
+  }
   if (Type.IsPointer() || Type.IsFunction())
     return mlir::LLVM::LLVMPointerType::get(&Context);
   if (Type.IsClass()) {
@@ -182,9 +191,16 @@ mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
         Count *= Element.ArrayLength();
         Element = Element.Indexed();
       }
-      const std::uint64_t Size =
-          Count * (Element.IsClass() ? Analysis.GetClass(Element)->Size
-                                     : (sema::GetBitWidth(Element) + 7) / 8);
+      std::uint64_t ElementSize = Element.IsClass()
+                                      ? Analysis.GetClass(Element)->Size
+                                      : (sema::GetBitWidth(Element) + 7) / 8;
+      if (Element.IsPointer() && Element.PointerDepth == 1 &&
+          Element.Element == T::Class) {
+        const auto *Pointee = Analysis.GetClass(Element.ClassName);
+        if (Pointee && Pointee->IsInterface)
+          ElementSize = (Pointee->InterfaceMethods.size() + 1) * sizeof(void *);
+      }
+      const std::uint64_t Size = Count * ElementSize;
       Offset = Field.Offset + Size;
     }
     if (Offset < Class.Size)
@@ -262,7 +278,7 @@ mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
     if (Expression.kind == K::ast_member) {
       const auto &Base = *Expression.children.front();
       const auto &BaseType = Analysis.GetType(Base);
-      Owner = Analysis.GetClass(BaseType);
+      Owner = Analysis.GetFieldOwner(Expression);
       Address = BaseType.IsPointer() ? EmitExpression(Base) : EmitAddress(Base);
     } else {
       Address = FindVariable("this")->DirectValue;
@@ -402,6 +418,10 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
       EmitDebugVariable("this", Function.Loc, Receiver, Address, 1);
     }
   }
+  if (ActiveDestructor)
+    EmitVirtualSlots(*Owner, Entry->getArgument(0), GetLocation(Function.Loc));
+  if (InTransferConstructor && Owner->UserFieldCount == 0)
+    EmitVirtualSlots(*Owner, Entry->getArgument(0), GetLocation(Function.Loc));
   for (std::size_t I = 0; I < Parameters.size(); ++I) {
     const auto Type = Analysis.GetType(*Parameters[I]);
     if (!Type.IsRecord() && sema::GetBitWidth(Type) > 128) {

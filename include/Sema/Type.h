@@ -78,6 +78,7 @@ struct Type {
   std::string CName;
   std::string CSpelling;
   std::string ClassName;
+  std::string NominalName;
   // Access to a type supplied to a generic is checked in its use module,
   // not in the module that owns the generic template.
   bool GenericArgument = false;
@@ -138,8 +139,9 @@ struct Type {
   bool operator==(const Type &Other) const {
     return Element == Other.Element && Dimensions == Other.Dimensions &&
            PointerDepth == Other.PointerDepth && CName == Other.CName &&
-           ClassName == Other.ClassName && Results == Other.Results &&
-           Parameters == Other.Parameters && Modifiers == Other.Modifiers;
+           ClassName == Other.ClassName && NominalName == Other.NominalName &&
+           Results == Other.Results && Parameters == Other.Parameters &&
+           Modifiers == Other.Modifiers;
   }
 };
 
@@ -216,9 +218,15 @@ inline unsigned GetAlignment(const Type &Type) {
 inline std::optional<BuiltinType> ParseBuiltinType(std::string_view Name) {
   if (Name.empty())
     return std::nullopt;
-  for (std::size_t I = 0; I < BuiltinTypeInfos.size(); ++I)
-    if (BuiltinTypeInfos[I].Name == Name)
+  for (std::size_t I = 0; I < BuiltinTypeInfos.size(); ++I) {
+    const bool IsCType = I >= static_cast<std::size_t>(BuiltinType::CChar) &&
+                         I <= static_cast<std::size_t>(BuiltinType::CWChar);
+    if (IsCType && Name.starts_with("__c_") &&
+        BuiltinTypeInfos[I].Name.substr(2) == Name.substr(4))
       return static_cast<BuiltinType>(I);
+    if (!IsCType && BuiltinTypeInfos[I].Name == Name)
+      return static_cast<BuiltinType>(I);
+  }
   return std::nullopt;
 }
 
@@ -241,6 +249,8 @@ inline bool IsNumeric(BuiltinType Type) {
 }
 
 inline bool IsCInteropCompatible(const Type &Left, const Type &Right) {
+  if (!Left.NominalName.empty() || !Right.NominalName.empty())
+    return false;
   const auto IsCType = [](BuiltinType Value) {
     return Value >= BuiltinType::CChar && Value < BuiltinType::CRecord;
   };

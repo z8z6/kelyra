@@ -15,6 +15,7 @@ std::optional<int>
 GenerateCDefinitionsIfRequested(const ModuleLoader &Loader,
                                 const cimport::ImportResult &Declarations);
 void DumpAstIfRequested(const ModuleLoader &Loader);
+void DumpClassLayouts(const sema::Sema &Analysis);
 bool WantsCompilation();
 bool Analyze(const ModuleLoader &Loader,
              const cimport::ImportResult &Declarations, sema::Sema &Analysis);

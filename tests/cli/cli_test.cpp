@@ -398,7 +398,161 @@ TEST(CLI, ExternalFunctionDeclaration) {
             42)
       << error;
 }
+
+TEST(CLI, ExternalFunctionReturnsCallback) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-extern-callback-%%%%%%%%",
+                                  ExecutablePath, true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "--c-source=" KELYRA_TEST_DIR "/c/return_callback.c", "-o",
+       ExecutablePath, KELYRA_TEST_DIR "/extern_callback.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
 #endif
+
+TEST(CLI, SingleInheritanceVirtualDispatch) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-inheritance-%%%%%%%%", ExecutablePath,
+                                  true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath, KELYRA_TEST_DIR "/inheritance.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
+
+TEST(CLI, FinalClassCannotBeInherited) {
+  run({"--emit-mlir", KELYRA_TEST_DIR "/invalid_final_inheritance.kly"}, 1, "",
+      "invalid class");
+}
+
+TEST(CLI, DeepInheritanceVirtualDispatch) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-inheritance-deep-%%%%%%%%",
+                                  ExecutablePath, true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath,
+       KELYRA_TEST_DIR "/inheritance_deep.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            3)
+      << Error;
+}
+
+TEST(CLI, RejectInvalidInheritanceOverride) {
+  run({"--emit-mlir", KELYRA_TEST_DIR "/invalid_inheritance_override.kly"}, 1,
+      "", "invalid class");
+}
+
+TEST(CLI, DerivedConstructorRequiresSuper) {
+  run({"--emit-mlir", KELYRA_TEST_DIR "/invalid_inheritance_super.kly"}, 1, "",
+      "initialize every field once");
+}
+
+TEST(CLI, InterfacePolymorphism) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-interface-poly-%%%%%%%%",
+                                  ExecutablePath, true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath,
+       KELYRA_TEST_DIR "/interface_polymorphism.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
+
+TEST(CLI, InterfaceInheritancePolymorphism) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-interface-inherit-%%%%%%%%",
+                                  ExecutablePath, true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath,
+       KELYRA_TEST_DIR "/interface_inheritance.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
+
+TEST(CLI, InterfacePolymorphismAcrossModules) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-interface-module-%%%%%%%%",
+                                  ExecutablePath, true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "--module-path=" KELYRA_TEST_DIR "/modules", "-o",
+       ExecutablePath, KELYRA_TEST_DIR "/interface_module_main.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
+
+TEST(CLI, DumpClassLayout) {
+  run({"--dump-class-layout", KELYRA_TEST_DIR "/inheritance.kly"}, 0,
+      "+0 size=16 align=8 index=0 $base: Base", "");
+  run({"--dump-class-layout", KELYRA_TEST_DIR "/inheritance.kly"}, 0,
+      "+8 size=8 align=8 index=2 $virtual.read: fn", "");
+}
+
+TEST(CLI, TypeDefinitionsAndAliases) {
+  llvm::SmallString<128> ExecutablePath;
+  llvm::sys::fs::createUniquePath("kelyra-types-%%%%%%%%", ExecutablePath,
+                                  true);
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath,
+       KELYRA_TEST_DIR "/type_declarations.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            42)
+      << Error;
+}
+
+TEST(CLI, RejectImplicitNominalConversion) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_nominal_implicit.kly"}, 1, "",
+      "type mismatch");
+}
+
+TEST(CLI, RejectRecursiveTypeAlias) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_type_cycle.kly"}, 1, "",
+      "unknown builtin type");
+}
+
+TEST(CLI, RejectNominalClassDefinition) {
+  run({"--check", KELYRA_TEST_DIR "/invalid_nominal_class.kly"}, 1, "",
+      "unknown builtin type");
+}
+
+TEST(CLI, CTypesComeFromStandardLibrary) {
+  run({"--check", KELYRA_TEST_DIR "/extern.kly"}, 0, "", "");
+  run({"--check", KELYRA_TEST_DIR "/invalid_c_intrinsic.kly"}, 1, "",
+      "unknown builtin type");
+}
 
 TEST(CLI, RejectExternalFunctionBody) {
   run({"--emit-mlir", KELYRA_TEST_DIR "/invalid_extern.kly"}, 1, "",

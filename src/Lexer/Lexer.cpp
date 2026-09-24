@@ -533,8 +533,9 @@ void Lexer::recover(bool top, std::size_t start) {
   if (pos == start && !end() && !(at("}") && !top))
     take();
   while (!end()) {
-    if (at("fn") || at("class") || at("annotation") ||
-        (top && (at("@") || at("pub"))))
+    if (at("fn") || at("class") ||
+        ((at("type") || at("alias")) && peek(1).kind == K::name) ||
+        at("annotation") || (top && (at("@") || at("pub"))))
       return;
     if (!top &&
         (at("}") || at("let") || at("return") || at("if") || at("when") ||
@@ -551,7 +552,9 @@ Lexer::Ptr Lexer::block() {
   auto result = node(K::ast_block, expect("{").Loc);
   while (!at("}") && !end()) {
     // Preserve a subsequent top-level declaration when this block lacks '}'.
-    if (at("fn") || at("class") || at("annotation") || at("@"))
+    if (at("fn") || at("class") ||
+        ((at("type") || at("alias")) && peek(1).kind == K::name) ||
+        at("annotation") || at("@"))
       fail(peek().Loc, DiagnosticKind::ExpectedRightBraceBeforeDeclaration);
     const auto start = pos;
     try {
@@ -697,7 +700,8 @@ Lexer::Ptr Lexer::decl(std::vector<Ptr> annotations) {
   const bool isPublic = at("pub");
   if (isPublic)
     visibility = take();
-  if (!at("fn") && !at("class") && !at("annotation"))
+  if (!at("fn") && !at("class") && !at("type") && !at("alias") &&
+      !at("annotation"))
     fail(peek().Loc, DiagnosticKind::ExpectedDeclaration);
   const auto t = take();
   auto Loc = t.Loc;
@@ -707,6 +711,8 @@ Lexer::Ptr Lexer::decl(std::vector<Ptr> annotations) {
     Loc = visibility.Loc;
   auto result = node(spelling(t) == "fn"      ? K::ast_function
                      : spelling(t) == "class" ? K::ast_class
+                     : spelling(t) == "type"  ? K::ast_type_decl
+                     : spelling(t) == "alias" ? K::ast_alias_decl
                                               : K::ast_annotation_decl,
                      Loc);
   result->text = spelling(
@@ -715,7 +721,9 @@ Lexer::Ptr Lexer::decl(std::vector<Ptr> annotations) {
     add(*result, std::move(annotation));
   if (isPublic)
     add(*result, node(K::ast_public, visibility.Loc));
-  if (result->kind != K::ast_annotation_decl && eat("<")) {
+  if (result->kind != K::ast_annotation_decl &&
+      result->kind != K::ast_type_decl && result->kind != K::ast_alias_decl &&
+      eat("<")) {
     do {
       const auto Parameter = name();
       add(*result, node(K::ast_generic_parameter, Parameter.Loc,
@@ -723,7 +731,11 @@ Lexer::Ptr Lexer::decl(std::vector<Ptr> annotations) {
     } while (eat(","));
     expect(">");
   }
-  if (result->kind == K::ast_annotation_decl) {
+  if (result->kind == K::ast_type_decl || result->kind == K::ast_alias_decl) {
+    expect("=");
+    add(*result, type());
+    result->Loc.Len = expect(";").Loc.End() - result->Loc.Offset;
+  } else if (result->kind == K::ast_annotation_decl) {
     expect("(");
     if (!at(")")) {
       do {
@@ -745,6 +757,14 @@ Lexer::Ptr Lexer::decl(std::vector<Ptr> annotations) {
           return Child->kind == K::ast_annotation &&
                  IsBuiltinAnnotation(Child->text, "interface");
         });
+    if (eat(":")) {
+      do {
+        auto Base = type();
+        auto Parent = node(K::ast_base_type, Base->Loc);
+        add(*Parent, std::move(Base));
+        add(*result, std::move(Parent));
+      } while (eat(","));
+    }
     expect("{");
     while (!at("}") && !end()) {
       std::vector<Ptr> memberAnnotations;

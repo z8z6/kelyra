@@ -1,0 +1,9 @@
+class Base {
+  pub init(value: i32) {}
+}
+
+class Child: Base {
+  pub init(value: i32) {
+    let extra = value;
+  }
+}

@@ -1,0 +1,1 @@
+fn identity(value: __c_int) -> __c_int { return value; }

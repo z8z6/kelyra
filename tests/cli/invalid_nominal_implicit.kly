@@ -1,0 +1,8 @@
+type UserId = i64;
+
+fn accept(value: i64) -> i64 { return value; }
+
+fn invalid() -> i64 {
+  let id: UserId = 42;
+  return accept(id);
+}

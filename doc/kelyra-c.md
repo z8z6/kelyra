@@ -83,7 +83,7 @@ flowchart TD
 
 不能简单地认为 C 的 `long` 就是 Kelyra 的 `i64`。Windows x64 和 Linux x86-64 上的 `long` 大小不同。
 
-建议内置一个 `c` 模块：
+标准库 `kstd/src/c.kly` 提供 `c` 模块中的公开类型别名；编译器保留这些类型的目标平台 ABI 信息：
 
 | C 类型            | Kelyra 类型    |
 | --------------- | ------------ |

@@ -83,6 +83,9 @@ enum class TokenKind {
   ast_generic_apply,        // AST explicit type arguments on a callee
   ast_parameter,            // AST function parameter
   ast_class,                // AST class declaration
+  ast_type_decl,            // AST nominal type definition
+  ast_alias_decl,           // AST transparent type alias
+  ast_base_type,            // AST inherited class or interface type
   ast_const_field,          // AST interface constant field
   ast_field,                // AST class field
   ast_constructor,          // AST class constructor

@@ -52,6 +52,7 @@ struct ClassFieldInfo {
   bool Public = false;
   std::uint64_t Offset = 0;
   unsigned LayoutIndex = 0;
+  unsigned Alignment = 1;
 };
 
 struct ClassConstantInfo {
@@ -67,9 +68,18 @@ struct ClassInfo {
   std::string Module;
   std::string Name;
   std::string QualifiedName;
+  std::string BaseName;
+  std::vector<std::string> Interfaces;
+  std::vector<std::string> InterfaceMethods;
+  std::unordered_map<std::string, std::size_t> VirtualSlots;
+  std::unordered_map<std::string, std::pair<std::string, std::size_t>>
+      OverrideSlots;
+  std::size_t OwnFieldStart = 0;
+  std::size_t UserFieldCount = 0;
   std::vector<ClassFieldInfo> Fields;
   std::vector<ClassConstantInfo> Constants;
   bool IsInterface = false;
+  bool Final = false;
   const lex::Node *Constructor = nullptr;
   const lex::Node *Destructor = nullptr;
   const lex::Node *Copy = nullptr;
@@ -128,8 +138,20 @@ class Sema {
     bool Public = false;
     bool Variadic = false;
     bool Abstract = false;
+    bool Virtual = false;
+    bool Override = false;
     std::string OwnerClass;
     const ExternalFunction *External = nullptr;
+  };
+
+  struct TypeDeclarationInfo {
+    const lex::Node *Node = nullptr;
+    std::string Module;
+    std::string QualifiedName;
+    bool Public = false;
+    bool Nominal = false;
+    unsigned State = 0;
+    std::optional<Type> Resolved;
   };
 
   std::vector<lex::Diagnostic> Diagnostics;
@@ -138,8 +160,10 @@ class Sema {
   std::unordered_map<const lex::Node *, Type> Types;
   std::unordered_map<std::string, FunctionInfo> Functions;
   std::unordered_map<std::string, ClassInfo> Classes;
+  std::unordered_map<std::string, TypeDeclarationInfo> TypeDeclarations;
   std::unordered_map<std::string, AnnotationInfo> AnnotationDeclarations;
   std::optional<lex::ParseResult> BuiltinAnnotations;
+  std::optional<lex::ParseResult> BuiltinCTypes;
   std::vector<const lex::Node *> EntrypointCandidates;
   std::unordered_map<const lex::Node *, std::vector<AnnotationInstance>>
       AnnotationInstances;
@@ -147,6 +171,12 @@ class Sema {
   std::unordered_map<const lex::Node *, std::string> Callees;
   std::unordered_map<const lex::Node *, std::size_t> CWrapperCalls;
   std::unordered_map<const lex::Node *, std::string> ConstructorCalls;
+  std::unordered_map<const lex::Node *, std::string> BaseConstructorCalls;
+  std::unordered_map<const lex::Node *, std::pair<std::string, std::size_t>>
+      VirtualCalls;
+  std::unordered_map<const lex::Node *, std::string> InterfaceConversions;
+  std::unordered_map<const lex::Node *, std::pair<std::string, std::size_t>>
+      InterfaceCalls;
   std::unordered_map<const lex::Node *, std::pair<std::string, std::size_t>>
       FieldReferences;
   std::unordered_map<const lex::Node *, const lex::Node *> ConstantReferences;
@@ -195,6 +225,7 @@ class Sema {
                                  std::string_view Module, bool Public);
   MetaId GetOrCreateMetaType(const Type &Type);
   std::optional<Type> CheckType(const lex::Node &Node);
+  std::optional<Type> ResolveTypeDeclaration(TypeDeclarationInfo &Declaration);
   std::optional<Type> FinishExpression(const lex::Node &Expression, Type Result,
                                        std::optional<Type> Expected);
   std::optional<Type> CheckNameExpression(const lex::Node &Expression,
@@ -275,6 +306,10 @@ public:
     return It == ConstantReferences.end() ? nullptr : It->second;
   }
   std::size_t GetFieldIndex(const lex::Node &Node) const;
+  const ClassInfo *GetFieldOwner(const lex::Node &Node) const {
+    const auto It = FieldReferences.find(&Node);
+    return It == FieldReferences.end() ? nullptr : GetClass(It->second.first);
+  }
   bool IsMethodCall(const lex::Node &Node) const {
     return MethodCalls.contains(&Node);
   }
@@ -286,6 +321,24 @@ public:
     return IndirectCalls.contains(&Node);
   }
   const ClassInfo *GetConstructorCall(const lex::Node &Node) const;
+  const ClassInfo *GetBaseConstructorCall(const lex::Node &Node) const {
+    const auto It = BaseConstructorCalls.find(&Node);
+    return It == BaseConstructorCalls.end() ? nullptr : GetClass(It->second);
+  }
+  const std::pair<std::string, std::size_t> *
+  GetVirtualCall(const lex::Node &Node) const {
+    const auto It = VirtualCalls.find(&Node);
+    return It == VirtualCalls.end() ? nullptr : &It->second;
+  }
+  const std::string *GetInterfaceConversion(const lex::Node &Node) const {
+    const auto It = InterfaceConversions.find(&Node);
+    return It == InterfaceConversions.end() ? nullptr : &It->second;
+  }
+  const std::pair<std::string, std::size_t> *
+  GetInterfaceCall(const lex::Node &Node) const {
+    const auto It = InterfaceCalls.find(&Node);
+    return It == InterfaceCalls.end() ? nullptr : &It->second;
+  }
   bool IsClassTemporary(const lex::Node &Node) const;
   const std::unordered_map<std::string, ClassInfo> &GetClasses() const {
     return Classes;

@@ -154,10 +154,36 @@ TEST(Frontend, ModuleTargetCondition) {
   EXPECT_NE(Ast.find("(ModuleDecl \"platform.linux\" (Annotation \"cfg\""),
             std::string::npos);
   const auto Formatted = Format(Parsed);
-  EXPECT_NE(Formatted.find("@cfg(os = \"linux\") module platform.linux;"),
+  EXPECT_NE(Formatted.find("@cfg(os = \"linux\")\nmodule platform.linux;"),
             std::string::npos);
   EXPECT_TRUE(lexer.parse(Formatted).ok());
   EXPECT_TRUE(lexer.parseExpression("meta(std.annotation.main)").ok());
+}
+
+TEST(Frontend, FormatEachAnnotationOnOwnLine) {
+  auto Parsed = lexer.parse("@cfg(os=\"linux\") @trace module sample; "
+                            "@cfg(os=\"linux\") import math; "
+                            "@tag @mark pub class Thing { "
+                            "@tag @mark pub value:i32; "
+                            "@tag @mark pub fn run()->i32{return 1;} "
+                            "} @extern fn external()->i32;");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("@cfg(os = \"linux\")\n@trace\nmodule sample;"),
+            std::string::npos);
+  EXPECT_NE(Formatted.find("@cfg(os = \"linux\")\nimport math;"),
+            std::string::npos);
+  EXPECT_NE(Formatted.find("@tag\n@mark\npub class Thing {"),
+            std::string::npos);
+  EXPECT_NE(Formatted.find("  @tag\n  @mark\n  pub value: i32;"),
+            std::string::npos);
+  EXPECT_NE(Formatted.find("  @tag\n  @mark\n  pub fn run() -> i32 {"),
+            std::string::npos);
+  EXPECT_NE(Formatted.find("@extern\nfn external() -> i32;"),
+            std::string::npos);
+  auto Reparsed = lexer.parse(Formatted);
+  ASSERT_TRUE(Reparsed.ok()) << Formatted;
+  EXPECT_EQ(Format(Reparsed), Formatted);
 }
 
 TEST(Frontend, ClassAndMultipleReturnRoundTrip) {
@@ -222,6 +248,22 @@ TEST(Frontend, FormatImportsKeepsCommentsAttached) {
   auto Formatted = lexer.parse(Expected);
   ASSERT_TRUE(Formatted.ok());
   EXPECT_EQ(Format(Formatted), Expected) << "formatting is idempotent";
+}
+
+TEST(Frontend, FormatImportsKeepAnnotationsAttached) {
+  auto Parsed = lexer.parse("@cfg(os=\"linux\") import zebra; "
+                            "@cfg(os=\"windows\") import alpha; "
+                            "fn main() { return; }");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("@cfg(os = \"windows\")\nimport alpha;"),
+            std::string::npos);
+  EXPECT_NE(Formatted.find("@cfg(os = \"linux\")\nimport zebra;"),
+            std::string::npos);
+  EXPECT_LT(Formatted.find("import alpha;"), Formatted.find("import zebra;"));
+  auto Reparsed = lexer.parse(Formatted);
+  ASSERT_TRUE(Reparsed.ok()) << Formatted;
+  EXPECT_EQ(Format(Reparsed), Formatted);
 }
 
 TEST(Frontend, FormatCImportsByHeader) {

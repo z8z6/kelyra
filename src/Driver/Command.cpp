@@ -40,6 +40,8 @@ int driver::Run() {
   sema::Sema Analysis;
   if (!Analyze(*Loader, *Declarations, Analysis))
     return 1;
+  if (Option::DumpClassLayout)
+    DumpClassLayouts(Analysis);
   if (!Option::EmitMlir && !Option::EmitObject && !Option::EmitExecutable)
     return 0;
   return Emit(*Loader, Analysis);

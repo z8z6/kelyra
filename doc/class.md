@@ -11,8 +11,8 @@ Kelyra 不同时保留 `struct`：原有 Kelyra `struct` 声明和关键字已�
 `class` 完全替代。纯数据聚合、资源对象和普通值对象都使用 `class` 表达。C 头文件中的
 结构体继续作为 `c.Type` 外部记录导入，但不能在 Kelyra 源码中用 `struct` 声明。
 
-当前实现提供静态分派、单一构造函数、可选析构函数，以及可自定义的复制/移动构造方法。
-不包含继承、虚函数、异常、运算符重载或隐式堆分配。
+当前实现提供单继承、虚方法分派、单一构造函数、可选析构函数，以及可自定义的复制/移动构造方法。
+不包含异常、运算符重载或隐式堆分配。
 
 ## 基本语法
 
@@ -53,7 +53,8 @@ if file.valid() {
 ```ebnf
 declaration       = { annotation }, [ "pub" ],
                     ( function | class | annotation-declaration ) ;
-class             = "class", name, "{", { class-member }, "}" ;
+class             = "class", name, [ ":", type, { ",", type } ],
+                    "{", { class-member }, "}" ;
 class-member      = { annotation }, [ "pub" ],
                     ( class-field | method | constructor | destructor ) ;
 class-field       = name, ":", type, ";" ;
@@ -95,7 +96,38 @@ construction      = qualified-name, "(", [ arguments ], ")" ;
   `*ClassName`，则直接传递该指针。
 - `value.field` 与 `pointer.field` 都可访问字段；对指针形式执行隐式一次解引用，不增加
   C++ 风格的 `->` 操作符。
-- class 方法均为静态分派。无需接收者的操作继续写成模块函数，不增加 `static fn`。
+- 普通 class 方法为静态分派，`@virtual` 方法经由接收者的虚方法槽分派。
+  无需接收者的操作继续写成模块函数，不增加 `static fn`。
+
+## 继承与覆写
+
+```kelyra
+class Base {
+  value: i32;
+  pub init(value: i32) { this.value = value; }
+
+  @virtual
+  pub fn read() -> i32 { return value; }
+}
+
+class Child: Base {
+  extra: i32;
+  pub init(value: i32) {
+    super(value);
+    extra = 1;
+  }
+
+  @override
+  pub fn read() -> i32 { return super.read() + extra; }
+}
+```
+
+继承列表中最多有一个普通基类，且必须写在接口之前。派生类显式 `init` 的第一条语句
+必须调用 `super(...)`，然后按顺序初始化本类字段；没有显式 `init` 时会调用基类的
+无参数构造函数。析构时先执行本类析构体，再析构字段与基类部分。
+覆写基类虚方法必须标记 `@override` 并保持签名；`super.method()` 直接调用基类实现。
+派生类指针可隐式转换为基类指针，通过基类指针调用虚方法仍会派发到派生类实现。
+派生类目前不能自定义 `copy` 或 `move`。`@final` 类不可作为基类。
 
 class、函数和其他类型的限定名不能在同一模块中产生构造调用歧义。跨模块 class 类型
 使用限定名，例如 `app.file.File`；现有 `import module.*` 仍只省略公开函数的模块前缀，

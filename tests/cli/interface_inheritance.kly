@@ -1,0 +1,17 @@
+@interface
+class First { pub fn first() -> i32; }
+@interface
+class Second { pub fn second() -> i32; }
+@interface
+class Both: First, Second {}
+class Impl: Both {
+  pub fn first() -> i32 { return 40; }
+  pub fn second() -> i32 { return 2; }
+}
+fn first(value: *First) -> i32 { return value.first(); }
+fn both(value: *Both) -> i32 { return first(value) + value.second(); }
+@main
+fn main() -> i32 {
+  let value = Impl();
+  return both(&value);
+}

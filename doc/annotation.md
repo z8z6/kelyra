@@ -143,6 +143,7 @@ annotation serializable();
 已实现的内建注解声明位于标准库的
 [`std.annotation`](../../kstd/src/std/annotation.kly) 模块。
 编译器在编译期隐式加载该模块，因此现有 `@cfg`、`@interface`、`@layout`、
+`@final`、`@virtual`、`@override`、
 `@extern`、`@callconv`、`@main`、`@inline`、`@deprecated`、`@reflect`、`@target`、
 `@repeatable` 和 `@retention` 短名称无需
 显式 `import`。也可以使用 `@std.annotation.interface` 等限定名。

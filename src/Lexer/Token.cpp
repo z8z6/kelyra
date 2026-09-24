@@ -155,6 +155,12 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Parameter";
   case TokenKind::ast_class:
     return "Class";
+  case TokenKind::ast_type_decl:
+    return "TypeDecl";
+  case TokenKind::ast_alias_decl:
+    return "AliasDecl";
+  case TokenKind::ast_base_type:
+    return "BaseType";
   case TokenKind::ast_const_field:
     return "ConstField";
   case TokenKind::ast_field:

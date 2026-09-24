@@ -35,8 +35,9 @@ void sema::Sema::RegisterAnnotation(const lex::Node &Declaration,
   if (Module != BuiltinAnnotationModule &&
       (Declaration.text == "layout" || Declaration.text == "cfg" ||
        Declaration.text == "extern" || Declaration.text == "callconv" ||
-       Declaration.text == "interface" || Declaration.text == "main" ||
-       Declaration.text == "reflect" ||
+       Declaration.text == "interface" || Declaration.text == "final" ||
+       Declaration.text == "virtual" || Declaration.text == "override" ||
+       Declaration.text == "main" || Declaration.text == "reflect" ||
        Declaration.text == "inline" || Declaration.text == "deprecated" ||
        Declaration.text == "target" || Declaration.text == "repeatable" ||
        Declaration.text == "retention")) {
@@ -343,6 +344,13 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
       SeenInterface = true;
       continue;
     }
+    if (IsBuiltinAnnotation(Annotation->text, "final")) {
+      if (Target.kind != K::ast_class)
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
+      if (!Annotation->children.empty())
+        Error(*Annotation, lex::DiagnosticKind::InvalidAnnotation);
+      continue;
+    }
     if (IsBuiltinAnnotation(Annotation->text, "layout")) {
       if (Target.kind != K::ast_class)
         Error(*Annotation, lex::DiagnosticKind::InvalidAnnotationTarget);
@@ -460,10 +468,9 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
     if (!Invalid && Info->Module == BuiltinAnnotationModule &&
         Info->Node->text == "inline" &&
         Instance.Arguments.front().Value.Text == "always" &&
-        !std::any_of(Target.children.begin(), Target.children.end(),
-                     [](const auto &Child) {
-                       return Child->kind == K::ast_block;
-                     })) {
+        !std::any_of(
+            Target.children.begin(), Target.children.end(),
+            [](const auto &Child) { return Child->kind == K::ast_block; })) {
       Error(*Annotation, lex::DiagnosticKind::InvalidAnnotation);
       Invalid = true;
     }

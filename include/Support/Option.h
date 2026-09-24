@@ -65,6 +65,10 @@ public:
   inline static llvm::cl::opt<bool> LexDumpAst{
       "dump-ast", llvm::cl::desc("Print the parsed AST"),
       llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<bool> DumpClassLayout{
+      "dump-class-layout",
+      llvm::cl::desc("Print class field offsets, sizes, and alignment"),
+      llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<bool> LexVerify{
       "check", llvm::cl::desc("Verify source syntax and semantics"),
       llvm::cl::cat(KelyraCategory)};

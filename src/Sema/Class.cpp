@@ -139,6 +139,12 @@ void sema::Sema::CheckClassLayouts() {
       }
       std::uint64_t FieldSize = (GetBitWidth(Element) + 7) / 8;
       unsigned FieldAlignment = GetAlignment(Element);
+      if (Element.IsPointer() && Element.PointerDepth == 1 &&
+          Element.Element == BuiltinType::Class) {
+        const auto *Pointee = GetClass(Element.ClassName);
+        if (Pointee && Pointee->IsInterface)
+          FieldSize = (Pointee->InterfaceMethods.size() + 1) * sizeof(void *);
+      }
       if (Element.IsClass()) {
         const auto &Child = Classes.at(Element.ClassName);
         FieldSize = Child.Size;
@@ -149,6 +155,7 @@ void sema::Sema::CheckClassLayouts() {
       if (!FieldAlignment)
         FieldAlignment = std::min<std::uint64_t>(
             16, std::bit_ceil(std::max<std::uint64_t>(1, FieldSize)));
+      Field.Alignment = FieldAlignment;
       if (FieldSize > std::numeric_limits<unsigned>::max() / 8 / Count) {
         Error(*Field.Node, lex::DiagnosticKind::UnsupportedType);
         return false;
@@ -229,11 +236,25 @@ void sema::Sema::CheckClassMember(const lex::Node &Member,
 
   if (CurrentConstructor) {
     Scopes.emplace_back();
-    if (Body->children.size() < Class.Fields.size())
+    if (Body->children.size() < Class.UserFieldCount)
       Error(*Body, lex::DiagnosticKind::InvalidInitialization);
     for (std::size_t I = 0; I < Body->children.size(); ++I) {
       const auto &Statement = *Body->children[I];
-      if (I < Class.Fields.size()) {
+      if (I == 0 && !Class.BaseName.empty()) {
+        if (Statement.kind != K::ast_expr_stmt ||
+            Statement.children.size() != 1 ||
+            Statement.children[0]->kind != K::ast_call ||
+            Statement.children[0]->children.empty() ||
+            Statement.children[0]->children[0]->kind != K::ast_name ||
+            Statement.children[0]->children[0]->text != "super") {
+          Error(Statement, lex::DiagnosticKind::InvalidInitialization);
+          continue;
+        }
+        CheckExpression(*Statement.children[0]);
+        ++InitializedFields;
+        continue;
+      }
+      if (I < Class.UserFieldCount) {
         if (Statement.kind != K::ast_assign || Statement.children.size() != 2) {
           Error(Statement, lex::DiagnosticKind::InvalidInitialization);
           continue;

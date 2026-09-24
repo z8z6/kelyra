@@ -1,0 +1,3 @@
+module api.reader;
+@interface
+pub class Reader { pub fn read() -> i32; }

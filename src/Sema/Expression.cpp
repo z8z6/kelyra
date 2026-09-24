@@ -2,6 +2,7 @@
 #include "SemaInternal.h"
 
 #include <algorithm>
+#include <functional>
 #include <sstream>
 #include <unordered_map>
 
@@ -73,6 +74,43 @@ std::optional<sema::Type>
 sema::Sema::FinishExpression(const lex::Node &Expression, Type Result,
                              std::optional<Type> Expected) {
   Types[&Expression] = Result;
+  if (Expected && Expected->IsPointer() && Result.IsPointer() &&
+      Expected->PointerDepth == 1 && Result.PointerDepth == 1 &&
+      Expected->Element == BuiltinType::Class &&
+      Result.Element == BuiltinType::Class) {
+    const auto *Target = GetClass(Expected->ClassName);
+    if (Target && Target->IsInterface && *Expected != Result) {
+      std::function<bool(const ClassInfo &)> ExtendsInterface =
+          [&](const ClassInfo &Interface) {
+            if (Interface.QualifiedName == Target->QualifiedName)
+              return true;
+            for (const auto &Parent : Interface.Interfaces)
+              if (ExtendsInterface(*GetClass(Parent)))
+                return true;
+            return false;
+          };
+      const auto *Concrete = GetClass(Result.ClassName);
+      if (Concrete && Concrete->IsInterface && ExtendsInterface(*Concrete)) {
+        InterfaceConversions[&Expression] = Target->QualifiedName;
+        return Result;
+      }
+      while (Concrete && !Concrete->IsInterface) {
+        for (const auto &Interface : Concrete->Interfaces)
+          if (ExtendsInterface(*GetClass(Interface))) {
+            InterfaceConversions[&Expression] = Target->QualifiedName;
+            return Result;
+          }
+        Concrete =
+            Concrete->BaseName.empty() ? nullptr : GetClass(Concrete->BaseName);
+      }
+    }
+    auto *Class = GetClass(Result.ClassName);
+    while (Class && !Class->BaseName.empty()) {
+      if (Class->BaseName == Expected->ClassName)
+        return Result;
+      Class = GetClass(Class->BaseName);
+    }
+  }
   if (Expected && *Expected != Result &&
       !IsCInteropCompatible(*Expected, Result))
     Error(Expression, lex::DiagnosticKind::TypeMismatch);
@@ -82,8 +120,17 @@ sema::Sema::FinishExpression(const lex::Node &Expression, Type Result,
 std::optional<sema::Type>
 sema::Sema::CheckNameExpression(const lex::Node &Expression,
                                 std::optional<Type> Expected, bool) {
+  if (Expression.text == "super" && !CurrentClass.empty()) {
+    const auto *Class = GetClass(CurrentClass);
+    if (!Class->BaseName.empty()) {
+      Type Base{BuiltinType::Class, {}};
+      Base.ClassName = Class->BaseName;
+      Base.AddPointer();
+      return FinishExpression(Expression, Base, Expected);
+    }
+  }
   if (Expression.text == "this" && CurrentConstructor && !CheckingFieldBase &&
-      InitializedFields < GetClass(CurrentClass)->Fields.size()) {
+      InitializedFields < GetClass(CurrentClass)->UserFieldCount) {
     Error(Expression, lex::DiagnosticKind::UninitializedField);
     return std::nullopt;
   }
@@ -96,16 +143,21 @@ sema::Sema::CheckNameExpression(const lex::Node &Expression,
           ConstantReferences[&Expression] = Constant.Value;
           return FinishExpression(Expression, Constant.ValueType, Expected);
         }
-      for (std::size_t I = 0; I < Class->Fields.size(); ++I)
-        if (Class->Fields[I].Name == Expression.text) {
-          if (CurrentConstructor && I >= InitializedFields &&
-              InitializingTarget != &Expression) {
-            Error(Expression, lex::DiagnosticKind::UninitializedField);
-            return std::nullopt;
+      for (const ClassInfo *Owner = Class; Owner;
+           Owner = Owner->BaseName.empty() ? nullptr
+                                           : GetClass(Owner->BaseName))
+        for (std::size_t I = Owner == Class ? 0 : Owner->OwnFieldStart;
+             I < Owner->UserFieldCount; ++I)
+          if (Owner->Fields[I].Name == Expression.text) {
+            if (CurrentConstructor && I >= InitializedFields &&
+                Owner == Class && InitializingTarget != &Expression) {
+              Error(Expression, lex::DiagnosticKind::UninitializedField);
+              return std::nullopt;
+            }
+            FieldReferences[&Expression] = {Owner->QualifiedName, I};
+            return FinishExpression(Expression, Owner->Fields[I].Value,
+                                    Expected);
           }
-          FieldReferences[&Expression] = {CurrentClass, I};
-          return FinishExpression(Expression, Class->Fields[I].Value, Expected);
-        }
     }
   }
   if (!Result) {
@@ -174,24 +226,28 @@ sema::Sema::CheckMemberExpression(const lex::Node &Expression,
     Error(Expression, lex::DiagnosticKind::UnsupportedExpression);
     return std::nullopt;
   }
-  for (std::size_t I = 0; I < Class->Fields.size(); ++I) {
-    const auto &Field = Class->Fields[I];
-    if (Field.Name != Expression.text)
-      continue;
-    const auto &Receiver = *Expression.children.front();
-    if (CurrentConstructor && Receiver.kind == lex::TokenKind::ast_name &&
-        Receiver.text == "this" && I >= InitializedFields &&
-        InitializingTarget != &Expression) {
-      Error(Expression, lex::DiagnosticKind::UninitializedField);
-      return std::nullopt;
+  for (const ClassInfo *Owner = Class; Owner;
+       Owner = Owner->BaseName.empty() ? nullptr : GetClass(Owner->BaseName))
+    for (std::size_t I = Owner == Class ? 0 : Owner->OwnFieldStart;
+         I < Owner->UserFieldCount; ++I) {
+      const auto &Field = Owner->Fields[I];
+      if (Field.Name != Expression.text)
+        continue;
+      const auto &Receiver = *Expression.children.front();
+      if (CurrentConstructor && Owner == Class &&
+          Receiver.kind == lex::TokenKind::ast_name &&
+          Receiver.text == "this" && I >= InitializedFields &&
+          InitializingTarget != &Expression) {
+        Error(Expression, lex::DiagnosticKind::UninitializedField);
+        return std::nullopt;
+      }
+      if (Owner->Module != CurrentModule && (!Owner->Public || !Field.Public)) {
+        Error(Expression, lex::DiagnosticKind::PrivateDeclaration);
+        return std::nullopt;
+      }
+      FieldReferences[&Expression] = {Owner->QualifiedName, I};
+      return FinishExpression(Expression, Field.Value, Expected);
     }
-    if (Class->Module != CurrentModule && (!Class->Public || !Field.Public)) {
-      Error(Expression, lex::DiagnosticKind::PrivateDeclaration);
-      return std::nullopt;
-    }
-    FieldReferences[&Expression] = {Class->QualifiedName, I};
-    return FinishExpression(Expression, Field.Value, Expected);
-  }
   Error(Expression, lex::DiagnosticKind::UnknownName);
   return std::nullopt;
 }
@@ -283,6 +339,34 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
   using K = lex::TokenKind;
   const auto &Callee = *Expression.children.front();
   const auto Name = QualifiedName(Callee);
+  if (Callee.kind == K::ast_name && Callee.text == "super" &&
+      CurrentConstructor && InitializedFields == 0 && !CurrentClass.empty()) {
+    const auto *Derived = GetClass(CurrentClass);
+    const auto *Base =
+        Derived->BaseName.empty() ? nullptr : GetClass(Derived->BaseName);
+    if (!Base) {
+      Error(Expression, lex::DiagnosticKind::InvalidClass);
+      return std::nullopt;
+    }
+    const auto It = Functions.find(Base->QualifiedName + ".init");
+    const auto Count = Expression.children.size() - 1;
+    if ((It != Functions.end() && It->second.Parameters.size() != Count + 1) ||
+        (It == Functions.end() && Count != 0))
+      Error(Expression, lex::DiagnosticKind::TypeMismatch);
+    if (It != Functions.end()) {
+      if (Base->Module != CurrentModule && !It->second.Public)
+        Error(Expression, lex::DiagnosticKind::PrivateDeclaration);
+      for (std::size_t I = 0; I < Count && I + 1 < It->second.Parameters.size();
+           ++I)
+        CheckExpression(*Expression.children[I + 1],
+                        It->second.Parameters[I + 1]);
+      Callees[&Expression] = It->second.Symbol;
+    } else {
+      Callees[&Expression] = Base->ConstructorSymbol;
+    }
+    BaseConstructorCalls[&Expression] = Base->QualifiedName;
+    return FinishExpression(Expression, Type{BuiltinType::Void, {}}, Expected);
+  }
   const auto LocalKey = [&](std::string_view Value) {
     return CurrentModule.empty() ? std::string(Value)
                                  : CurrentModule + "." + std::string(Value);
@@ -305,7 +389,8 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
   const lex::Node *Root = &Callee;
   while (Root->kind == K::ast_member)
     Root = Root->children.front().get();
-  const bool ValueRoot = Root->kind != K::ast_name || IsLocal(Root->text);
+  const bool ValueRoot = Root->kind != K::ast_name || IsLocal(Root->text) ||
+                         (Root->kind == K::ast_name && Root->text == "super");
   if (ValueRoot && Callee.kind != K::ast_member)
     return CheckIndirectCall(Expression, Expected);
   std::string Key = Name.value_or("");
@@ -360,6 +445,8 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
   }
 
   bool MethodCall = false;
+  const ClassInfo *InterfaceReceiver = nullptr;
+  std::size_t InterfaceMethodIndex = 0;
   if (Callee.kind == K::ast_member && ValueRoot) {
     auto Receiver = CheckExpression(*Callee.children.front());
     if (!Receiver)
@@ -381,7 +468,24 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
       Error(Expression, lex::DiagnosticKind::InvalidLifecycleCall);
       return std::nullopt;
     }
-    Key = Class->QualifiedName + "." + Callee.text;
+    if (Class->IsInterface) {
+      InterfaceReceiver = Class;
+      const auto Method = std::find_if(
+          Class->InterfaceMethods.begin(), Class->InterfaceMethods.end(),
+          [&](const auto &Candidate) {
+            return Candidate.substr(Candidate.rfind('.') + 1) == Callee.text;
+          });
+      if (Method != Class->InterfaceMethods.end()) {
+        InterfaceMethodIndex = Method - Class->InterfaceMethods.begin();
+        Key = *Method;
+      }
+    } else {
+      Key = Class->QualifiedName + "." + Callee.text;
+      while (!Functions.contains(Key) && !Class->BaseName.empty()) {
+        Class = GetClass(Class->BaseName);
+        Key = Class->QualifiedName + "." + Callee.text;
+      }
+    }
     MethodCall = true;
   } else if (!Name || ValueRoot) {
     Error(Expression, lex::DiagnosticKind::UnknownName);
@@ -409,7 +513,12 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
         }
     }
     if (!CurrentClass.empty()) {
-      const auto Method = Functions.find(CurrentClass + "." + *Name);
+      auto Method = Functions.find(CurrentClass + "." + *Name);
+      const ClassInfo *Owner = GetClass(CurrentClass);
+      while (Method == Functions.end() && Owner && !Owner->BaseName.empty()) {
+        Owner = GetClass(Owner->BaseName);
+        Method = Functions.find(Owner->QualifiedName + "." + *Name);
+      }
       if (Method != Functions.end()) {
         if (*Name == "init" || *Name == "deinit" || *Name == "copy" ||
             *Name == "move") {
@@ -421,7 +530,7 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
           return std::nullopt;
         }
         if (CurrentConstructor &&
-            InitializedFields < GetClass(CurrentClass)->Fields.size()) {
+            InitializedFields < GetClass(CurrentClass)->UserFieldCount) {
           Error(Expression, lex::DiagnosticKind::UninitializedField);
           return std::nullopt;
         }
@@ -435,7 +544,7 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
     return std::nullopt;
   }
   const auto &Info = Function->second;
-  if (Info.Abstract) {
+  if (Info.Abstract && !InterfaceReceiver) {
     Error(Expression, lex::DiagnosticKind::InvalidClass);
     return std::nullopt;
   }
@@ -548,6 +657,23 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
     CWrappers.push_back(std::move(Wrapper));
   }
   Callees[&Expression] = Info.Symbol;
+  if (InterfaceReceiver)
+    InterfaceCalls[&Expression] = {InterfaceReceiver->QualifiedName,
+                                   InterfaceMethodIndex};
+  if (MethodCall && (Info.Virtual || Info.Override) &&
+      !(Callee.kind == K::ast_member &&
+        Callee.children.front()->kind == K::ast_name &&
+        Callee.children.front()->text == "super")) {
+    for (auto OwnerName = Info.OwnerClass; !OwnerName.empty();) {
+      const auto *Owner = GetClass(OwnerName);
+      if (const auto Slot = Owner->VirtualSlots.find(Callee.text);
+          Slot != Owner->VirtualSlots.end()) {
+        VirtualCalls[&Expression] = {OwnerName, Slot->second};
+        break;
+      }
+      OwnerName = Owner->BaseName;
+    }
+  }
   WarnIfDeprecated(Callee, Info.Node);
   if (MethodCall)
     MethodCalls.insert(&Expression);
@@ -592,6 +718,13 @@ sema::Sema::CheckUnaryExpression(const lex::Node &Expression,
       return std::nullopt;
     }
     *Result = Result->Pointee();
+    if (Result->IsClass()) {
+      const auto *Class = GetClass(*Result);
+      if (Class && Class->IsInterface) {
+        Error(Expression, lex::DiagnosticKind::UnsupportedExpression);
+        return std::nullopt;
+      }
+    }
     if (!Result->IsPointer()) {
       const auto External = ExternalTypes.find("c." + Result->CName);
       if (Result->Element == BuiltinType::CRecord &&
@@ -676,11 +809,13 @@ sema::Sema::CheckCastExpression(const lex::Node &Expression,
   auto Target = CheckType(*Expression.children.back());
   if (!Source || !Target)
     return std::nullopt;
-  const bool PointerCast = Source->IsPointer() && Target->IsPointer();
+  const bool SourceAddress = Source->IsPointer() || Source->IsFunction();
+  const bool TargetAddress = Target->IsPointer() || Target->IsFunction();
+  const bool PointerCast = SourceAddress && TargetAddress;
   const bool PointerIntegerCast =
-      (Source->IsPointer() && !Target->IsPointer() && !Target->IsArray() &&
+      (SourceAddress && !TargetAddress && !Target->IsArray() &&
        IsInteger(Target->Element)) ||
-      (Target->IsPointer() && !Source->IsPointer() && !Source->IsArray() &&
+      (TargetAddress && !SourceAddress && !Source->IsArray() &&
        IsInteger(Source->Element));
   const bool NumericCast =
       !Source->IsPointer() && !Target->IsPointer() && !Source->IsArray() &&

@@ -8,6 +8,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <algorithm>
 #include <cassert>
 #include <unordered_map>
 
@@ -49,10 +50,107 @@ mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
   const auto It = Handlers.find(Expression.kind);
   assert(It != Handlers.end() &&
          "semantic analysis accepted an expression without an IR handler");
-  return (this->*It->second)(Expression);
+  auto Value = (this->*It->second)(Expression);
+  if (const auto *Interface = Analysis.GetInterfaceConversion(Expression))
+    return EmitInterfaceConversion(Expression, Value,
+                                   *Analysis.GetClass(*Interface));
+  return Value;
+}
+
+mlir::Value
+codegen::IRGen::EmitInterfaceConversion(const lex::Node &Expression,
+                                        mlir::Value Object,
+                                        const sema::ClassInfo &Interface) {
+  const auto Loc = GetLocation(Expression.Loc);
+  sema::Type InterfaceType{sema::BuiltinType::Class, {}};
+  InterfaceType.ClassName = Interface.QualifiedName;
+  InterfaceType.AddPointer();
+  const auto *Concrete =
+      Analysis.GetClass(Analysis.GetType(Expression).ClassName);
+  const bool FromInterface = Concrete->IsInterface;
+  auto Source = Object;
+  if (FromInterface)
+    Object = mlir::LLVM::ExtractValueOp::create(Builder, Loc, Source,
+                                                std::size_t{0});
+  auto Value = mlir::LLVM::UndefOp::create(Builder, Loc, GetType(InterfaceType))
+                   .getResult();
+  Value = mlir::LLVM::InsertValueOp::create(Builder, Loc, Value, Object,
+                                            Builder.getDenseI64ArrayAttr({0}));
+  auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
+  for (std::size_t I = 0; I < Interface.InterfaceMethods.size(); ++I) {
+    const auto &MethodKey = Interface.InterfaceMethods[I];
+    const auto Name = MethodKey.substr(MethodKey.rfind('.') + 1);
+    if (FromInterface) {
+      const auto Method = std::find_if(
+          Concrete->InterfaceMethods.begin(), Concrete->InterfaceMethods.end(),
+          [&](const auto &Candidate) {
+            return Candidate.substr(Candidate.rfind('.') + 1) == Name;
+          });
+      assert(Method != Concrete->InterfaceMethods.end());
+      auto Callee = mlir::LLVM::ExtractValueOp::create(
+          Builder, Loc, Source,
+          static_cast<std::size_t>(Method - Concrete->InterfaceMethods.begin() +
+                                   1));
+      Value = mlir::LLVM::InsertValueOp::create(
+          Builder, Loc, Value, Callee,
+          Builder.getDenseI64ArrayAttr({static_cast<int64_t>(I + 1)}));
+      continue;
+    }
+    const sema::ClassInfo *MethodOwner = Concrete;
+    const lex::Node *Method = nullptr;
+    while (MethodOwner && !Method) {
+      for (const auto &Member : MethodOwner->Node->children)
+        if (Member->kind == K::ast_function && Member->text == Name) {
+          Method = Member.get();
+          break;
+        }
+      if (!Method)
+        MethodOwner = MethodOwner->BaseName.empty()
+                          ? nullptr
+                          : Analysis.GetClass(MethodOwner->BaseName);
+    }
+    assert(Method && "interface conformance requires a method");
+    mlir::Value Callee;
+    for (const sema::ClassInfo *Owner = Concrete; Owner;
+         Owner = Owner->BaseName.empty() ? nullptr
+                                         : Analysis.GetClass(Owner->BaseName)) {
+      const auto Slot = Owner->VirtualSlots.find(Name);
+      if (Slot != Owner->VirtualSlots.end()) {
+        auto Address = FieldAddress(*Owner, Object, Slot->second, Loc);
+        Callee = mlir::LLVM::LoadOp::create(Builder, Loc, Pointer, Address);
+        break;
+      }
+    }
+    if (!Callee) {
+      llvm::SmallVector<mlir::Type> Parameters{Pointer};
+      llvm::SmallVector<mlir::Type> Results;
+      for (const auto &Part : Method->children) {
+        if (Part->kind == K::ast_parameter)
+          Parameters.push_back(GetType(Analysis.GetType(*Part)));
+        else if ((Part->kind == K::ast_type ||
+                  Part->kind == K::ast_pointer_type ||
+                  Part->kind == K::ast_array_type ||
+                  Part->kind == K::ast_function_type) &&
+                 !Analysis.GetType(*Part).IsVoid())
+          Results.push_back(GetType(Analysis.GetType(*Part)));
+      }
+      auto Function = mlir::func::ConstantOp::create(
+          Builder, Loc, Builder.getFunctionType(Parameters, Results),
+          mlir::FlatSymbolRefAttr::get(&Context, Analysis.GetSymbol(*Method)));
+      Callee = mlir::UnrealizedConversionCastOp::create(Builder, Loc, Pointer,
+                                                        Function.getResult())
+                   .getResult(0);
+    }
+    Value = mlir::LLVM::InsertValueOp::create(
+        Builder, Loc, Value, Callee,
+        Builder.getDenseI64ArrayAttr({static_cast<int64_t>(I + 1)}));
+  }
+  return Value;
 }
 
 mlir::Value codegen::IRGen::EmitNameExpression(const lex::Node &Expression) {
+  if (Expression.text == "super")
+    return FindVariable("this")->DirectValue;
   const auto Loc = GetLocation(Expression.Loc);
   const auto &SemanticType = Analysis.GetType(Expression);
   const auto Type = GetType(SemanticType);
@@ -73,7 +171,7 @@ mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
     if (Analysis.IsClassTemporary(Base)) {
       auto [Address, Temporary] = EmitClassSourceAddress(Base);
       const auto *Class = Analysis.GetClass(Analysis.GetType(Base));
-      auto Field = FieldAddress(*Class, Address,
+      auto Field = FieldAddress(*Analysis.GetFieldOwner(Expression), Address,
                                 Analysis.GetFieldIndex(Expression), Loc);
       auto Value = mlir::LLVM::LoadOp::create(
           Builder, Loc, GetType(Analysis.GetType(Expression)), Field);
@@ -91,6 +189,14 @@ mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
 
 mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
   const auto Loc = GetLocation(Expression.Loc);
+  if (Analysis.GetBaseConstructorCall(Expression)) {
+    llvm::SmallVector<mlir::Value> Args{FindVariable("this")->DirectValue};
+    for (std::size_t I = 1; I < Expression.children.size(); ++I)
+      Args.push_back(EmitExpression(*Expression.children[I]));
+    mlir::func::CallOp::create(Builder, Loc, Analysis.GetCallee(Expression),
+                               mlir::TypeRange{}, Args);
+    return {};
+  }
   const auto &SemanticType = Analysis.GetType(Expression);
   const auto Type =
       SemanticType.IsVoid() ? mlir::Type() : GetType(SemanticType);
@@ -159,6 +265,47 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
     mlir::func::CallOp::create(Builder, Loc, Callee, mlir::TypeRange{},
                                Arguments);
     return mlir::LLVM::LoadOp::create(Builder, Loc, Type, ResultAddress);
+  }
+  if (const auto *Interface = Analysis.GetInterfaceCall(Expression)) {
+    auto Receiver = Arguments.front();
+    Arguments.front() =
+        mlir::LLVM::ExtractValueOp::create(Builder, Loc, Receiver, 0);
+    auto Target = mlir::LLVM::ExtractValueOp::create(Builder, Loc, Receiver,
+                                                     Interface->second + 1);
+    llvm::SmallVector<mlir::Type> Parameters;
+    for (auto Argument : Arguments)
+      Parameters.push_back(Argument.getType());
+    auto FunctionType = mlir::LLVM::LLVMFunctionType::get(
+        Type ? Type : mlir::LLVM::LLVMVoidType::get(&Context), Parameters);
+    llvm::SmallVector<mlir::Value> IndirectArguments{Target};
+    IndirectArguments.append(Arguments.begin(), Arguments.end());
+    auto Call = mlir::LLVM::CallOp::create(Builder, Loc, FunctionType,
+                                           IndirectArguments);
+    return Type ? Call.getResult() : mlir::Value();
+  }
+  if (const auto *Virtual = Analysis.GetVirtualCall(Expression)) {
+    const auto &Owner = *Analysis.GetClass(Virtual->first);
+    const auto &Signature = Owner.Fields[Virtual->second].Value;
+    auto Slot = FieldAddress(Owner, Arguments.front(), Virtual->second, Loc);
+    auto Callee =
+        mlir::LLVM::LoadOp::create(Builder, Loc, GetType(Signature), Slot);
+    llvm::SmallVector<mlir::Type> Parameters;
+    for (const auto &Parameter : Signature.Parameters)
+      Parameters.push_back(GetType(Parameter));
+    auto FunctionType = mlir::LLVM::LLVMFunctionType::get(
+        Type ? Type : mlir::LLVM::LLVMVoidType::get(&Context), Parameters);
+    llvm::SmallVector<mlir::Value> IndirectArguments{Callee.getResult()};
+    IndirectArguments.append(Arguments.begin(), Arguments.end());
+    auto Call = mlir::LLVM::CallOp::create(Builder, Loc, FunctionType,
+                                           IndirectArguments);
+    if (ReceiverTemporary) {
+      const auto &Base = *Expression.children.front()->children.front();
+      mlir::func::CallOp::create(
+          Builder, Loc,
+          Analysis.GetClass(Analysis.GetType(Base))->DestructorSymbol,
+          mlir::TypeRange{}, mlir::ValueRange{ReceiverTemporary});
+    }
+    return Type ? Call.getResult() : mlir::Value();
   }
   llvm::SmallVector<mlir::Type> Results;
   if (Type)
@@ -246,12 +393,14 @@ mlir::Value codegen::IRGen::EmitCastExpression(const lex::Node &Expression) {
   const auto &Source = Analysis.GetType(*Expression.children.front());
   const auto &Target = Analysis.GetType(Expression);
   auto Value = EmitExpression(*Expression.children.front());
-  if (Source == Target || (Source.IsPointer() && Target.IsPointer()))
+  const bool SourceAddress = Source.IsPointer() || Source.IsFunction();
+  const bool TargetAddress = Target.IsPointer() || Target.IsFunction();
+  if (Source == Target || (SourceAddress && TargetAddress))
     return Value;
   const auto ResultType = GetType(Target);
-  if (Source.IsPointer())
+  if (SourceAddress)
     return mlir::LLVM::PtrToIntOp::create(Builder, Loc, ResultType, Value);
-  if (Target.IsPointer())
+  if (TargetAddress)
     return mlir::LLVM::IntToPtrOp::create(Builder, Loc, ResultType, Value);
   const bool SourceFloat = sema::IsFloat(Source.Element);
   const bool TargetFloat = sema::IsFloat(Target.Element);

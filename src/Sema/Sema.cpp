@@ -1,11 +1,13 @@
 #include "Sema/Sema.h"
 #include "BuiltinAnnotations.h"
+#include "BuiltinCTypes.h"
 #include "SemaInternal.h"
 #include "Support/BuiltinAnnotation.h"
 
 #include <algorithm>
 #include <charconv>
 #include <cstdint>
+#include <functional>
 #include <sstream>
 
 using namespace kelyra;
@@ -63,6 +65,8 @@ std::string MetaTypeName(const sema::Type &Type) {
   if (Type.IsArray())
     return "[" + std::to_string(Type.ArrayLength()) + "]" +
            MetaTypeName(Type.Indexed());
+  if (!Type.NominalName.empty())
+    return Type.NominalName;
   if (Type.Element == sema::BuiltinType::Function) {
     std::string Name = "fn(";
     for (std::size_t I = 0; I < Type.Parameters.size(); ++I) {
@@ -229,6 +233,33 @@ bool sema::Sema::IsClassTemporary(const lex::Node &Node) const {
          Type->second.IsClass();
 }
 
+std::optional<sema::Type>
+sema::Sema::ResolveTypeDeclaration(TypeDeclarationInfo &Declaration) {
+  if (Declaration.State == 2)
+    return Declaration.Resolved;
+  if (Declaration.State == 1) {
+    Error(*Declaration.Node, lex::DiagnosticKind::UnsupportedType);
+    return std::nullopt;
+  }
+  Declaration.State = 1;
+  const auto PreviousModule = CurrentModule;
+  CurrentModule = Declaration.Module;
+  auto Result = CheckType(*Declaration.Node->children.back());
+  CurrentModule = PreviousModule;
+  if (Result && Declaration.Nominal) {
+    if (Result->IsPointer() || Result->IsArray() ||
+        !IsNumeric(Result->Element) || GetBitWidth(*Result) > 128) {
+      Error(*Declaration.Node, lex::DiagnosticKind::UnsupportedType);
+      Result.reset();
+    } else {
+      Result->NominalName = Declaration.QualifiedName;
+    }
+  }
+  Declaration.Resolved = Result;
+  Declaration.State = 2;
+  return Result;
+}
+
 std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
   using K = lex::TokenKind;
   if (Node.kind == K::ast_function_type)
@@ -255,12 +286,18 @@ std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
     std::string ClassName = Node.text;
     const auto &AccessModule =
         Node.GenericArgument ? Node.GenericOriginModule : CurrentModule;
+    if (Element && Node.text.starts_with("__c_") && AccessModule != "c") {
+      Error(Node, lex::DiagnosticKind::UnsupportedType);
+      return std::nullopt;
+    }
     if (!Classes.contains(ClassName) &&
         Node.text.find('.') == std::string::npos)
       ClassName =
           AccessModule.empty() ? Node.text : AccessModule + "." + Node.text;
     const auto Class = Classes.find(ClassName);
-    if (!Element && External == ExternalTypes.end() && Class == Classes.end()) {
+    const auto Declaration = TypeDeclarations.find(ClassName);
+    if (!Element && External == ExternalTypes.end() && Class == Classes.end() &&
+        Declaration == TypeDeclarations.end()) {
       Error(Node, lex::DiagnosticKind::UnsupportedType);
       return std::nullopt;
     }
@@ -269,7 +306,24 @@ std::optional<sema::Type> sema::Sema::CheckType(const lex::Node &Node) {
       Result = Type{*Element, {}};
     else if (External != ExternalTypes.end())
       Result = External->second;
-    else {
+    else if (Declaration != TypeDeclarations.end()) {
+      if (Declaration->second.Module != AccessModule) {
+        const auto Import = Imports.find(AccessModule);
+        const bool Imported =
+            Declaration->second.Module == "c" ||
+            (Import != Imports.end() &&
+             (Import->second.contains(Declaration->second.Module) ||
+              Import->second.contains(Declaration->second.Module + ".*")));
+        if (!Declaration->second.Public || !Imported) {
+          Error(Node, lex::DiagnosticKind::PrivateDeclaration);
+          return std::nullopt;
+        }
+      }
+      auto Alias = ResolveTypeDeclaration(Declaration->second);
+      if (!Alias)
+        return std::nullopt;
+      Result = *Alias;
+    } else {
       if (Class->second.Module != AccessModule) {
         const auto Import = Imports.find(AccessModule);
         if (!Class->second.Public || Import == Imports.end() ||
@@ -444,12 +498,25 @@ bool sema::Sema::CheckModules(
       return false;
     Modules.push_back({BuiltinAnnotations->root.get(), false, true});
   }
+  const bool HasCModule =
+      std::any_of(Modules.begin(), Modules.end(), [](const auto &Input) {
+        return ModuleName(*Input.Ast) == "c";
+      });
+  BuiltinCTypes.reset();
+  if (!HasCModule) {
+    BuiltinCTypes =
+        lex::Lexer().parse(std::string(BuiltinCTypesSource), "c.kly");
+    if (!BuiltinCTypes->ok())
+      return false;
+    Modules.push_back({BuiltinCTypes->root.get(), false, true});
+  }
   Diagnostics.clear();
   Warnings.clear();
   Reflection.Clear();
   Types.clear();
   Functions.clear();
   Classes.clear();
+  TypeDeclarations.clear();
   AnnotationDeclarations.clear();
   AnnotationInstances.clear();
   EntrypointCandidates.clear();
@@ -457,6 +524,10 @@ bool sema::Sema::CheckModules(
   Callees.clear();
   CWrapperCalls.clear();
   ConstructorCalls.clear();
+  BaseConstructorCalls.clear();
+  VirtualCalls.clear();
+  InterfaceConversions.clear();
+  InterfaceCalls.clear();
   FieldReferences.clear();
   MethodCalls.clear();
   FunctionValues.clear();
@@ -509,6 +580,24 @@ bool sema::Sema::CheckModules(
         if (Imported != "c" && !ModuleTable.contains(Imported))
           Error(*Child, lex::DiagnosticKind::UnknownModule);
       }
+      if (Child->kind == K::ast_type_decl || Child->kind == K::ast_alias_decl) {
+        TypeDeclarationInfo Info;
+        Info.Node = Child.get();
+        Info.Module = Name;
+        Info.QualifiedName =
+            Name.empty() ? Child->text : Name + "." + Child->text;
+        Info.Public = IsPublic(*Child);
+        Info.Nominal = Child->kind == K::ast_type_decl;
+        if ((Name.empty() && ParseBuiltinType(Child->text)) ||
+            Classes.contains(Info.QualifiedName) ||
+            !TypeDeclarations.emplace(Info.QualifiedName, std::move(Info))
+                 .second)
+          Error(*Child, lex::DiagnosticKind::UnsupportedDeclaration);
+        for (const auto &Part : Child->children)
+          if (Part->kind == K::ast_annotation)
+            Error(*Part, lex::DiagnosticKind::InvalidAnnotation);
+        continue;
+      }
       if (Child->kind != K::ast_class)
         continue;
       ClassInfo Info;
@@ -523,6 +612,13 @@ bool sema::Sema::CheckModules(
             return Part->kind == K::ast_annotation &&
                    IsBuiltinAnnotation(Part->text, "interface");
           });
+      Info.Final = std::any_of(
+          Child->children.begin(), Child->children.end(), [](const auto &Part) {
+            return Part->kind == K::ast_annotation &&
+                   IsBuiltinAnnotation(Part->text, "final");
+          });
+      if (Info.Final && Info.IsInterface)
+        Error(*Child, lex::DiagnosticKind::InvalidClass);
       for (const auto &Part : Child->children) {
         if (Part->kind != K::ast_annotation ||
             !IsBuiltinAnnotation(Part->text, "layout"))
@@ -542,7 +638,7 @@ bool sema::Sema::CheckModules(
         Info.CLayout = true;
       }
       const auto Key = Info.QualifiedName;
-      if (ParseBuiltinType(Info.Name) ||
+      if (ParseBuiltinType(Info.Name) || TypeDeclarations.contains(Key) ||
           !Classes.emplace(Key, std::move(Info)).second) {
         Error(*Child, lex::DiagnosticKind::UnsupportedDeclaration);
         continue;
@@ -550,6 +646,79 @@ bool sema::Sema::CheckModules(
       RegisterMetaDeclaration(*Child, MetaKind::Class, Name, IsPublic(*Child));
     }
   }
+
+  for (auto &[Name, Declaration] : TypeDeclarations)
+    ResolveTypeDeclaration(Declaration);
+  if (!Diagnostics.empty())
+    return false;
+
+  std::function<bool(const ClassInfo &, std::string_view)> InterfaceHasMethod =
+      [&](const ClassInfo &Interface, std::string_view Method) {
+        if (Functions.contains(Interface.QualifiedName + "." +
+                               std::string(Method)))
+          return true;
+        for (const auto &Parent : Interface.Interfaces)
+          if (InterfaceHasMethod(*GetClass(Parent), Method))
+            return true;
+        return false;
+      };
+
+  for (auto &[Name, Class] : Classes) {
+    CurrentModule = Class.Module;
+    bool SawConcrete = false;
+    for (const auto &Part : Class.Node->children) {
+      if (Part->kind != K::ast_base_type || Part->children.size() != 1)
+        continue;
+      auto Type = CheckType(*Part->children.front());
+      if (!Type || !Type->IsClass()) {
+        Error(*Part, lex::DiagnosticKind::InvalidClass);
+        continue;
+      }
+      const auto *Parent = GetClass(*Type);
+      if (!Parent || Parent->QualifiedName == Name) {
+        Error(*Part, lex::DiagnosticKind::InvalidClass);
+        continue;
+      }
+      if (Parent->IsInterface) {
+        if (std::find(Class.Interfaces.begin(), Class.Interfaces.end(),
+                      Parent->QualifiedName) != Class.Interfaces.end())
+          Error(*Part, lex::DiagnosticKind::InvalidClass);
+        else
+          Class.Interfaces.push_back(Parent->QualifiedName);
+      } else if (Class.IsInterface || SawConcrete || Parent->Final ||
+                 !Class.Interfaces.empty() || Class.CLayout ||
+                 Parent->CLayout) {
+        Error(*Part, lex::DiagnosticKind::InvalidClass);
+      } else {
+        SawConcrete = true;
+        Class.BaseName = Parent->QualifiedName;
+        Class.Fields.push_back({Class.Node, "$base", *Type, false});
+        Class.OwnFieldStart = 1;
+      }
+    }
+  }
+
+  std::unordered_map<std::string, unsigned> InheritanceStates;
+  std::function<void(const ClassInfo &)> CheckInheritanceGraph =
+      [&](const ClassInfo &Class) {
+        auto &State = InheritanceStates[Class.QualifiedName];
+        if (State == 2)
+          return;
+        if (State == 1) {
+          Error(*Class.Node, lex::DiagnosticKind::RecursiveClass);
+          return;
+        }
+        State = 1;
+        if (!Class.BaseName.empty())
+          CheckInheritanceGraph(*GetClass(Class.BaseName));
+        for (const auto &Interface : Class.Interfaces)
+          CheckInheritanceGraph(*GetClass(Interface));
+        State = 2;
+      };
+  for (const auto &[Name, Class] : Classes)
+    CheckInheritanceGraph(Class);
+  if (!Diagnostics.empty())
+    return false;
 
   for (const auto &External : ExternalFunctions) {
     FunctionInfo Info;
@@ -577,6 +746,18 @@ bool sema::Sema::CheckModules(
       Info.Module = Name;
       Info.Public = IsPublic(Function);
       Info.OwnerClass = Owner;
+      Info.Virtual =
+          std::any_of(Function.children.begin(), Function.children.end(),
+                      [](const auto &Part) {
+                        return Part->kind == K::ast_annotation &&
+                               IsBuiltinAnnotation(Part->text, "virtual");
+                      });
+      Info.Override =
+          std::any_of(Function.children.begin(), Function.children.end(),
+                      [](const auto &Part) {
+                        return Part->kind == K::ast_annotation &&
+                               IsBuiltinAnnotation(Part->text, "override");
+                      });
       const auto LocalName =
           Owner.empty() ? Function.text
                         : std::string(Owner.substr(Owner.rfind('.') + 1)) +
@@ -685,19 +866,28 @@ bool sema::Sema::CheckModules(
         if (Parent)
           Reflection.Records[*Parent].Children.push_back(Id);
       }
+      const auto IsInterfacePointer = [&](const Type &Value) {
+        if (!Value.IsPointer() || Value.PointerDepth != 1 ||
+            Value.Element != BuiltinType::Class)
+          return false;
+        const auto *Class = GetClass(Value.ClassName);
+        return Class && Class->IsInterface;
+      };
       for (const auto &Part : Function.children) {
         if (Part->kind == K::ast_parameter && Part->children.size() == 1) {
           if (auto Parameter = CheckType(*Part->children.front())) {
             Info.Parameters.push_back(*Parameter);
             Types[Part.get()] = *Parameter;
             if (ExternAnnotation && !Parameter->IsPointer() &&
-                !IsNumeric(Parameter->Element) &&
+                !Parameter->IsFunction() && !IsNumeric(Parameter->Element) &&
                 Parameter->Element != BuiltinType::Bool &&
                 Parameter->Element != BuiltinType::CBool &&
                 Parameter->Element != BuiltinType::Char)
               Error(*Part, lex::DiagnosticKind::UnsupportedType);
             if (Parameter->IsClass() && ExternAnnotation)
               Error(*Part, lex::DiagnosticKind::ClassValueOperation);
+            if (ExternAnnotation && IsInterfacePointer(*Parameter))
+              Error(*Part, lex::DiagnosticKind::UnsupportedType);
             if (Parameter->IsVoid() || Parameter->IsResults())
               Error(*Part, lex::DiagnosticKind::UnsupportedType);
             const auto ParameterId = RegisterMetaDeclaration(
@@ -712,10 +902,12 @@ bool sema::Sema::CheckModules(
           if (auto Return = CheckType(*Part)) {
             Info.Return = *Return;
             if (ExternAnnotation && !Return->IsVoid() && !Return->IsPointer() &&
-                !IsNumeric(Return->Element) &&
+                !Return->IsFunction() && !IsNumeric(Return->Element) &&
                 Return->Element != BuiltinType::Bool &&
                 Return->Element != BuiltinType::CBool &&
                 Return->Element != BuiltinType::Char)
+              Error(*Part, lex::DiagnosticKind::UnsupportedType);
+            if (ExternAnnotation && IsInterfacePointer(*Return))
               Error(*Part, lex::DiagnosticKind::UnsupportedType);
           }
         }
@@ -727,7 +919,8 @@ bool sema::Sema::CheckModules(
           Owner.empty()
               ? (Name.empty() ? Function.text : Name + "." + Function.text)
               : std::string(Owner) + "." + Function.text;
-      if (Classes.contains(Key) || !Functions.emplace(Key, Info).second)
+      if (Classes.contains(Key) || TypeDeclarations.contains(Key) ||
+          !Functions.emplace(Key, Info).second)
         Error(Function, lex::DiagnosticKind::DuplicateFunction);
       Symbols[&Function] = Info.Symbol;
     };
@@ -735,6 +928,8 @@ bool sema::Sema::CheckModules(
       if (Child->kind == K::ast_module_decl)
         continue;
       if (Child->kind == K::ast_import)
+        continue;
+      if (Child->kind == K::ast_type_decl || Child->kind == K::ast_alias_decl)
         continue;
       if (Child->kind == K::ast_annotation_decl) {
         RegisterMetaDeclaration(*Child, MetaKind::Annotation, Name,
@@ -751,7 +946,8 @@ bool sema::Sema::CheckModules(
         std::unordered_set<std::string> MemberNames;
         for (const auto &Member : Child->children) {
           if (Member->kind == K::ast_public ||
-              Member->kind == K::ast_annotation)
+              Member->kind == K::ast_annotation ||
+              Member->kind == K::ast_base_type)
             continue;
           if (!MemberNames.insert(Member->text).second ||
               (Member->kind == K::ast_function &&
@@ -845,6 +1041,26 @@ bool sema::Sema::CheckModules(
           }
           RegisterFunction(*Member, Class.QualifiedName);
         }
+        Class.UserFieldCount = Class.Fields.size();
+        for (const auto &Member : Child->children) {
+          if (Member->kind != K::ast_function)
+            continue;
+          const auto It =
+              Functions.find(Class.QualifiedName + "." + Member->text);
+          if (It == Functions.end() || !It->second.Virtual)
+            continue;
+          if (Class.IsInterface || It->second.Override ||
+              Member->text == "copy" || Member->text == "move") {
+            Error(*Member, lex::DiagnosticKind::InvalidClass);
+            continue;
+          }
+          Type Slot{BuiltinType::Function, {}};
+          Slot.Parameters = It->second.Parameters;
+          Slot.Results.push_back(It->second.Return);
+          Class.VirtualSlots.emplace(Member->text, Class.Fields.size());
+          Class.Fields.push_back(
+              {Member.get(), "$virtual." + Member->text, Slot, false});
+        }
         if (Class.IsInterface) {
           Class.DefaultConstructible = false;
           continue;
@@ -895,6 +1111,144 @@ bool sema::Sema::CheckModules(
       }
       RegisterFunction(*Child, {});
     }
+  }
+
+  const auto SameInterfaceSignature = [&](const std::string &Left,
+                                          const std::string &Right) {
+    const auto &A = Functions.at(Left);
+    const auto &B = Functions.at(Right);
+    if (A.Parameters.size() != B.Parameters.size() || A.Return != B.Return)
+      return false;
+    for (std::size_t I = 1; I < A.Parameters.size(); ++I)
+      if (A.Parameters[I] != B.Parameters[I])
+        return false;
+    return true;
+  };
+  std::function<void(ClassInfo &)> CollectInterfaceMethods =
+      [&](ClassInfo &Class) {
+        if (!Class.IsInterface || !Class.InterfaceMethods.empty())
+          return;
+        for (const auto &ParentName : Class.Interfaces) {
+          auto &Parent = Classes.at(ParentName);
+          CollectInterfaceMethods(Parent);
+          for (const auto &Method : Parent.InterfaceMethods) {
+            const auto Dot = Method.rfind('.');
+            const auto Name = Method.substr(Dot + 1);
+            const auto Duplicate = std::find_if(
+                Class.InterfaceMethods.begin(), Class.InterfaceMethods.end(),
+                [&](const auto &Existing) {
+                  return Existing.substr(Existing.rfind('.') + 1) == Name;
+                });
+            if (Duplicate == Class.InterfaceMethods.end())
+              Class.InterfaceMethods.push_back(Method);
+            else if (!SameInterfaceSignature(*Duplicate, Method))
+              Error(*Class.Node, lex::DiagnosticKind::InvalidClass);
+          }
+        }
+        for (const auto &Member : Class.Node->children) {
+          if (Member->kind != K::ast_function)
+            continue;
+          const auto Existing = std::find_if(
+              Class.InterfaceMethods.begin(), Class.InterfaceMethods.end(),
+              [&](const auto &Method) {
+                return Method.substr(Method.rfind('.') + 1) == Member->text;
+              });
+          const auto Method = Class.QualifiedName + "." + Member->text;
+          if (Existing == Class.InterfaceMethods.end())
+            Class.InterfaceMethods.push_back(Method);
+          else if (!SameInterfaceSignature(*Existing, Method))
+            Error(*Member, lex::DiagnosticKind::InvalidClass);
+        }
+      };
+  for (auto &[Name, Class] : Classes)
+    CollectInterfaceMethods(Class);
+
+  for (auto &[Name, Class] : Classes) {
+    if (Class.IsInterface)
+      continue;
+    for (const auto &Member : Class.Node->children) {
+      if (Member->kind != K::ast_function || Member->text == "copy" ||
+          Member->text == "move")
+        continue;
+      const auto &Method = Functions.at(Name + "." + Member->text);
+      const ClassInfo *SlotOwner = nullptr;
+      const FunctionInfo *Inherited = nullptr;
+      for (auto BaseName = Class.BaseName; !BaseName.empty();) {
+        const auto *Base = GetClass(BaseName);
+        if (!Inherited) {
+          const auto It = Functions.find(BaseName + "." + Member->text);
+          if (It != Functions.end())
+            Inherited = &It->second;
+        }
+        if (Base->VirtualSlots.contains(Member->text))
+          SlotOwner = Base;
+        BaseName = Base->BaseName;
+      }
+      if (Method.Override) {
+        bool InterfaceMethod = false;
+        for (const auto &Interface : Class.Interfaces)
+          InterfaceMethod |=
+              InterfaceHasMethod(*GetClass(Interface), Member->text);
+        if ((!SlotOwner && !InterfaceMethod) || Method.Virtual ||
+            (SlotOwner && !Inherited) ||
+            (Inherited &&
+             (Method.Parameters.size() != Inherited->Parameters.size() ||
+              Method.Return != Inherited->Return ||
+              (Inherited->Public && !Method.Public)))) {
+          Error(*Member, lex::DiagnosticKind::InvalidClass);
+          continue;
+        }
+        bool Matching = true;
+        if (Inherited)
+          for (std::size_t I = 1; I < Method.Parameters.size(); ++I)
+            Matching &= Method.Parameters[I] == Inherited->Parameters[I];
+        if (!Matching)
+          Error(*Member, lex::DiagnosticKind::TypeMismatch);
+        if (SlotOwner)
+          Class.OverrideSlots.emplace(
+              Member->text,
+              std::make_pair(SlotOwner->QualifiedName,
+                             SlotOwner->VirtualSlots.at(Member->text)));
+      } else if (Inherited) {
+        Error(*Member, lex::DiagnosticKind::InvalidClass);
+      }
+    }
+    if (!Class.BaseName.empty() && (Class.Copy || Class.Move))
+      Error(*Class.Node, lex::DiagnosticKind::InvalidClass);
+
+    std::function<void(const ClassInfo &)> CheckInterface =
+        [&](const ClassInfo &Interface) {
+          for (const auto &Member : Interface.Node->children) {
+            if (Member->kind != K::ast_function)
+              continue;
+            const auto &Required =
+                Functions.at(Interface.QualifiedName + "." + Member->text);
+            const FunctionInfo *Implementation = nullptr;
+            for (auto OwnerName = Class.QualifiedName; !OwnerName.empty();) {
+              const auto It = Functions.find(OwnerName + "." + Member->text);
+              if (It != Functions.end()) {
+                Implementation = &It->second;
+                break;
+              }
+              OwnerName = GetClass(OwnerName)->BaseName;
+            }
+            if (!Implementation ||
+                Implementation->Parameters.size() !=
+                    Required.Parameters.size() ||
+                Implementation->Return != Required.Return ||
+                (Required.Public && !Implementation->Public)) {
+              Error(*Class.Node, lex::DiagnosticKind::InvalidClass);
+              continue;
+            }
+            for (std::size_t I = 1; I < Required.Parameters.size(); ++I)
+              if (Implementation->Parameters[I] != Required.Parameters[I])
+                Error(*Class.Node, lex::DiagnosticKind::TypeMismatch);
+          }
+          for (const auto &Parent : Interface.Interfaces)
+            CheckInterface(*GetClass(Parent));
+        };
+    for (const auto &Interface : Class.Interfaces)
+      CheckInterface(*GetClass(Interface));
   }
 
   CheckClassLayouts();

@@ -1,0 +1,8 @@
+import api.reader;
+import impl.source;
+fn read(value: *api.reader.Reader) -> i32 { return value.read(); }
+@main
+fn main() -> i32 {
+  let source = impl.source.Source();
+  return read(&source);
+}

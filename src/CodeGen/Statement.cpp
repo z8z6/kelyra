@@ -43,8 +43,13 @@ void codegen::IRGen::EmitBlock(const lex::Node &Block) {
     const bool PreviousInitializing = InitializingField;
     InitializingField = InTransferConstructor && CurrentClass &&
                         Cleanups.size() == 2 &&
-                        Index < CurrentClass->Fields.size();
+                        Index < CurrentClass->UserFieldCount;
     EmitStatement(*Statement);
+    if (InTransferConstructor && CurrentClass &&
+        Index + 1 == CurrentClass->UserFieldCount &&
+        !HasTerminator(Builder.getInsertionBlock()))
+      EmitVirtualSlots(*CurrentClass, FindVariable("this")->DirectValue,
+                       GetLocation(Statement->Loc));
     InitializingField = PreviousInitializing;
   }
   if (!HasTerminator(Builder.getInsertionBlock()))

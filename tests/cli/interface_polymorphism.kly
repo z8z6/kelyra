@@ -1,0 +1,27 @@
+@interface
+class Reader {
+  pub fn read() -> i32;
+  pub fn adjust(value: i32) -> i32;
+}
+class Base: Reader {
+  @virtual
+  pub fn read() -> i32 { return 40; }
+  pub fn adjust(value: i32) -> i32 { return value + 1; }
+}
+class Child: Base {
+  @override
+  pub fn read() -> i32 { return super.read() + 1; }
+}
+class Holder {
+  reader: *Reader;
+  pub init(reader: *Reader) { this.reader = reader; }
+  pub fn total() -> i32 { return reader.adjust(reader.read()); }
+}
+fn expose(base: *Base) -> *Reader { return base; }
+@main
+fn main() -> i32 {
+  let child = Child();
+  let base: *Base = &child;
+  let holder = Holder(expose(base));
+  return holder.total();
+}

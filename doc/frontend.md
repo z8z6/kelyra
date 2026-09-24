@@ -12,21 +12,28 @@ cmake --build build --target kelyra_frontend_tests kelyra_sema_tests kelyra_code
 ctest --test-dir build --output-on-failure
 ./build/bin/kelyra --check examples/basic.kly
 ./build/bin/kelyra --dump-ast examples/basic.kly
+./build/bin/kelyra --dump-class-layout tests/cli/inheritance.kly
 ./build/bin/kelyra --emit-mlir tests/cli/add.kly
 ./build/bin/kelyra --emit-obj -o add.o tests/cli/add.kly
 ./build/bin/kelyra --emit-exe -o main tests/cli/main.kly
 ```
 
-构建时会读取标准库的 `std/annotation.kly` 并嵌入内置注解声明。
+构建时会读取标准库的 `std/annotation.kly` 和 `c.kly`，分别加载内置注解与 C ABI 类型声明。
 默认查找同级 `kstd/src`；标准库在别处时可传入
 `-DKELYRA_STDLIB_SOURCE_DIR=/path/to/kstd/src`。
 
 默认优化级别为 `-O0`，不运行优化并保留调试信息；也可指定 `-O1`、`-O2`
 或 `-O3`。
 
-`--check` 成功时无输出，`--dump-ast` 输出 S 表达式，`--emit-mlir` 输出 `builtin + func + arith` MLIR，`--emit-obj` 输出可链接的本机目标文件，`--emit-exe` 通过系统 `cc` 链接可执行文件并要求一个标记 `@main` 的无参数、返回 `i32` 的函数。当前支持函数、参数、数值与布尔常量、`+ - * / %`、一元正负号和单条 `return`。退出码：0 成功，1 词法、语法、语义或代码生成错误，2 参数或文件读取错误。
+`--check` 成功时无输出，`--dump-ast` 输出 S 表达式，
+`--dump-class-layout` 在语义检查后输出类的大小、对齐，以及每个实际字段的偏移、
+大小、对齐和布局索引。`--emit-mlir` 输出 MLIR，`--emit-obj` 输出可链接的本机目标文件，
+`--emit-exe` 链接可执行文件并要求一个标记 `@main` 的无参数、返回 `i32` 的函数。
+退出码：0 成功，1 词法、语法、语义或代码生成错误，2 参数或文件读取错误。
 
 内置类型为 `i8/i16/i32/i64/i128/isize`、`u8/u16/u32/u64/u128/usize`、`f32/f64/f128/f256/f512`、`bool` 和 `char`。`usize` 和 `isize` 使用本机指针宽度。`bool` lowering 为 `i1`；`char` 表示 Unicode 标量值并 lowering 为 `i32`。MLIR 没有原生 `f256/f512`，因此它们表示为 `!kelyra.f256` 和 `!kelyra.f512`，目前仅支持函数签名与参数透传，不支持字面量和算术。
+
+`alias Name = Existing;` 声明透明别名，`type Name = Existing;` 声明独立的标量类型。两者都可加 `pub` 并通过模块名引用；独立类型和底层类型之间需要显式 `as` 转换。当前独立类型的底层类型限于不超过 128 位的数值类型。C ABI 类型由标准库 `c.kly` 中的公开别名提供，例如 `c.int`、`c.long` 和 `c.char`。
 
 前端库本身没有 LLVM 依赖。测试统一使用独立的 GoogleTest 子模块，可按测试套件筛选：
 
@@ -47,7 +54,9 @@ module-decl  = { annotation }, "module", qualified-name, ";" ;
 import       = { annotation }, "import", qualified-name, [ ".", "*" ], ";" ;
 qualified-name = name, { ".", name } ;
 declaration  = { annotation }, [ "pub" ],
-               ( function | class | annotation-declaration ) ;
+               ( function | class | type-declaration | alias-declaration | annotation-declaration ) ;
+type-declaration = "type", name, "=", type, ";" ;
+alias-declaration = "alias", name, "=", type, ";" ;
 annotation   = "@", qualified-name,
                [ "(", [ annotation-arguments ], ")" ] ;
 annotation-arguments = annotation-argument,
@@ -65,7 +74,8 @@ generic-parameters = "<", name, { ",", name }, ">" ;
 result-type  = type | "(", type, ",", type, { ",", type }, [ "," ], ")" ;
 parameters   = parameter, { ",", parameter }, [ "," ] ;
 parameter    = name, ":", type ;
-class        = "class", name, [ generic-parameters ], "{", { class-member }, "}" ;
+class        = "class", name, [ generic-parameters ],
+               [ ":", type, { ",", type } ], "{", { class-member }, "}" ;
 class-member = { annotation }, [ "pub" ],
                ( field | constant-field | function | constructor | destructor ) ;
 (* @interface class 仅允许 constant-field 与 function，后者可用分号省略函数体。 *)
@@ -133,8 +143,14 @@ Kelyra 函数会使用包含模块路径的符号名；`@main` 函数无论源�
 fn process_id() -> c.int;
 ```
 
-`@extern` 和 `@callconv` 首版只支持顶层函数，参数及返回值限标量、指针和
-`void` 返回；调用约定可写 `"c"` 或 `"system"`。在当前支持的
+返回 C 函数指针可声明为 Kelyra 函数值，例如
+`@extern("get_callback") fn get_callback() -> fn(c.int) -> c.int;`，
+调用方可使用 `get_callback()(42)`。向外部函数传入回调也使用同一类型；
+回调必须是无捕获的顶层函数。
+
+`@extern` 和 `@callconv` 首版只支持顶层函数；参数可为标量、指针或
+`fn(...) -> ...` 函数值，返回值还可为 `void`。函数值可作为回调传递或调用，
+其签名需与实际 C 函数指针一致；调用约定可写 `"c"` 或 `"system"`。在当前支持的
 Linux/Windows x86-64 目标上二者均使用平台 C ABI，Windows 上可直接调用
 Kernel32 等系统导出符号。可执行文件仍需通过链接器找到相应库；该功能不
 生成或导入 C 头文件。结构体按值、可变参数和其他调用约定尚未支持。
@@ -260,10 +276,16 @@ let copy = identity<i32>(3);
 `void` 不可用于变量、字段、参数、数组或指针元素类型。不再支持 Kelyra `struct` 声明。
 完整语义与首版限制见 [`class` 与 RAII](class.md)。
 
-`@interface class` 首版支持常量字段和有实现或无实现的方法；常量可写作
-`InterfaceName.CONSTANT`。不能实例化接口，也不能调用无实现的方法；尚无
-`class X: Interface` 实现声明、接口类型值或动态派发。详见
-[`@interface class` 首版](interface.md)。
+`@interface class` 支持常量字段和有实现或无实现的方法；常量可写作
+`InterfaceName.CONSTANT`。普通类可在继承列表中声明实现接口，编译器检查方法签名。
+接口不能实例化；`*Interface` 可以接收实现类指针并动态调用接口方法。详见
+[`@interface class`](interface.md)。
+
+单继承使用 `class Child: Base, Interface`。派生类显式 `init` 的第一条语句必须是
+`super(...)`，随后按声明顺序初始化自己的字段。`@virtual` 标记基类方法，
+`@override` 标记覆写；通过基类指针调用虚方法会派发到实际类型。`super.method()`
+直接调用基类实现。派生类指针可以隐式转换为基类指针，类值不会隐式切片。
+`@final` 只能标注普通类，被标注的类不可继承。当前派生类不能自定义 `copy` 或 `move`。
 
 ## 多返回值
 

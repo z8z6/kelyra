@@ -432,18 +432,17 @@ pub class PrivateInit { init() {} }
 
 TEST(Sema, BuiltinTypes) {
   constexpr std::array Names = {
-      "i8",      "i16",    "i32",        "i64",     "i128",      "isize",
-      "u8",      "u16",    "u32",        "u64",     "u128",      "usize",
-      "f32",     "f64",    "f128",       "f256",    "f512",      "bool",
-      "char",    "c.char", "c.schar",    "c.uchar", "c.short",   "c.int",
-      "c.uint",  "c.long", "c.longlong", "c.size",  "c.ptrdiff", "c.bool",
-      "c.wchar",
+      "i8",   "i16",  "i32",  "i64",  "i128",  "isize", "u8",
+      "u16",  "u32",  "u64",  "u128", "usize", "f32",   "f64",
+      "f128", "f256", "f512", "bool", "char",
   };
   for (const auto Name : Names) {
     const auto Type = sema::ParseBuiltinType(Name);
     ASSERT_TRUE(Type.has_value()) << Name;
     EXPECT_EQ(sema::GetBuiltinTypeInfo(*Type).Name, Name);
   }
+  EXPECT_FALSE(sema::ParseBuiltinType("c.int").has_value());
+  EXPECT_EQ(sema::ParseBuiltinType("__c_int"), sema::BuiltinType::CInt);
   EXPECT_FALSE(sema::ParseBuiltinType("i256").has_value());
 }
 

@@ -3,8 +3,8 @@
 #include "Lexer/Lexer.h"
 #include "Sema/Sema.h"
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OwningOpRef.h"
@@ -77,6 +77,9 @@ class IRGen {
   mlir::Value EmitBinaryExpression(const lex::Node &Expression);
   mlir::Value EmitCastExpression(const lex::Node &Expression);
   mlir::Value EmitExpression(const lex::Node &Expression);
+  mlir::Value EmitInterfaceConversion(const lex::Node &Expression,
+                                      mlir::Value Object,
+                                      const sema::ClassInfo &Interface);
   void EmitBlock(const lex::Node &Block);
   void EmitBlockStatement(const lex::Node &Statement);
   void EmitLetStatement(const lex::Node &Statement);
@@ -106,6 +109,8 @@ class IRGen {
   void EmitCleanups(std::size_t KeepDepth, mlir::Location Loc);
   void EmitFieldDestructors(const sema::ClassInfo &Class, mlir::Value Address,
                             mlir::Location Loc);
+  void EmitVirtualSlots(const sema::ClassInfo &Class, mlir::Value Address,
+                        mlir::Location Loc);
   void EmitDefaultConstructor(const sema::ClassInfo &Class);
   void EmitDefaultConstructorDeclaration(const sema::ClassInfo &Class);
   void EmitDefaultDestructor(const sema::ClassInfo &Class);

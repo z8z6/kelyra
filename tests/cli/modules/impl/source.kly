@@ -1,0 +1,5 @@
+module impl.source;
+import api.reader;
+pub class Source: api.reader.Reader {
+  pub fn read() -> i32 { return 42; }
+}

@@ -82,6 +82,37 @@ void codegen::IRGen::EmitFieldDestructors(const sema::ClassInfo &Class,
   }
 }
 
+void codegen::IRGen::EmitVirtualSlots(const sema::ClassInfo &Class,
+                                      mlir::Value Address, mlir::Location Loc) {
+  if (!Class.BaseName.empty())
+    EmitVirtualSlots(*Analysis.GetClass(Class.BaseName), Address, Loc);
+  const auto SetSlot = [&](const sema::ClassInfo &Owner, std::size_t Index,
+                           const lex::Node &Method) {
+    const auto &Signature = Owner.Fields[Index].Value;
+    llvm::SmallVector<mlir::Type> Parameters;
+    llvm::SmallVector<mlir::Type> Results;
+    for (const auto &Parameter : Signature.Parameters)
+      Parameters.push_back(GetType(Parameter));
+    if (!Signature.Results.front().IsVoid())
+      Results.push_back(GetType(Signature.Results.front()));
+    auto Value = mlir::func::ConstantOp::create(
+        Builder, Loc, Builder.getFunctionType(Parameters, Results),
+        mlir::FlatSymbolRefAttr::get(&Context, Analysis.GetSymbol(Method)));
+    auto Pointer = mlir::UnrealizedConversionCastOp::create(
+        Builder, Loc, GetType(Signature), Value.getResult());
+    mlir::LLVM::StoreOp::create(Builder, Loc, Pointer.getResult(0),
+                                FieldAddress(Owner, Address, Index, Loc));
+  };
+  for (const auto &[Name, Index] : Class.VirtualSlots)
+    for (const auto &Member : Class.Node->children)
+      if (Member->kind == lex::TokenKind::ast_function && Member->text == Name)
+        SetSlot(Class, Index, *Member);
+  for (const auto &[Name, Slot] : Class.OverrideSlots)
+    for (const auto &Member : Class.Node->children)
+      if (Member->kind == lex::TokenKind::ast_function && Member->text == Name)
+        SetSlot(*Analysis.GetClass(Slot.first), Slot.second, *Member);
+}
+
 void codegen::IRGen::EmitDefaultConstructor(const sema::ClassInfo &Class) {
   const auto Loc = GetLocation(Class.Node->Loc);
   auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
@@ -107,6 +138,7 @@ void codegen::IRGen::EmitDefaultConstructor(const sema::ClassInfo &Class) {
       mlir::LLVM::StoreOp::create(Builder, Loc, Zero, Address);
     }
   }
+  EmitVirtualSlots(Class, Entry->getArgument(0), Loc);
   mlir::func::ReturnOp::create(Builder, Loc);
 }
 
@@ -130,6 +162,7 @@ void codegen::IRGen::EmitDefaultDestructor(const sema::ClassInfo &Class) {
   Function.setPrivate();
   auto *Entry = Function.addEntryBlock();
   Builder.setInsertionPointToStart(Entry);
+  EmitVirtualSlots(Class, Entry->getArgument(0), Loc);
   EmitFieldDestructors(Class, Entry->getArgument(0), Loc);
   mlir::func::ReturnOp::create(Builder, Loc);
 }

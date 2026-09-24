@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -111,6 +112,14 @@ void CollectTypeOffsets(const Node &Node,
     CollectTypeOffsets(*Child, Pointers, ArrayElements);
 }
 
+void CollectAnnotationEnds(const Node &Node,
+                           std::unordered_set<std::size_t> &Ends) {
+  if (Node.kind == TokenKind::ast_annotation)
+    Ends.insert(Node.Loc.End());
+  for (const auto &Child : Node.children)
+    CollectAnnotationEnds(*Child, Ends);
+}
+
 void CollectGenericAngles(const Node &Node, std::string_view Source,
                           std::unordered_set<std::size_t> &Angles) {
   if (Node.kind == TokenKind::ast_generic_type ||
@@ -163,12 +172,33 @@ std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
     }
   };
 
+  std::unordered_map<std::size_t, std::size_t> ImportAnnotations;
+  if (Parsed.root)
+    for (const auto &Child : Parsed.root->children) {
+      if (Child->kind != TokenKind::ast_import)
+        continue;
+      for (const auto &Part : Child->children)
+        if (Part->kind == TokenKind::ast_annotation) {
+          const auto [It, Inserted] = ImportAnnotations.try_emplace(
+              Child->Loc.Offset, Part->Loc.Offset);
+          if (!Inserted)
+            It->second = std::min(It->second, Part->Loc.Offset);
+        }
+    }
+
   std::vector<Import> Imports;
   for (std::size_t Index = 0; Index < Parsed.tokens.size(); ++Index) {
     if (Parsed.tokens[Index].kind != TokenKind::keyword_import)
       continue;
 
     Import Current{Index, Index, Index, Index, {}, {}, true, false};
+    if (Index + 1 < Parsed.tokens.size())
+      if (const auto It =
+              ImportAnnotations.find(Parsed.tokens[Index + 1].Loc.Offset);
+          It != ImportAnnotations.end())
+        while (Current.Begin > 0 &&
+               Parsed.tokens[Current.Begin - 1].Loc.Offset >= It->second)
+          --Current.Begin;
     while (Current.Begin > 0 &&
            Parsed.tokens[Current.Begin - 1].kind == TokenKind::comment) {
       const auto Comment = Current.Begin - 1;
@@ -250,16 +280,17 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
   std::unordered_set<std::size_t> TypePointers;
   std::unordered_set<std::size_t> ArrayElements;
   std::unordered_set<std::size_t> GenericAngles;
+  std::unordered_set<std::size_t> AnnotationEnds;
   if (Parsed.root) {
     CollectTypeOffsets(*Parsed.root, TypePointers, ArrayElements);
     CollectGenericAngles(*Parsed.root, Parsed.source, GenericAngles);
+    CollectAnnotationEnds(*Parsed.root, AnnotationEnds);
   }
   Writer Output;
   std::vector<bool> StructBraces;
   std::vector<bool> AsmBraces;
   unsigned Parentheses = 0;
   TokenKind Previous = TokenKind::end;
-  bool Annotation = false;
   bool AsmChain = false;
   bool BlankAfterComment = false;
   bool ModuleDeclaration = false;
@@ -371,18 +402,6 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       Output.Write(Text);
       if (Token.kind == TokenKind::punc_right_paren) {
         --Parentheses;
-        if (Annotation && Parentheses == 0) {
-          const auto Next = Index + 1 < Tokens.size() ? Tokens[Index + 1].kind
-                                                      : TokenKind::end;
-          if ((Next == TokenKind::keyword_module ||
-               Next == TokenKind::keyword_import) &&
-              Index + 1 < Tokens.size() &&
-              Token.Loc.Line == Tokens[Index + 1].Loc.Line)
-            Output.Space();
-          else
-            Output.NewLine();
-          Annotation = false;
-        }
         const auto Next =
             Index + 1 < Tokens.size() ? Tokens[Index + 1].kind : TokenKind::end;
         if (AsmChain && Next == TokenKind::punc_dot)
@@ -402,7 +421,6 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       break;
     case TokenKind::punc_at:
       Output.Write(Text);
-      Annotation = true;
       break;
     case TokenKind::keyword_else:
       Output.Write(Text);
@@ -439,16 +457,11 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
               !ArrayElements.contains(Token.Loc.Offset))))
           Output.Space();
         Output.Write(Text);
-        const auto Next =
-            Index + 1 < Tokens.size() ? Tokens[Index + 1].kind : TokenKind::end;
-        if (Annotation && Parentheses == 0 && Token.kind == TokenKind::name &&
-            Next != TokenKind::punc_dot && Next != TokenKind::punc_left_paren) {
-          Output.NewLine();
-          Annotation = false;
-        }
       }
       break;
     }
+    if (AnnotationEnds.contains(Token.Loc.End()))
+      Output.NewLine();
     Previous = Token.kind;
   }
   return Output.Take();

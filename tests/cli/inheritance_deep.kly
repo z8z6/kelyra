@@ -1,0 +1,25 @@
+class A {
+  value: i32;
+
+  @virtual
+  pub fn get() -> i32 { return value; }
+}
+
+class B: A {
+  @override
+  pub fn get() -> i32 { return super.get() + 1; }
+}
+
+class C: B {
+  @override
+  pub fn get() -> i32 { return super.get() + 2; }
+}
+
+fn through_base(value: *A) -> i32 { return value.get(); }
+
+@main
+fn main() -> i32 {
+  let value = C();
+  let base: *A = &value;
+  return through_base(base);
+}

@@ -1,0 +1,21 @@
+@extern("get_callback")
+@callconv("c")
+fn get_callback() -> fn(c.int) -> c.int;
+
+@extern("apply_callback")
+@callconv("c")
+fn apply_callback(callback: fn(c.int) -> c.int, value: c.int) -> c.int;
+
+fn double_value(value: c.int) -> c.int { return value * 2; }
+
+@main
+fn main() -> i32 {
+  let callback = get_callback();
+  if callback(41) != 42 {
+    return 1;
+  }
+  if apply_callback(double_value, 21) != 42 {
+    return 2;
+  }
+  return get_callback()(41) as i32;
+}
