@@ -9,11 +9,6 @@
     "body": ["import ${1:module};"],
     "description": "Import a module."
   },
-  "Wildcard import": {
-    "prefix": "import*",
-    "body": ["import ${1:module}.*;"],
-    "description": "Import the public functions of a module."
-  },
   "Import C header": {
     "prefix": "importc",
     "body": ["import c \"${1:header.h}\";"],
@@ -108,10 +103,15 @@
   "Annotation declaration": {
     "prefix": "annotation",
     "body": [
-      "@target(${1:function})",
-      "annotation ${2:name}(${3:value}: ${4:meta.string});"
+      "@target(Target.Function)",
+      "annotation ${1:name}(${2:value}: ${3:i32});"
     ],
     "description": "Compile-time annotation declaration."
+  },
+  "Type alias": {
+    "prefix": "alias",
+    "body": ["alias ${1:Name} = ${2:i32};"],
+    "description": "Declare a type alias in the current scope."
   },
   "Local binding": {
     "prefix": "let",

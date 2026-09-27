@@ -84,7 +84,7 @@
           }
         },
         {
-          "match": "\\b(import)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*(?:\\.\\*)?)",
+          "match": "\\b(import)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
           "captures": {
             "1": { "name": "keyword.control.import.kelyra" },
             "2": { "name": "entity.name.namespace.kelyra" }
@@ -127,7 +127,7 @@
         },
         {
           "name": "storage.type.meta.kelyra",
-          "match": "\\bmeta\\.(string|symbol|type)\\b"
+          "match": "\\b(?:std\\.meta\\.(?:Symbol|Type|Class|Field|Function|Parameter|Annotation)|std\\.util\\.string\\.StringSlice)\\b"
         },
         {
           "name": "storage.type.function.kelyra",

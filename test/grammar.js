@@ -25,7 +25,7 @@ const root = path.join(__dirname, "..");
 const sample = [
   "module demo.namespace;", // 0
   "", // 1
-  "import demo.helpers.*;", // 2
+  "import demo.helpers;", // 2
   "", // 3
   "class Widget {", // 4
   "  field: i32;", // 5
@@ -97,7 +97,7 @@ async function test() {
 
   // Modules: the declared path and the imported path are namespaces.
   expectScope(byLine, 0, "demo.namespace", "entity.name.namespace.kelyra");
-  expectScope(byLine, 2, "demo.helpers.*", "entity.name.namespace.kelyra");
+  expectScope(byLine, 2, "demo.helpers", "entity.name.namespace.kelyra");
 
   // Types: the class name is a type, builtin types stay builtin types.
   expectScope(byLine, 4, "Widget", "entity.name.type.class.kelyra");

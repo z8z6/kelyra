@@ -16,7 +16,7 @@ Find All References covers locals in their scope, class fields and methods
 (including accesses through pointers and `this`), functions across the
 workspace, and every import of a module.
 Highlighting covers annotations, compile-time `when`/`meta` reflection,
-prefix pointers, inline assembly chains, and wildcard imports.
+prefix pointers, inline assembly chains, and public module imports.
 Functions, module paths, variables, parameters, class fields, and member
 accesses each have their own scope, so they can be colored independently:
 
@@ -136,7 +136,8 @@ See the [VS Code GDB configuration reference](https://code.visualstudio.com/docs
 
 ```sh
 npm test
-vsce package
+mkdir -p build
+vsce package --out "build/kelyra-$(node -p 'require("./package.json").version').vsix"
 ```
 
 Build `kelyra-ls` and `kelyra-format` and install the generated VSIX. The

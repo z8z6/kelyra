@@ -47,16 +47,22 @@ const kelyraTypes = {
   "c.ptrdiff": "C `ptrdiff_t` with the target ABI width.",
   "c.bool": "C `_Bool`.",
   "c.wchar": "C `wchar_t` with the target ABI width.",
-  "meta.string": "Compile-time string annotation value.",
-  "meta.symbol": "Compile-time reference to a declared symbol.",
-  "meta.type": "Compile-time reference to a Kelyra type.",
+  "std.util.string.StringSlice": "Read-only string slice; annotation literals are evaluated at compile time.",
+  "std.meta.Symbol": "Compile-time handle to a declaration.",
+  "std.meta.Type": "Compile-time handle to a type.",
+  "std.meta.Class": "Compile-time handle to a class.",
+  "std.meta.Field": "Compile-time handle to a field.",
+  "std.meta.Function": "Compile-time handle to a function or method.",
+  "std.meta.Parameter": "Compile-time handle to a parameter.",
+  "std.meta.Annotation": "Compile-time handle to an annotation declaration.",
 };
 
 const builtinAnnotations = {
-  singleton: "Makes a class globally unique. `Class.instance()` returns its pointer and initializes it once.",
+  meta: "Marks a module, class, function, or method as compile-time only.",
+  singleton: "Standard library annotation that adds static storage and a lazy `Class.instance()` method. Import `std.sync.singleton` to use it.",
   static: "Marks a class field or method as static. Each concrete generic class has its own field storage; static methods have no `this` receiver.",
   forward: "Forwards a constructor parameter pack with each argument's type and value category preserved.",
-  target: "Restricts an annotation to the listed declaration kinds: `function`, `class`, `field`, `method`, `constructor`, `destructor`, `parameter`, or `annotation`.",
+  target: "Restricts an annotation to declaration kinds. `@target(Target.Class T)` binds `T` to the annotated class in an implementation body.",
   repeatable: "Allows an annotation to appear more than once on the same declaration.",
   retention: "Sets annotation retention to `source` or `compile`; `compile` is the default.",
 };
@@ -71,10 +77,10 @@ const classKeywords = {
 const languageKeywords = {
   let: "Declares a local with a type, an initial value, or both.",
   fn: "Declares a function.",
-  alias: "Declares another name for a type; optional type parameters make it reusable across types.",
+  alias: "Declares a type alias in a module, class, or local scope. Class aliases can use the class's type parameters; aliases can also declare their own type parameters.",
   pub: "Exports a declaration to importing modules.",
   module: "Declares this file's module.",
-  import: "Loads a module. Add `.*` to call its public functions unqualified, or use `import c \"header.h\"` for C headers.",
+  import: "Imports a module's public names. Qualify a name with its module when imports are ambiguous; use `import c \"header.h\"` for C headers.",
   annotation: "Declares a compile-time annotation.",
   if: "Conditional branch; the braces are required.",
   else: "Alternative branch of an if.",
@@ -213,9 +219,22 @@ function scanKelyra(text) {
       tokens.push({ kind: "string", text: text.slice(start, index), offset: start });
       continue;
     }
-    if (/[A-Za-z_]/.test(character)) {
+    if (/[A-Za-z_]/.test(character) || (character === "$" && next === "{")) {
       const start = index;
-      while (index < text.length && /[A-Za-z0-9_]/.test(text[index])) ++index;
+      while (index < text.length) {
+        if (/[A-Za-z0-9_]/.test(text[index])) { ++index; continue; }
+        if (text[index] !== "$" || text[index + 1] !== "{") break;
+        index += 2;
+        let depth = 1;
+        let quoted = false;
+        while (index < text.length && depth > 0) {
+          const part = text[index++];
+          if (quoted && part === "\\" && index < text.length) ++index;
+          else if (part === '"') quoted = !quoted;
+          else if (!quoted && part === "{") ++depth;
+          else if (!quoted && part === "}") --depth;
+        }
+      }
       tokens.push({ kind: "name", text: text.slice(start, index), offset: start });
       continue;
     }
@@ -281,20 +300,16 @@ function parseKelyraTokens(tokens) {
     }
     if (token.text === "import") {
       const parts = [];
-      let wildcard = false;
       let cursor = index + 1;
       while (cursor < tokens.length) {
         if (tokens[cursor].kind === "name") { parts.push(tokens[cursor].text); ++cursor; continue; }
         if (tokens[cursor].text === ".") {
-          if (tokens[cursor + 1]?.text === "*") {
-            wildcard = true;
-            cursor += 2;
-          } else ++cursor;
+          ++cursor;
           continue;
         }
         break;
       }
-      if (parts.length) parsed.imports.push({ name: parts.join("."), wildcard });
+      if (parts.length) parsed.imports.push({ name: parts.join(".") });
       continue;
     }
     if (token.text === "class" && tokens[index + 1]?.kind === "name") {
@@ -431,15 +446,22 @@ function resolveKelyraCall(call, current, index, locals) {
     if (own) return own;
     const ownClass = current.classes.get(name);
     if (ownClass && ownClass.init) return ownClass.init;
+    let importedResult;
     for (const imported of current.imports) {
-      if (!imported.wildcard) continue;
       const target = index.modules.get(imported.name);
       if (!target) continue;
       const fn = target.functions.get(name);
-      if (fn) return fn;
+      if (fn) {
+        if (importedResult) return undefined;
+        importedResult = fn;
+      }
       const cls = target.classes.get(name);
-      if (cls && cls.init) return cls.init;
+      if (cls && cls.init) {
+        if (importedResult) return undefined;
+        importedResult = cls.init;
+      }
     }
+    if (importedResult) return importedResult;
     const functions = index.functions.get(name);
     if (functions && functions.length === 1) return functions[0].params;
     const classes = index.classes.get(name);
@@ -610,7 +632,7 @@ function kelyraDescendants(classes, parent) {
     else {
       target = byModule.get(`${child.module}.${base}`);
       if (!target) {
-        const imports = child.imports.filter(({ wildcard }) => wildcard)
+        const imports = child.imports
           .map(({ name }) => byModule.get(`${name}.${base}`)).filter(Boolean);
         if (imports.length === 1) target = imports[0];
       }

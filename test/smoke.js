@@ -97,13 +97,13 @@ assert.ok(
 );
 assert.ok(
   grammar.repository.declarations.patterns.some(({ match }) =>
-    new RegExp(match).test("import web.*"),
+    new RegExp(match).test("import web"),
   ),
 );
 assert.match("c.longlong", new RegExp(grammar.repository.types.patterns[1].match));
 assert.ok(
   grammar.repository.types.patterns.some(
-    ({ name, match }) => name === "storage.type.meta.kelyra" && new RegExp(match).test("meta.symbol"),
+    ({ name, match }) => name === "storage.type.meta.kelyra" && new RegExp(match).test("std.meta.Symbol"),
   ),
 );
 assert.match("@web.route", new RegExp(grammar.repository.annotations.match));
@@ -265,10 +265,10 @@ const kelp = "[build]\nsafe-level = 1\n\n[dependencies.kstd]\nrepository = \"git
 assert.equal(kelpSectionAt(kelp, 3), "dependencies");
 assert.equal(kelpFieldAt(kelp, 1, 3)[2], "Kelyra runtime safety level.");
 assert.equal(kelpFieldAt(kelp, 4, 4)[0], "repository");
-const kelyra = "// annotation ignored();\nannotation route(path: meta.string);\n@route\nlet size: usize;";
+const kelyra = "// annotation ignored();\nannotation route(path: std.util.string.StringSlice);\n@route\nlet size: usize;";
 const inheritanceSources = [
   ["base.kly", "module demo.base;\n@interface\npub class Base<T> {}\nclass Extra<T> {}\n"],
-  ["middle.kly", "module demo.middle;\nimport demo.base.*;\nclass Middle<T>: Base<T>, Extra<map.List<T, T>> {}\n"],
+  ["middle.kly", "module demo.middle;\nimport demo.base;\nclass Middle<T>: Base<T>, Extra<map.List<T, T>> {}\n"],
   ["leaf.kly", "module demo.leaf;\nimport demo.middle;\nclass Leaf: demo.middle.Middle<i32> {}\n"],
   ["other.kly", "module other;\nclass Base {}\nclass Unrelated: Base {}\n"],
 ];
@@ -299,7 +299,9 @@ for (const type of [
   "f32", "f64", "f128", "f256", "f512", "bool", "char", "void",
   "c.char", "c.schar", "c.uchar", "c.short", "c.int", "c.uint", "c.long",
   "c.longlong", "c.size", "c.ptrdiff", "c.bool", "c.wchar",
-  "meta.string", "meta.symbol", "meta.type",
+  "std.util.string.StringSlice", "std.meta.Symbol", "std.meta.Type",
+  "std.meta.Class", "std.meta.Field", "std.meta.Function",
+  "std.meta.Parameter", "std.meta.Annotation",
 ]) assert.ok(completions.some(({ label, documentation }) => label === type && documentation));
 for (const annotation of ["@target", "@repeatable", "@retention", "@route"])
   assert.ok(completions.some(({ label, documentation }) => label === annotation && documentation));
@@ -314,7 +316,7 @@ assert.match(provideKelyraHover({
   getText: () => constantSource,
   lineAt: (line) => ({ text: constantSource.split("\n")[line] }),
 }, { line: 0, character: 23 }).contents, /COUNT.*42/);
-assert.equal(manifest.version, "0.10.4");
+assert.equal(manifest.version, "0.10.5");
 assert.deepEqual(formatterCandidates({ uri: {} }, "/tools/kelyra-format"), [
   "/tools/kelyra-format",
 ]);
@@ -358,8 +360,7 @@ assert.match(
 assert.ok(
   manifest.contributes.menus["view/title"].some(({ command }) => command === "kelp.members"),
 );
-// Types must be matched before keywords so `meta.string` is not scoped as the
-// `meta` keyword.
+// Types must be matched before keywords so `std.meta.Symbol` is a type.
 const typesPattern = grammar.patterns.findIndex(({ include }) => include === "#types");
 const keywordsPattern = grammar.patterns.findIndex(({ include }) => include === "#keywords");
 assert.ok(typesPattern !== -1 && typesPattern < keywordsPattern);
@@ -418,7 +419,7 @@ assert.equal(
   "literals",
 );
 
-// Parameter-name hints resolve local, wildcard-imported, qualified, and
+// Parameter-name hints resolve local, imported, qualified, and
 // constructor calls, and stay silent when the arity does not match.
 const index = buildKelyraIndex([
   parseKelyraModule("module app;\n"),
@@ -437,6 +438,8 @@ assert.deepEqual(
     .classes.get("Box").init,
   ["args"],
 );
+assert.ok(parseKelyraModule("class Box { fn get_${F.name}() {} }")
+  .classes.get("Box").methods.has("get_${F.name}"));
 const localCall = "module local;\nfn use(value: i32) -> i32 { return add(value, 2); }";
 assert.deepEqual(
   kelyraParameterHints(localCall, index, "all").map(({ name }) => name),
@@ -469,7 +472,7 @@ assert.deepEqual(
 );
 assert.deepEqual(
   kelyraParameterHints(
-    "module app;\nimport math.int.*;\nfn use() -> i32 { return scale(3, 4); }",
+    "module app;\nimport math.int;\nfn use() -> i32 { return scale(3, 4); }",
     index,
     "all",
   ).map(({ name }) => name),

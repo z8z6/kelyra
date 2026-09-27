@@ -2,7 +2,7 @@
   "name": "kelyra",
   "displayName": "Kelyra",
   "description": "Kelyra language and Kelp project support",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "publisher": "z8z6",
   "license": "MIT",
   "repository": {
