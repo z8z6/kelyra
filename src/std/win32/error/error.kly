@@ -1,0 +1,7 @@
+@cfg(os="windows", arch="x86_64") module std.win32.error;
+
+// Keep the Kernel32 declaration in one module: Kelyra merges external
+// symbols from all imported modules into one object.
+@extern("GetLastError")
+@callconv(CallingConvention.System)
+pub fn last_error() -> u32;

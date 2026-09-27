@@ -1,0 +1,38 @@
+module std.util.option;
+
+// One parsed command-line option. Both strings are borrowed from the caller.
+// The name includes its dashes, for example "--output" or "-o".
+pub class Option {
+  pub matched: bool;
+  pub has_value: bool;
+  pub value: *c.char;
+  pub init(name: *c.char, argument: *c.char) {
+    matched = false;
+    has_value = false;
+    value = 0 as*c.char;
+    if name as usize == 0 || argument as usize == 0 {
+      return;
+    }
+    let index: usize = 0;
+    while true {
+      let expected = *((name as usize + index) as*u8);
+      let actual = *((argument as usize + index) as*u8);
+      if expected == 0 {
+        if actual == 0 {
+          matched = true;
+          return;
+        }
+        if actual == 61 {
+          matched = true;
+          has_value = true;
+          value = (argument as usize + index + 1) as*c.char;
+        }
+        return;
+      }
+      if expected != actual {
+        return;
+      }
+      index = index + 1;
+    }
+  }
+}

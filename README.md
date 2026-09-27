@@ -1,16 +1,22 @@
 # Kstd
 
+Modules are grouped by purpose: `std.util.*` contains value and text helpers,
+`std.sync.*` contains concurrency primitives, `std.math.*` contains numeric
+helpers, and `std.io.file` contains file operations. Core facilities such as
+`std.memory`, `std.alloc`, `std.io`, `std.meta`, and `std.reflect` remain directly
+under `std`.
+
 Kstd is the standard library for Kelyra. Its pure Kelyra modules are:
 
 - `std.annotation`: source declarations for compiler-recognized annotations;
   the compiler imports this module implicitly, so short annotation names work
-- `std.ascii`: ASCII byte classification and case conversion
+- `std.util.ascii`: ASCII byte classification and case conversion
 - `std.math.integer`: basic `i64` integer utilities
 - `std.math.basic`: basic `f32` and `f64` utilities
-- `std.option`: `Option(name, argument)` parses one command-line option. It
+- `std.util.option`: `Option(name, argument)` parses one command-line option. It
   recognizes an exact flag such as `--verbose` and an assigned value such as
   `--output=file.txt`. Inspect `matched`, `has_value`, and `value`.
-- `std.result`: `Result<T, E>` holds a success value or an error value.
+- `std.util.result`: `Result<T, E>` holds a success value or an error value.
   Construct it with `success<T, E>(value)` or `failure<T, E>(error)`. Check
   `valid` before using `ok`, then call `value()` or `error()` for that branch.
   Neither type needs a default constructor; each result allocates storage for
@@ -39,27 +45,37 @@ memory access:
 - `load` and `store` for one indexed byte
 - `is_null`, so allocation failure is observable without a null literal
 
-`std.string` builds an owned, mutable byte string on top of `std.alloc`:
+`@accessors` generates public get and set methods for a field. `@aspect(handler)`
+wraps a function or method with an ordinary Kelyra handler. Import
+`std.aspect` for its `Invocation<R>` and `VoidInvocation` callback types.
+
+`std.util.string` builds an owned, mutable byte string on top of `std.alloc`:
 
 ```kelyra
-import std.string;
+import std.util.string;
 
-let text = std.string.String("hello");
+let text = std.util.string.String("hello");
 text.append(", world");
 text.append_byte(33);
 text.length();          // 13
 text.at(0);             // 104
 text.set(0, 72);
 text.equals("Hello, world!");  // true
+let bytes: std.util.string.StringSlice = text.view();
+std.util.string.equal(bytes, std.util.string.from_cstr("Hello, world!")); // true
+let owned = std.util.string.to_owned(bytes);
 text.data_pointer();    // *c.char, null terminated
 // deinit releases the buffer at the end of the scope
 ```
 
-`String` has a single constructor — Kelyra has no overloading — taking a
-`*c.char`; use `String("")` for an empty value, or `clear`/`assign`. It cannot be
-copied or returned by value, so pass it as `*String`.
+`String` owns its buffer and supports deep copying and moving. It has a single
+constructor taking `*c.char`; use `String("")` for an empty value. `view()`
+borrows its bytes, so keep the `String` alive and avoid mutation while using
+the view. `assign_view`, `append_view`, and `equals_view` accept byte slices;
+`append_view` requires a source that does not borrow the same `String`.
+`StringSlice` is an alias for `[]const u8`.
 
-`std.file` provides `open(path, mode)`, `read`, `write`, and `close`. Mode `0`
+`std.io.file` provides `open(path, mode)`, `read`, `write`, and `close`. Mode `0`
 opens an existing file for reading; mode `1` creates or truncates a file for
 writing. Handles and negative error values are native to the target OS; see
 [`doc/file.md`](doc/file.md) for the byte I/O contracts.
@@ -68,11 +84,11 @@ writing. Handles and negative error values are native to the target OS; see
 time via `@cfg(os=..., arch=...)`. Both backends are written in Kelyra; see
 [`doc/os.md`](doc/os.md) for APIs, platform selection and FFI limitations.
 
-`std.thread` exposes native thread IDs, scheduler yield, 32-bit wait/wake
-primitives and Windows callback-based thread creation. `std.signal` exposes
+`std.sync.thread` exposes native thread IDs, scheduler yield, 32-bit wait/wake
+primitives and Windows callback-based thread creation. `std.sync.signal` exposes
 Linux signal sending or Windows console control events and handlers. The
 low-level operations are freestanding safe; Linux callback APIs live in
-`std.thread.hosted` and `std.signal.hosted` and require libc and pthreads.
+`std.sync.thread.hosted` and `std.sync.signal.hosted` and require libc and pthreads.
 See [`doc/thread-signal.md`](doc/thread-signal.md).
 
 Kstd's alloc, io, file and string implementations are Kelyra sources; the

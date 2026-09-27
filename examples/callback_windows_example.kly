@@ -1,7 +1,7 @@
 @cfg(os="windows", arch="x86_64") module callback_windows_example;
 
-import std.signal;
-import std.thread;
+import std.sync.signal;
+import std.sync.thread;
 
 fn worker(context: *u8) -> u32 {
   *context = 42;
@@ -14,19 +14,19 @@ fn console_handler(event: u32) -> i32 { return 0; }
 pub fn main() -> i32 {
   let value: u8 = 0;
   let thread_id: u32 = 0;
-  let handle = std.thread.spawn(worker, &value, &thread_id);
+  let handle = std.sync.thread.spawn(worker, &value, &thread_id);
   if handle as usize == 0 {
     return 1;
   }
   let exit_code: u32 = 0;
-  if std.thread.join(handle, &exit_code) != 0 ||
-      std.thread.close(handle) != 0 || value != 42 || exit_code != 7 {
+  if std.sync.thread.join(handle, &exit_code) != 0 ||
+      std.sync.thread.close(handle) != 0 || value != 42 || exit_code != 7 {
     return 2;
   }
-  if std.signal.register_console_handler(console_handler) != 0 {
+  if std.sync.signal.register_console_handler(console_handler) != 0 {
     return 3;
   }
-  if std.signal.unregister_console_handler(console_handler) != 0 {
+  if std.sync.signal.unregister_console_handler(console_handler) != 0 {
     return 4;
   }
   return 0;

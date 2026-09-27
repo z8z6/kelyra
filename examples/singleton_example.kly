@@ -1,0 +1,44 @@
+import std.sync.singleton;
+
+@singleton
+pub class Counter {
+  pub value: i32;
+  init() {
+    value = 0;
+  }
+  pub fn next() -> i32 {
+    value = value + 1;
+    return value;
+  }
+}
+
+@singleton
+pub class Box<T> {
+  pub value: T;
+  init() {
+    value = 0;
+  }
+}
+
+@main
+fn main() -> i32 {
+  let first = Counter.instance();
+  let again = Counter.instance();
+  if first as usize == 0 || first as usize != again as usize {
+    return 1;
+  }
+  if first.next() != 1 || again.next() != 2 {
+    return 2;
+  }
+  let box = Box<i32>.instance();
+  let same = Box<i32>.instance();
+  let other = Box<u8>.instance();
+  if box as usize == 0 || other as usize == 0 || box as usize != same as usize || box as usize == other as usize {
+    return 3;
+  }
+  box.value = 42;
+  if same.value != 42 || other.value != 0 {
+    return 4;
+  }
+  return 0;
+}

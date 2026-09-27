@@ -1,0 +1,19 @@
+@cfg(os="windows", arch="x86_64") module std.io.windows;
+
+import std.io.file.windows;
+
+@extern("GetStdHandle")
+@callconv(CallingConvention.System)
+fn get_std_handle(which: i32) -> *u8;
+
+pub fn read_stdin(output: *u8, capacity: usize) -> i64 {
+  return std.io.file.windows.read(get_std_handle(-10) as i64, output, capacity);
+}
+
+pub fn write_stdout(data: *u8, count: usize) -> i64 {
+  return std.io.file.windows.write(get_std_handle(-11) as i64, data, count);
+}
+
+pub fn write_stderr(data: *u8, count: usize) -> i64 {
+  return std.io.file.windows.write(get_std_handle(-12) as i64, data, count);
+}

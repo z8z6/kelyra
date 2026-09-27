@@ -1,0 +1,104 @@
+@cfg(os="linux", arch="x86_64")
+module std.graphics.vulkan;
+
+// Vulkan handles are opaque. The caller owns an Instance returned by
+// create_instance and must destroy it before unloading the Vulkan loader.
+pub alias Instance = *u8;
+
+pub alias PhysicalDevice = *u8;
+
+pub alias Result = i32;
+
+pub fn make_api_version(variant: u32, major: u32, minor: u32,
+                        patch: u32) -> u32 {
+  return variant * 536870912 + major * 4194304 + minor * 4096 + patch;
+}
+
+pub fn api_version_major(version: u32) -> u32 {
+  return (version / 4194304) % 128;
+}
+
+pub fn api_version_minor(version: u32) -> u32 {
+  return (version / 4096) % 1024;
+}
+
+@layout(Layout.C)
+pub class ApplicationInfo {
+  pub s_type: u32;
+  pub next: *u8;
+  pub application_name: *c.char;
+  pub application_version: u32;
+  pub engine_name: *c.char;
+  pub engine_version: u32;
+  pub api_version: u32;
+
+  pub init() {
+    s_type = 0; // VK_STRUCTURE_TYPE_APPLICATION_INFO
+    next = 0 as *u8;
+    application_name = 0 as *c.char;
+    application_version = 0;
+    engine_name = 0 as *c.char;
+    engine_version = 0;
+    api_version = make_api_version(0, 1, 0, 0);
+  }
+}
+
+@layout(Layout.C)
+pub class InstanceCreateInfo {
+  pub s_type: u32;
+  pub next: *u8;
+  pub flags: u32;
+  pub application_info: *ApplicationInfo;
+  pub enabled_layer_count: u32;
+  pub enabled_layer_names: **c.char;
+  pub enabled_extension_count: u32;
+  pub enabled_extension_names: **c.char;
+
+  pub init() {
+    s_type = 1; // VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO
+    next = 0 as *u8;
+    flags = 0;
+    application_info = 0 as *ApplicationInfo;
+    enabled_layer_count = 0;
+    enabled_layer_names = 0 as **c.char;
+    enabled_extension_count = 0;
+    enabled_extension_names = 0 as **c.char;
+  }
+}
+
+@extern("vkEnumerateInstanceVersion")
+@callconv(CallingConvention.C)
+fn vk_enumerate_instance_version(version: *u32) -> Result;
+
+@extern("vkCreateInstance")
+@callconv(CallingConvention.C)
+fn vk_create_instance(info: *InstanceCreateInfo, allocator: *u8,
+                      instance: *Instance) -> Result;
+
+@extern("vkDestroyInstance")
+@callconv(CallingConvention.C)
+fn vk_destroy_instance(instance: Instance, allocator: *u8) -> void;
+
+@extern("vkEnumeratePhysicalDevices")
+@callconv(CallingConvention.C)
+fn vk_enumerate_physical_devices(instance: Instance, count: *u32,
+                                 devices: *PhysicalDevice) -> Result;
+
+pub fn enumerate_instance_version(version: *u32) -> Result {
+  return vk_enumerate_instance_version(version);
+}
+
+pub fn create_instance(info: *InstanceCreateInfo,
+                       instance: *Instance) -> Result {
+  return vk_create_instance(info, 0 as *u8, instance);
+}
+
+pub fn destroy_instance(instance: Instance) -> void {
+  vk_destroy_instance(instance, 0 as *u8);
+}
+
+// Pass a null devices pointer to get the number of available devices.
+pub fn enumerate_physical_devices(instance: Instance, count: *u32,
+                                  devices: *PhysicalDevice) -> Result {
+  return vk_enumerate_physical_devices(instance, count, devices);
+}

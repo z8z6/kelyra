@@ -1,11 +1,11 @@
 import std.io;
-import std.string;
+import std.util.string;
 
 // Exercises the allocation wrapper and the String class through its whole
 // surface; the returned code names the first check that failed.
 @main
 pub fn main() -> i32 {
-  let text = std.string.String("hello");
+  let text = std.util.string.String("hello");
   if text.length() != 5 {
     return 1;
   }
@@ -37,6 +37,23 @@ pub fn main() -> i32 {
   text.assign("again");
   if !text.equals("again") {
     return 9;
+  }
+  if !std.util.string.equal(text.view(), std.util.string.from_cstr("again")) {
+    return 10;
+  }
+  let owned = std.util.string.to_owned(text.view());
+  if !owned.equals_view(text.view()) {
+    return 11;
+  }
+  let duplicate = text;
+  text.set(0, 65);
+  if !duplicate.equals("again") {
+    return 13;
+  }
+  text.assign_view(std.util.string.from_cstr("a"));
+  text.append_view(std.util.string.from_cstr("gain"));
+  if !text.equals("again") {
+    return 12;
   }
   std.io.println(text.data_pointer());
   return 0;

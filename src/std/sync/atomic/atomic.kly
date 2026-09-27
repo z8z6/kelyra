@@ -1,0 +1,52 @@
+@cfg(arch = "x86_64")
+module std.sync.atomic;
+
+pub fn load_acquire(word: *u32) -> u32 {
+  let value: u32 = 0;
+  asm {
+    movl (%rdi), %eax
+  }
+  .in(word, rdi)
+  .out(value, eax)
+  .op(preserves_flags);
+  return value;
+}
+
+pub fn compare_exchange(word: *u32, expected: u32, desired: u32) -> bool {
+  let observed: u32 = expected;
+  asm {
+    lock cmpxchgl %ecx, (%rdi)
+  }
+  .in(word, rdi)
+  .in(observed, eax)
+  .out(observed, eax)
+  .in(desired, ecx);
+  return observed == expected;
+}
+
+pub fn store_release(word: *u32, value: u32) -> void {
+  asm {
+    movl %ecx, (%rdi)
+  }
+  .in(word, rdi)
+  .in(value, ecx)
+  .op(preserves_flags);
+}
+
+// A view of an aligned 32-bit word. The caller owns the word and must keep it
+// alive for the lifetime of this view. Shared accesses must use atomic methods.
+pub class AtomicU32 {
+  word: *u32;
+  pub init(address: *u32) {
+    word = address;
+  }
+  pub fn load() -> u32 {
+    return std.sync.atomic.load_acquire(word);
+  }
+  pub fn compare_exchange(expected: u32, desired: u32) -> bool {
+    return std.sync.atomic.compare_exchange(word, expected, desired);
+  }
+  pub fn store(value: u32) -> void {
+    std.sync.atomic.store_release(word, value);
+  }
+}

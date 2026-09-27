@@ -1,5 +1,5 @@
 import std.alloc;
-import std.file;
+import std.io.file;
 import std.io;
 
 @main
@@ -32,24 +32,24 @@ pub fn main() -> i32 {
     return 14;
   }
 
-  let handle: i64 = std.file.open("roundtrip.txt", 1);
+  let handle: i64 = std.io.file.open("roundtrip.txt", 1);
   if handle < 0 {
     std.alloc.release(grown);
     return 4;
   }
-  let written: i64 = std.file.write(handle, grown, 3);
-  let closed: i64 = std.file.close(handle);
+  let written: i64 = std.io.file.write(handle, grown, 3);
+  let closed: i64 = std.io.file.close(handle);
   if written != 3 || closed != 0 {
     std.alloc.release(grown);
     return 5;
   }
-  handle = std.file.open("roundtrip.txt", 0);
+  handle = std.io.file.open("roundtrip.txt", 0);
   if handle < 0 {
     std.alloc.release(grown);
     return 6;
   }
-  let read_count: i64 = std.file.read(handle, grown, 8);
-  if std.file.close(handle) != 0 || read_count != 3 {
+  let read_count: i64 = std.io.file.read(handle, grown, 8);
+  if std.io.file.close(handle) != 0 || read_count != 3 {
     std.alloc.release(grown);
     return 7;
   }
@@ -57,11 +57,11 @@ pub fn main() -> i32 {
     std.alloc.release(grown);
     return 8;
   }
-  if std.file.open("definitely-missing-kstd-file.txt", 0) >= 0 {
+  if std.io.file.open("definitely-missing-kstd-file.txt", 0) >= 0 {
     std.alloc.release(grown);
     return 10;
   }
-  if std.file.open("roundtrip.txt", 42) >= 0 {
+  if std.io.file.open("roundtrip.txt", 42) >= 0 {
     std.alloc.release(grown);
     return 11;
   }

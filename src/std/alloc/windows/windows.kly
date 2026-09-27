@@ -1,0 +1,32 @@
+@cfg(os="windows", arch="x86_64") module std.alloc.windows;
+
+@extern("VirtualAlloc")
+@callconv(CallingConvention.System)
+fn virtual_alloc(address: *u8, size: usize, allocation_type: u32,
+                 protection: u32) -> *u8;
+
+@extern("VirtualFree")
+@callconv(CallingConvention.System)
+fn virtual_free(address: *u8, size: usize, free_type: u32) -> i32;
+
+// One VirtualAlloc region per allocation. The first 16 bytes hold metadata.
+pub fn allocate(size: usize) -> *u8 {
+  if size > 18446744073709551599 {
+    return 0 as *u8;
+  }
+  let base: *u8 = virtual_alloc(0 as *u8, size + 16, 12288, 4);
+  if base as usize == 0 {
+    return base;
+  }
+  *(base as *usize) = size;
+  *((base as usize + 8) as *usize) = size + 16;
+  return (base as usize + 16) as *u8;
+}
+
+pub fn release(pointer: *u8) -> void {
+  if pointer as usize == 0 {
+    return;
+  }
+  let base: *u8 = (pointer as usize - 16) as *u8;
+  virtual_free(base, 0, 32768);
+}

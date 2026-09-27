@@ -1,0 +1,10 @@
+import std.util.slice;
+
+@main
+fn main() -> i32 {
+  let value: i32 = 7;
+  let mutable: []i32 = std.util.slice.from_raw_parts<i32>(&value, 1);
+  mutable[0] = 9;
+  let read_only: []const i32 = std.util.slice.from_raw_parts_const<i32>(&value, 1);
+  return read_only[0] - 9;
+}

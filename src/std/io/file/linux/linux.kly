@@ -1,0 +1,65 @@
+@cfg(os="linux", arch="x86_64") module std.io.file.linux;
+
+// mode 0: read existing; mode 1: create or truncate for writing.
+pub fn open(path: *c.char, mode: u32) -> i64 {
+  let flags: i64 = 0;
+  if mode == 1 {
+    flags = 577;
+  } else if mode != 0 {
+    return -22;
+  }
+  let directory: i64 = -100;
+  let permissions: i64 = 420;
+  let number: i64 = 257;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(directory, rdi)
+  .in(path, rsi)
+  .in(flags, rdx)
+  .in(permissions, r10)
+  .op(clobber(rcx, r11));
+  return number;
+}
+
+pub fn read(handle: i64, output: *u8, count: usize) -> i64 {
+  let number: i64 = 0;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(handle, rdi)
+  .in(output, rsi)
+  .in(count, rdx)
+  .op(clobber(rcx, r11));
+  return number;
+}
+
+pub fn write(handle: i64, data: *u8, count: usize) -> i64 {
+  let number: i64 = 1;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(handle, rdi)
+  .in(data, rsi)
+  .in(count, rdx)
+  .op(clobber(rcx, r11));
+  return number;
+}
+
+pub fn close(handle: i64) -> i64 {
+  let number: i64 = 3;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(handle, rdi)
+  .op(clobber(rcx, r11));
+  return number;
+}

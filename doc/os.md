@@ -18,7 +18,7 @@ architectures have no `std.os` implementation yet.
 | Environment | `environment(*c.char) -> *c.char`, borrowed `getenv` pointer or null | `environment(*c.char, *u8, u32) -> u32`, `GetEnvironmentVariableA` |
 | Current directory | `working_directory(*u8, usize) -> i64`, syscall 79; bytes including NUL or negative errno | `working_directory(*u8, u32) -> u32`, `GetCurrentDirectoryA` |
 
-The Linux backend uses Kelyra inline assembly and a `@layout(c)`
+The Linux backend uses Kelyra inline assembly and a `@layout(Layout.C)`
 timespec class. Its syscall numbers, register bindings and layout are specific
 to Linux x86-64. `sleep_millis` retries after `EINTR` and returns `EINVAL`
 (22) for a negative duration. The monotonic clock has no calendar-time
@@ -32,7 +32,7 @@ normalized to Linux errno values. Environment and directory functions use
 caller-owned byte buffers and the ANSI `A` API, so Unicode paths and values
 are not handled losslessly. The target program must link Kernel32. External
 signatures are declared directly in `windows.kly` with `@extern` and
-`@callconv("system")`; Linux's `getenv` is similarly declared in `linux.kly`.
+`@callconv(CallingConvention.System)`; Linux's `getenv` is similarly declared in `linux.kly`.
 These platform wrappers need no C header or C implementation.
 
 The Kelp manifest does not import `std.os` into its freestanding-safe library

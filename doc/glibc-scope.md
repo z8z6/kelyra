@@ -60,7 +60,7 @@ glibc 2.44 手册的[完整目录](https://sourceware.org/glibc/manual/latest/ht
 
 当前实现：
 
-- `std.ascii`：ASCII 字节分类及大小写转换；
+- `std.util.ascii`：ASCII 字节分类及大小写转换；
 - `std.math.integer`：`i64` 基础整数工具；
 - `std.math.basic`：`f32`/`f64` 基础浮点工具。
 
@@ -77,7 +77,7 @@ glibc 2.44 手册的[完整目录](https://sourceware.org/glibc/manual/latest/ht
 2. native class 和字段访问已实现，内建 slice 仍待实现；
 3. 枚举、模块常量、函数指针、全局/TLS 和原子操作；
 4. 独立的平台系统调用层及 freestanding 启动/链接模式；
-5. 在这些基础上实现 `std.memory`、`std.string`、`std.convert`、
+5. 在这些基础上实现 `std.memory`、`std.util.string`、`std.convert`、
    `std.algorithm`、分配器、文件、线程和格式化 I/O。
 
 完整 libm、locale/iconv、NSS、pthread 和动态链接器都应在实际平台需求出现后再

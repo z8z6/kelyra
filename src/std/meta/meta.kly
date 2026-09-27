@@ -1,0 +1,135 @@
+@meta
+module std.meta;
+
+import std.util.string;
+
+pub alias Id = usize;
+
+// A compile-time handle for a declaration of any kind. meta(...) values are
+// interpreted by the compiler and cannot be passed to runtime functions.
+pub class Symbol {
+  pub id: Id;
+  pub name: StringSlice;
+  pub fn is_public() -> bool {
+    return std.meta.__read_public(id);
+  }
+  pub fn has_annotation(value: Annotation) -> bool {
+    return std.meta.__has_annotation(id, value.id);
+  }
+}
+
+pub class Type: Symbol {
+}
+
+pub class Class: Type {
+  pub fn has_constructor() -> bool {
+    return std.meta.__has_constructor(id);
+  }
+  pub fn has_default_constructor() -> bool {
+    return std.meta.__has_default_constructor(id);
+  }
+  pub fn has_destructor() -> bool {
+    return std.meta.__has_destructor(id);
+  }
+  pub fn has_base_class() -> bool {
+    return std.meta.__has_base_class(id);
+  }
+  pub fn is_interface() -> bool {
+    return std.meta.__is_interface(id);
+  }
+  pub fn is_final() -> bool {
+    return std.meta.__is_final(id);
+  }
+  pub fn has_member(name: StringSlice) -> bool {
+    return std.meta.__has_member(id, name);
+  }
+  pub fn has_field(name: StringSlice) -> bool {
+    return std.meta.__has_field(id, name);
+  }
+  // Includes ordinary methods, constructors, and destructors.
+  pub fn has_function(name: StringSlice) -> bool {
+    return std.meta.__has_function(id, name);
+  }
+}
+
+pub class Field: Symbol {
+  pub owner: *Class;
+  pub field_type: Type;
+  pub byte_offset: usize;
+  pub fn is_static() -> bool {
+    return std.meta.__is_static(id);
+  }
+}
+
+pub class Function: Symbol {
+  // A free function belongs to a module; a method belongs to a class.
+  pub owner: *Symbol;
+  pub return_type: Type;
+  pub fn is_static() -> bool {
+    return std.meta.__is_static(id);
+  }
+  pub fn is_method() -> bool {
+    return std.meta.__is_method(id);
+  }
+  pub fn is_constructor() -> bool {
+    return std.meta.__is_constructor(id);
+  }
+  pub fn is_destructor() -> bool {
+    return std.meta.__is_destructor(id);
+  }
+}
+
+pub class Parameter: Symbol {
+  pub owner: *Function;
+  pub parameter_type: Type;
+  pub index: usize;
+}
+
+pub class Annotation: Symbol {
+}
+
+// The compiler provides these compile-time metadata operations.
+@intrinsic
+fn __read_public(id: Id) -> bool;
+
+@intrinsic
+fn __has_annotation(id: Id, annotation_id: Id) -> bool;
+
+@intrinsic
+fn __has_constructor(id: Id) -> bool;
+
+@intrinsic
+fn __has_default_constructor(id: Id) -> bool;
+
+@intrinsic
+fn __has_destructor(id: Id) -> bool;
+
+@intrinsic
+fn __has_base_class(id: Id) -> bool;
+
+@intrinsic
+fn __is_interface(id: Id) -> bool;
+
+@intrinsic
+fn __is_final(id: Id) -> bool;
+
+@intrinsic
+fn __has_member(id: Id, name: StringSlice) -> bool;
+
+@intrinsic
+fn __has_field(id: Id, name: StringSlice) -> bool;
+
+@intrinsic
+fn __has_function(id: Id, name: StringSlice) -> bool;
+
+@intrinsic
+fn __is_static(id: Id) -> bool;
+
+@intrinsic
+fn __is_method(id: Id) -> bool;
+
+@intrinsic
+fn __is_constructor(id: Id) -> bool;
+
+@intrinsic
+fn __is_destructor(id: Id) -> bool;

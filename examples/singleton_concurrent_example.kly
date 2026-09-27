@@ -1,0 +1,60 @@
+import std.sync.singleton;
+import std.sync.thread;
+import std.sync.thread.hosted;
+
+@singleton
+class Counter {
+  @static
+  pub initialized: u32;
+  pub value: u32;
+  init() {
+    value = 42;
+    initialized = initialized + 1;
+    let index: u32 = 0;
+    while index < 1000 {
+      std.sync.thread.yield_now();
+      index = index + 1;
+    }
+  }
+}
+
+fn worker(context: *u8) -> *u8 {
+  let slot = context as*usize;
+  *slot = Counter.instance() as usize;
+  return 0 as*u8;
+}
+
+@main
+fn main() -> i32 {
+  let threads: [16]usize;
+  let instances: [16]usize;
+  let index: usize = 0;
+  while index < 16 {
+    let slot = &instances[index];
+    let thread_id = &threads[index];
+    if std.sync.thread.hosted.spawn(worker, slot as*u8, thread_id) != 0 {
+      return 1;
+    }
+    index = index + 1;
+  }
+  index = 0;
+  while index < 16 {
+    let result: *u8 = 0 as*u8;
+    if std.sync.thread.hosted.join(threads[index], &result) != 0 {
+      return 2;
+    }
+    index = index + 1;
+  }
+  let instance = Counter.instance();
+  if instance as usize == 0 || instance.value != 42 || Counter.initialized != 1 {
+    return 3;
+  }
+  index = 0;
+  while index < 16 {
+    if instances[index] != instance as usize {
+      return 4;
+    }
+    index = index + 1;
+  }
+  return 0;
+}

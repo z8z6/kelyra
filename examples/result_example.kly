@@ -1,5 +1,5 @@
 import std.alloc;
-import std.result;
+import std.util.result;
 
 class Token {
   value: *i32;
@@ -33,13 +33,13 @@ class Error {
 
 @main
 fn run() -> i32 {
-  let present = std.result.success<Token, Error>(Token(42));
+  let present = std.util.result.success<Token, Error>(Token(42));
   if !present.valid || !present.ok {
     return 1;
   }
   let copied = present;
   let result = copied.value();
-  let failed = std.result.failure<Token, Error>(Error(7));
+  let failed = std.util.result.failure<Token, Error>(Error(7));
   if !failed.valid || failed.ok {
     return 3;
   }

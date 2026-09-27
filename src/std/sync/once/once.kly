@@ -1,0 +1,59 @@
+module std.sync.once;
+
+import std.sync.atomic;
+import std.sync.thread;
+
+// A view of a zero-initialized u32. 0 = idle, 1 = running, 2 = complete.
+// The backing word must outlive this view; all access must go through Once.
+pub class Once {
+  state: *u32;
+  pub init(address: *u32) {
+    state = address;
+  }
+  // Returns true to the one caller responsible for initialization. Returns
+  // false after another caller completes. The winner must call finish().
+  pub fn begin() -> bool {
+    let state_word = std.sync.atomic.AtomicU32(state);
+    while true {
+      let current = state_word.load();
+      if current == 2 {
+        return false;
+      }
+      if current == 0 && state_word.compare_exchange(0, 1) {
+        return true;
+      }
+      // Recheck under wait_word: a changed value returns immediately.
+      if state_word.load() == 1 {
+        std.sync.thread.wait_word(state, 1);
+      }
+    }
+    return false;
+  }
+  // Publish writes performed by the initializer, then wake waiting callers.
+  // A failed initialization resets the state so a later caller can retry.
+  pub fn finish(succeeded: bool) -> void {
+    let state_word = std.sync.atomic.AtomicU32(state);
+    if succeeded {
+      state_word.store(2);
+    } else {
+      state_word.store(0);
+    }
+    std.sync.thread.wake_all(state);
+  }
+  // Run the callback exactly once. Later callers wait for it to finish.
+  pub fn call(context: *u8, initialize: fn(*u8) -> void) -> void {
+    if begin() {
+      initialize(context);
+      finish(true);
+    }
+  }
+  // A false result resets the state, allowing a later call to retry.
+  pub fn try_call(context: *u8, initialize: fn(*u8) -> bool) -> bool {
+    if !begin() {
+      return true;
+    }
+    let succeeded = initialize(context);
+    finish(succeeded);
+    return succeeded;
+  }
+}

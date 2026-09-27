@@ -1,0 +1,141 @@
+module std.util.iterator;
+
+import std.util.maybe;
+import std.alloc;
+
+fn __size_of<T>(probe: *T) -> usize { return 0; }
+fn __init_copy<T>(destination: *T, source: *T) -> void {}
+fn __drop_at<T>(pointer: *T) -> void {}
+
+// A cursor over a borrowed, read-only slice. The caller keeps the source alive.
+pub class Iterator<T> {
+  values: []const T;
+  position: usize;
+  pub init(values: []const T, position: usize) {
+    this.values = values;
+    this.position = position;
+  }
+  pub fn next() -> std.util.maybe.Maybe<T> {
+    if position >= values.len {
+      return std.util.maybe.none<T>();
+    }
+    let value = values[position];
+    position = position + 1;
+    return std.util.maybe.some<T>(value);
+  }
+}
+
+pub class SliceRange<T> {
+  values: []const T;
+  pub init(values: []const T) {
+    this.values = values;
+  }
+  pub fn iter() -> Iterator<T> {
+    return Iterator<T>(values, 0);
+  }
+}
+
+pub fn slice<T>(values: []const T) -> SliceRange<T> {
+  return SliceRange<T>(values);
+}
+
+// A lazy pipeline for scalar values. Each adapter owns a copy of its source.
+pub class Pipeline<T> {
+  values: []const T;
+  position: usize;
+  source: *Pipeline<T>;
+  kind: u8;
+  mapper: fn(T) -> T;
+  predicate: fn(T) -> bool;
+  remaining: usize;
+  pub init(values: []const T) {
+    this.values = values;
+    position = 0;
+    source = 0 as*Pipeline<T>;
+    kind = 0;
+    mapper = 0 as fn(T) -> T;
+    predicate = 0 as fn(T) -> bool;
+    remaining = 0;
+  }
+  deinit() {
+    if source as usize != 0 {
+      __drop_at<Pipeline<T>>(source);
+      std.alloc.release(source as*u8);
+    }
+  }
+  pub fn copy(other: *Pipeline<T>) {
+    values = other.values;
+    position = other.position;
+    source = 0 as*Pipeline<T>;
+    kind = other.kind;
+    mapper = other.mapper;
+    predicate = other.predicate;
+    remaining = other.remaining;
+    if other.source as usize != 0 {
+      source = std.alloc.allocate(__size_of<Pipeline<T>>(0 as*Pipeline<T>)) as*Pipeline<T>;
+      if source as usize != 0 {
+        __init_copy<Pipeline<T>>(source, other.source);
+      }
+    }
+  }
+  pub fn map(callback: fn(T) -> T) -> Pipeline<T> {
+    let result = Pipeline<T>(values);
+    result.kind = 1;
+    result.mapper = callback;
+    result.source = std.alloc.allocate(__size_of<Pipeline<T>>(0 as*Pipeline<T>)) as*Pipeline<T>;
+    if result.source as usize != 0 {
+      __init_copy<Pipeline<T>>(result.source, this);
+    }
+    return result;
+  }
+  pub fn filter(callback: fn(T) -> bool) -> Pipeline<T> {
+    let result = Pipeline<T>(values);
+    result.kind = 2;
+    result.predicate = callback;
+    result.source = std.alloc.allocate(__size_of<Pipeline<T>>(0 as*Pipeline<T>)) as*Pipeline<T>;
+    if result.source as usize != 0 {
+      __init_copy<Pipeline<T>>(result.source, this);
+    }
+    return result;
+  }
+  pub fn take(count: usize) -> Pipeline<T> {
+    let result = Pipeline<T>(values);
+    result.kind = 3;
+    result.remaining = count;
+    result.source = std.alloc.allocate(__size_of<Pipeline<T>>(0 as*Pipeline<T>)) as*Pipeline<T>;
+    if result.source as usize != 0 {
+      __init_copy<Pipeline<T>>(result.source, this);
+    }
+    return result;
+  }
+  pub fn next() -> std.util.maybe.Maybe<T> {
+    if kind == 0 {
+      if position >= values.len { return std.util.maybe.none<T>(); }
+      let value = values[position];
+      position = position + 1;
+      return std.util.maybe.some<T>(value);
+    }
+    if source as usize == 0 { return std.util.maybe.none<T>(); }
+    if kind == 1 {
+      let item = source.next();
+      if !item.has_value() { return std.util.maybe.none<T>(); }
+      return std.util.maybe.some<T>(mapper(item.value()));
+    }
+    if kind == 2 {
+      while true {
+        let item = source.next();
+        if !item.has_value() { return std.util.maybe.none<T>(); }
+        if predicate(item.value()) { return std.util.maybe.some<T>(item.value()); }
+      }
+    }
+    if remaining == 0 { return std.util.maybe.none<T>(); }
+    let item = source.next();
+    if !item.has_value() { return std.util.maybe.none<T>(); }
+    remaining = remaining - 1;
+    return item;
+  }
+}
+
+pub fn pipe<T>(values: []const T) -> Pipeline<T> {
+  return Pipeline<T>(values);
+}

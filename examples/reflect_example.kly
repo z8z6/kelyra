@@ -1,4 +1,5 @@
 import std.reflect;
+import std.util.string;
 
 @reflect
 class Actor {
@@ -24,6 +25,9 @@ fn run() -> i32 {
   let actor = Actor();
   actor.health = 42;
   let type = std.reflect.type_of<Actor>();
+  if !std.util.string.equal(type.name(), std.util.string.from_cstr("Actor")) {
+    return 12;
+  }
   if !type.has_field("health") || !type.has_field("id") || type.has_field("hidden") {
     return 1;
   }
@@ -35,7 +39,24 @@ fn run() -> i32 {
     return 3;
   }
   let field = found.value();
-  if field.type().id != std.reflect.type_of<i32>().id {
+  if !field.owner.type.same_type(type) || !field.field_type.same_type(std.reflect.type_of<i32>()) {
+    return 16;
+  }
+  if !std.util.string.equal(field.owner.name(), std.util.string.from_cstr("Actor")) {
+    return 17;
+  }
+  if !std.util.string.equal(field.name(), std.util.string.from_cstr("health")) || !type.has_field_bytes(std.util.string.from_cstr("health")) {
+    return 13;
+  }
+  let copied_name = std.util.string.to_owned(field.name());
+  if !copied_name.equals("health") {
+    return 14;
+  }
+  let found_bytes = type.field_bytes(std.util.string.from_cstr("health"));
+  if !found_bytes.valid || !found_bytes.ok {
+    return 15;
+  }
+  if !field.type().same_type(std.reflect.type_of<i32>()) {
     return 4;
   }
   let object = std.reflect.value<Actor>(&actor);
@@ -65,7 +86,7 @@ fn run() -> i32 {
     return 10;
   }
   let item = generic.field("item");
-  if !item.valid || !item.ok || item.value().type().id != std.reflect.type_of<i32>().id {
+  if !item.valid || !item.ok || !item.value().type().same_type(std.reflect.type_of<i32>()) {
     return 11;
   }
   return 0;

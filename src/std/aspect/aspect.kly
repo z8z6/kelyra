@@ -1,0 +1,27 @@
+module std.aspect;
+
+// The compiler creates a callback and context for each wrapped call. The
+// invocation is valid only until the aspect function returns.
+pub class Invocation<R> {
+  context: *u8;
+  callback: fn(*u8) -> R;
+  pub init(context: *u8, callback: fn(*u8) -> R) {
+    this.context = context;
+    this.callback = callback;
+  }
+  pub fn proceed() -> R {
+    return callback(context);
+  }
+}
+
+pub class VoidInvocation {
+  context: *u8;
+  callback: fn(*u8) -> void;
+  pub init(context: *u8, callback: fn(*u8) -> void) {
+    this.context = context;
+    this.callback = callback;
+  }
+  pub fn proceed() -> void {
+    callback(context);
+  }
+}

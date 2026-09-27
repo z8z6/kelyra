@@ -1,4 +1,4 @@
-import std.ascii.*;
+import std.util.ascii;
 
 @main
 pub fn main() -> i32 {

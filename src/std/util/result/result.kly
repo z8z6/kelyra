@@ -1,0 +1,95 @@
+module std.util.result;
+
+import std.alloc;
+
+// Compiler-provided operations on a concrete type. A branch needs no default
+// constructor because its value is constructed into allocated storage.
+fn __size_of<T>(probe: *T) -> usize {
+  return 0;
+}
+
+fn __init_copy<T>(destination: *T, source: *T) -> void {
+}
+
+fn __drop_at<T>(pointer: *T) -> void {
+}
+
+// A successful T or an error E. If valid is false, storage allocation failed
+// and neither branch is available.
+pub class Result<T, E> {
+  pub ok: bool;
+  pub valid: bool;
+  data: *T;
+  error_data: *E;
+  pub init() {
+    ok = false;
+    valid = false;
+    data = 0 as*T;
+    error_data = 0 as*E;
+  }
+  deinit() {
+    if data as usize != 0 {
+      __drop_at<T>(data);
+      std.alloc.release(data as*u8);
+    }
+    if error_data as usize != 0 {
+      __drop_at<E>(error_data);
+      std.alloc.release(error_data as*u8);
+    }
+  }
+  pub fn copy(other: *Result<T, E>) {
+    ok = false;
+    valid = false;
+    data = 0 as*T;
+    error_data = 0 as*E;
+    if !other.valid {
+      return;
+    }
+    if other.ok {
+      data = std.alloc.allocate(__size_of<T>(0 as*T)) as*T;
+      if data as usize == 0 {
+        return;
+      }
+      __init_copy<T>(data, other.data);
+      ok = true;
+    } else {
+      error_data = std.alloc.allocate(__size_of<E>(0 as*E)) as*E;
+      if error_data as usize == 0 {
+        return;
+      }
+      __init_copy<E>(error_data, other.error_data);
+    }
+    valid = true;
+  }
+  // Preconditions: valid && ok.
+  pub fn value() -> T {
+    return *data;
+  }
+  // Preconditions: valid && !ok.
+  pub fn error() -> E {
+    return *error_data;
+  }
+}
+
+pub fn success<T, E>(value: T) -> Result<T, E> {
+  let result = Result<T, E>();
+  result.data = std.alloc.allocate(__size_of<T>(0 as*T)) as*T;
+  if result.data as usize == 0 {
+    return result;
+  }
+  __init_copy<T>(result.data, &value);
+  result.ok = true;
+  result.valid = true;
+  return result;
+}
+
+pub fn failure<T, E>(error: E) -> Result<T, E> {
+  let result = Result<T, E>();
+  result.error_data = std.alloc.allocate(__size_of<E>(0 as*E)) as*E;
+  if result.error_data as usize == 0 {
+    return result;
+  }
+  __init_copy<E>(result.error_data, &error);
+  result.valid = true;
+  return result;
+}
