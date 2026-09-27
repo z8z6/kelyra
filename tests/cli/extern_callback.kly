@@ -1,9 +1,9 @@
 @extern("get_callback")
-@callconv("c")
+@callconv(CallingConvention.C)
 fn get_callback() -> fn(c.int) -> c.int;
 
 @extern("apply_callback")
-@callconv("c")
+@callconv(CallingConvention.C)
 fn apply_callback(callback: fn(c.int) -> c.int, value: c.int) -> c.int;
 
 fn double_value(value: c.int) -> c.int { return value * 2; }

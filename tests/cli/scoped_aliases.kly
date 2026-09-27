@@ -1,0 +1,29 @@
+module scoped_aliases;
+
+class Box<T> {
+  pub alias Item = T;
+  pub alias Pointer<U> = *U;
+  pub value: Item;
+  pub init(value: Item) {
+    this.value = value;
+  }
+  pub fn get() -> Item {
+    let pointer: Pointer<Item> = &value;
+    return *pointer;
+  }
+}
+
+@main
+fn main() -> i32 {
+  alias Value = i32;
+  alias Ptr<U> = *U;
+  let box = Box<Value>(41);
+  let item: Box<Value>.Item = box.get();
+  let ptr: Ptr<Value> = &item;
+  let member_ptr: Box<Value>.Pointer<Value> = &item;
+  {
+    alias Value = i64;
+    let one: Value = 1;
+  }
+  return *ptr + *member_ptr - 40;
+}

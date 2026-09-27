@@ -1,0 +1,7 @@
+@target(Target.Class T)
+annotation sealed() = @final;
+
+@sealed
+class Base {}
+
+class Child : Base {}

@@ -223,11 +223,11 @@ assert constructor_help["signatures"][0]["label"] == "init(count: i32)"
 assert constructor_help["activeParameter"] == 0
 
 # Modules from a path dependency and the dependency cache resolve to their own
-# sources, both through a wildcard import and through a qualified name.
+# sources, both through an unqualified import and through a qualified name.
 app_source = """module app.main;
 
-import demo_api.*;
-import cached_api.*;
+import demo_api;
+import cached_api;
 
 fn call_demo() -> i32 {
   let first: i32 = demo_helper(1);
@@ -280,7 +280,7 @@ header.write_text(
 c_source = """module app.c_api;
 
 import c "bridge.h";
-import c.*;
+import c;
 
 fn call_c() -> i32 {
   let first: c.int = demo_c_add(1, 2);
@@ -342,7 +342,7 @@ send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
     "textDocument": {"uri": std_uri, "languageId": "kelyra", "version": 1,
                      "text": std_source}}})
 annotation_uri = (pathlib.Path(__file__).resolve().parents[3] /
-                  "kstd/src/std/annotation.kly").as_uri()
+                  "kstd/src/std/annotation/annotation.kly").as_uri()
 send({"jsonrpc": "2.0", "id": 31, "method": "textDocument/documentSymbol", "params": {
     "textDocument": {"uri": annotation_uri}}})
 assert "cfg" in {symbol["name"] for symbol in receive(31)}
@@ -353,9 +353,9 @@ send({"jsonrpc": "2.0", "id": 32, "method": "textDocument/hover", "params": {
 assert receive(32), "indexed annotation has no symbol"
 for request_id, needle, expected_suffix in [
     (26, "@local", "/app/src/std_use.kly"),
-    (27, "@cfg", "/std/annotation.kly"),
-    (28, "abs_i64(-4)", "/std/math/integer.kly"),
-    (33, "@std.annotation.main", "/std/annotation.kly"),
+    (27, "@cfg", "/std/annotation/annotation.kly"),
+    (28, "abs_i64(-4)", "/std/math/integer/integer.kly"),
+    (33, "@std.annotation.main", "/std/annotation/annotation.kly"),
 ]:
     send({"jsonrpc": "2.0", "id": request_id,
           "method": "textDocument/definition", "params": {
@@ -375,12 +375,12 @@ assert std_hover["range"]["start"]["line"] == 5
 assert std_hover["range"]["start"]["character"] == position_in(
     std_source, "abs_i64(-4)", 0)["character"]
 
-io_path = pathlib.Path(__file__).resolve().parents[3] / "kstd/src/std/io.kly"
+io_path = pathlib.Path(__file__).resolve().parents[3] / "kstd/src/std/io/io.kly"
 io_source = io_path.read_text()
 send({"jsonrpc": "2.0", "id": 34, "method": "textDocument/definition", "params": {
     "textDocument": {"uri": io_path.as_uri()},
     "position": position_in(io_source, "std.io.linux.read_stdin", 16)}})
-assert receive(34)[0]["uri"].endswith("/std/io/linux.kly")
+assert receive(34)[0]["uri"].endswith("/std/io/linux/linux.kly")
 
 unimported = "fn unknown() -> i64 { return abs_i64(-4); }\n"
 unimported_uri = (workspace / "app/src/unimported.kly").as_uri()

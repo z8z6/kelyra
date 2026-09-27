@@ -18,6 +18,13 @@ bool driver::ValidateOptions() {
     kerr() << "--runtime=freestanding requires --emit-exe or --emit-obj\n";
     return false;
   }
+  if (Option::EmitSpirv &&
+      (Option::EmitMlir || Option::EmitObject || Option::EmitExecutable ||
+       Option::ShaderEntry.empty())) {
+    kerr() << "--emit-spirv requires --shader-entry and cannot be combined "
+              "with other emit modes\n";
+    return false;
+  }
   return true;
 }
 
@@ -42,6 +49,8 @@ int driver::Run() {
     return 1;
   if (Option::DumpClassLayout)
     DumpClassLayouts(Analysis);
+  if (Option::EmitSpirv)
+    return EmitShader(*Loader, Analysis);
   if (!Option::EmitMlir && !Option::EmitObject && !Option::EmitExecutable)
     return 0;
   return Emit(*Loader, Analysis);

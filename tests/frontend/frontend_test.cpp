@@ -48,6 +48,9 @@ TEST(Frontend, ExpressionAst) {
   expression("1.25e-3", "(Literal \"1.25e-3\")");
   expression("true", "(Literal \"true\")");
   expression("meta(*u8)", "(Meta (PointerType (Type \"u8\")))");
+  expression("meta { let x = 2; x + 3 }",
+             "(MetaBlock (Let \"let\" (Name \"x\") (Literal \"2\")) "
+             "(Binary \"+\" (Name \"x\") (Literal \"3\")))");
   expression("\"a\\n\"", "(Literal \"\\\"a\\\\n\\\"\")");
   expression("identity<i32>(value)",
              "(Call (GenericApply (Name \"identity\") (Type \"i32\")) "
@@ -90,19 +93,78 @@ TEST(Frontend, Format) {
   EXPECT_EQ(Format(Formatted), Expected) << "formatting is idempotent";
 }
 
+TEST(Frontend, EnumMatchFormatting) {
+  auto Parsed =
+      lexer.parse("enum Flag:u8{Off,On=2,} fn pick(flag:Flag)->i32{"
+                  "let value=match flag{Flag.Off=>0,Flag.On=>{let x=1;x},};"
+                  "return value;}");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("enum Flag: u8 {\n"), std::string::npos);
+  EXPECT_NE(Formatted.find("Flag.On => {\n"), std::string::npos);
+  EXPECT_NE(Formatted.find("  };\n  return value;"), std::string::npos);
+  auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, AnnotationImplementationFormatting) {
+  auto Parsed =
+      lexer.parse("@target(Target.Class T) annotation mark(value:i32)=@A(value)+@B{"
+                  "@static count:i32;@static pub fn next()->i32{return count;}}"
+                  "@mark(3) class Item{}");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("@target(Target.Class T)\n"), std::string::npos);
+  EXPECT_NE(Formatted.find("= @A(value) + @B {"), std::string::npos);
+  EXPECT_NE(Formatted.find("@static\n  count: i32;"), std::string::npos);
+  auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, AnnotationConditionalMembers) {
+  auto Parsed = lexer.parse(
+      "@target(Target.Class T) annotation choice(enabled:bool){when enabled{"
+      "pub fn one()->i32{return 1;}}else when meta(T).has_field(\"id\"){"
+      "id_copy:i32;}else{pub fn none()->i32{return 0;}}}");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("when enabled {"), std::string::npos);
+  EXPECT_NE(Formatted.find("else when meta(T).has_field(\"id\")"),
+            std::string::npos);
+  auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, MetaModuleAnnotation) {
+  auto Parsed = lexer.parse(
+      "@meta module catalog; @target(Target.Module) pub annotation meta();");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("@meta\nmodule catalog;"), std::string::npos);
+  auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+}
+
 TEST(Frontend, PrefixArrayTypes) {
   const std::string Source =
-      "fn types() { let whole:*[2]i32; let elements:[2]*i32; }";
+      "fn types() { let whole:*[2]i32; let elements:[2]*i32; "
+      "let computed:[1+2]i32; }";
   auto Parsed = lexer.parse(Source);
   ASSERT_TRUE(Parsed.ok());
   EXPECT_EQ(Format(Parsed), "fn types() {\n"
                             "  let whole: *[2]i32;\n"
                             "  let elements: [2]*i32;\n"
+                            "  let computed: [1 + 2]i32;\n"
                             "}\n");
   const auto Ast = lexer.dumpAst(*Parsed.root);
-  EXPECT_NE(Ast.find("(PointerType (ArrayType \"2\" (Type \"i32\")))"),
+  EXPECT_NE(Ast.find("(PointerType (ArrayType \"2\" (Literal \"2\") "
+                     "(Type \"i32\")))"),
             std::string::npos);
-  EXPECT_NE(Ast.find("(ArrayType \"2\" (PointerType (Type \"i32\")))"),
+  EXPECT_NE(Ast.find("(ArrayType \"2\" (Literal \"2\") "
+                     "(PointerType (Type \"i32\")))"),
             std::string::npos);
   EXPECT_FALSE(lexer.parse("fn old(value: i32[2]) {}").ok());
 }
@@ -129,6 +191,79 @@ TEST(Frontend, GenericSyntaxAndFormatting) {
   auto Again = lexer.parse(Formatted);
   ASSERT_TRUE(Again.ok());
   EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, ScopedAliasesAndOrderedDeclarations) {
+  auto Parsed = lexer.parse(
+      "fn zebra(){alias Local=i32;let value:Local=1;}"
+      "class Beta<T>{alias Item=T;alias Pointer<U> = *U;value:Item;}"
+      "fn alpha(){let ptr:Beta<i32>.Pointer<u8>;}class Alpha{}");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_LT(Formatted.find("class Alpha"), Formatted.find("class Beta"));
+  EXPECT_LT(Formatted.find("class Beta"), Formatted.find("fn alpha"));
+  EXPECT_LT(Formatted.find("fn alpha"), Formatted.find("fn zebra"));
+  EXPECT_NE(Formatted.find("Beta<i32>.Pointer<u8>"), std::string::npos);
+  auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, OrderedDeclarationsPreserveDetachedComments) {
+  auto Parsed = lexer.parse("// file header\n\n"
+                            "fn zebra() {}\n"
+                            "// section\n\n"
+                            "class Beta {}\n"
+                            "class Alpha {}\n");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_TRUE(Formatted.starts_with("// file header\n\n"));
+  auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, ShortensOnlyUnambiguousImportedNames) {
+  auto Parsed = lexer.parse("module main; import demo.math;"
+                            "fn use(value: demo.math.Vec4) -> i32 {"
+                            "return demo.math.make(); }");
+  ASSERT_TRUE(Parsed.ok());
+  FormatSymbols Symbols;
+  Symbols.CurrentModule = "main";
+  Symbols.Visible["demo.math"] = {"Vec4", "make"};
+  Symbols.Complete = true;
+  const auto Formatted = Format(Parsed, Symbols);
+  EXPECT_NE(Formatted.find("value: Vec4"), std::string::npos);
+  EXPECT_NE(Formatted.find("return make();"), std::string::npos);
+  Symbols.Visible["other.math"] = {"make"};
+  EXPECT_NE(Format(Parsed, Symbols).find("demo.math.make()"),
+            std::string::npos);
+  auto Shadowed =
+      lexer.parse("module main; import demo.math;"
+                  "fn use(demo: i32) -> i32 { return demo.math.make(); }");
+  ASSERT_TRUE(Shadowed.ok());
+  Symbols.Visible.erase("other.math");
+  EXPECT_NE(Format(Shadowed, Symbols).find("demo.math.make()"),
+            std::string::npos);
+  auto Unrelated =
+      lexer.parse("module main; import demo.math;"
+                  "fn first() { alias make = i32; }"
+                  "fn second() -> i32 { return demo.math.make(); }");
+  ASSERT_TRUE(Unrelated.ok());
+  EXPECT_NE(Format(Unrelated, Symbols).find("return make();"),
+            std::string::npos);
+  auto Inherited = lexer.parse(
+      "module main; import demo.math;"
+      "class Derived: Base { fn call() -> i32 {"
+      "return demo.math.make(); } }");
+  ASSERT_TRUE(Inherited.ok());
+  EXPECT_NE(Format(Inherited, Symbols).find("demo.math.make()"),
+            std::string::npos);
+  auto QualifiedAnnotation = lexer.parse("@std.annotation.final class Box {}");
+  ASSERT_TRUE(QualifiedAnnotation.ok());
+  Symbols.Visible["std.annotation"] = {"final"};
+  EXPECT_NE(Format(QualifiedAnnotation, Symbols).find("@final"),
+            std::string::npos);
 }
 
 TEST(Frontend, GenericClassMemberCall) {
@@ -250,7 +385,8 @@ fn accept(callback: fn()) -> void { callback(); }
   const auto Formatted = Format(Parsed);
   auto Again = lexer.parse(Formatted);
   ASSERT_TRUE(Again.ok());
-  EXPECT_EQ(lexer.dumpAst(*Parsed.root), lexer.dumpAst(*Again.root));
+  EXPECT_LT(Formatted.find("fn accept"), Formatted.find("fn factory"));
+  EXPECT_LT(Formatted.find("fn factory"), Formatted.find("fn use"));
   EXPECT_EQ(Format(Again), Formatted);
   EXPECT_FALSE(lexer.parse("struct Pair { left: i32 }").ok());
 }
@@ -258,11 +394,11 @@ fn accept(callback: fn()) -> void { callback(); }
 TEST(Frontend, FormatImports) {
   auto Parsed = lexer.parse(
       "module app.main; import zebra; import alpha.part; import zebra; "
-      "import alpha.part.*; import middle; fn main() { return; }");
+      "import alpha.part; import middle; fn main() { return; }");
   ASSERT_TRUE(Parsed.ok());
   const std::string Expected = "module app.main;\n"
                                "\n"
-                               "import alpha.part.*;\n"
+                               "import alpha.part;\n"
                                "import middle;\n"
                                "import zebra;\n\n"
                                "fn main() {\n"
@@ -361,7 +497,8 @@ TEST(Frontend, TokensAndComments) {
 
 TEST(Frontend, TokenKinds) {
   auto result = lexer.parseExpression(
-      "name 1 \"s\" let fn class interface const annotation if else while "
+      "name 1 \"s\" let fn class interface const annotation if else while for "
+      "in "
       "return break "
       "continue "
       "true false meta when parallel extern defer module import pub -> = + - "
@@ -378,6 +515,8 @@ TEST(Frontend, TokenKinds) {
                                            TokenKind::keyword_if,
                                            TokenKind::keyword_else,
                                            TokenKind::keyword_while,
+                                           TokenKind::keyword_for,
+                                           TokenKind::keyword_in,
                                            TokenKind::keyword_return,
                                            TokenKind::keyword_break,
                                            TokenKind::keyword_continue,
@@ -431,24 +570,25 @@ TEST(Frontend, TokenKinds) {
 
 TEST(Frontend, UserDefinedAnnotations) {
   const std::string Source = R"(
-@target(function)
-pub annotation route(path: meta.string, method: meta.string = "GET",);
+@target(Target.Function)
+pub annotation route(path: std.util.string.StringSlice, method: std.util.string.StringSlice = "GET",);
 
 @route("/users", method = "POST")
 fn create_user() -> i32 { return 0; }
 )";
   auto Parsed = lexer.parse(Source);
   ASSERT_TRUE(Parsed.ok());
-  EXPECT_EQ(lexer.dumpAst(*Parsed.root),
-            "(Module (AnnotationDecl \"route\" (Annotation \"target\" "
-            "(AnnotationArgument (Name \"function\"))) (Public) "
-            "(AnnotationParameter \"path\" (Type \"meta.string\")) "
-            "(AnnotationParameter \"method\" (Type \"meta.string\") "
-            "(Literal \"\\\"GET\\\"\"))) (Function \"create_user\" "
-            "(Annotation \"route\" (AnnotationArgument (Literal "
-            "\"\\\"/users\\\"\")) (AnnotationArgument \"method\" (Literal "
-            "\"\\\"POST\\\"\"))) (Type \"i32\") (Block (Return (Literal "
-            "\"0\")))))");
+  EXPECT_EQ(
+      lexer.dumpAst(*Parsed.root),
+      "(Module (AnnotationDecl \"route\" (Annotation \"target\" "
+      "(AnnotationArgument (Member \"Function\" (Name \"Target\")))) (Public) "
+      "(AnnotationParameter \"path\" (Type \"std.util.string.StringSlice\")) "
+      "(AnnotationParameter \"method\" (Type \"std.util.string.StringSlice\") "
+      "(Literal \"\\\"GET\\\"\"))) (Function \"create_user\" "
+      "(Annotation \"route\" (AnnotationArgument (Literal "
+      "\"\\\"/users\\\"\")) (AnnotationArgument \"method\" (Literal "
+      "\"\\\"POST\\\"\"))) (Type \"i32\") (Block (Return (Literal "
+      "\"0\")))))");
 
   const auto Formatted = Format(Parsed);
   auto Reparsed = lexer.parse(Formatted);
@@ -456,14 +596,27 @@ fn create_user() -> i32 { return 0; }
   EXPECT_EQ(Format(Reparsed), Formatted);
 }
 
+TEST(Frontend, TargetEnumAndIdentifierInterpolation) {
+  const std::string Source = R"(
+@target(Target.Field F)
+annotation getter() {
+  pub fn get_${F.name}() -> F.type { return F; }
+}
+)";
+  auto Parsed = lexer.parse(Source);
+  ASSERT_TRUE(Parsed.ok());
+  EXPECT_EQ(Format(lexer.parse(Format(Parsed))), Format(Parsed));
+  EXPECT_FALSE(lexer.parse("@target(class) annotation old();").ok());
+}
+
 TEST(Frontend, WhenStatement) {
   auto Parsed = lexer.parse(
-      "fn choose() -> i32 { when meta(choose).is_public { return 1; } "
+      "fn choose() -> i32 { when meta(choose).is_public() { return 1; } "
       "else when false { return 2; } else { return 3; } }");
   ASSERT_TRUE(Parsed.ok());
   EXPECT_EQ(lexer.dumpAst(*Parsed.root),
             "(Module (Function \"choose\" (Type \"i32\") (Block (When "
-            "(Member \"is_public\" (Meta (Type \"choose\"))) (Block "
+            "(Call (Member \"is_public\" (Meta (Type \"choose\")))) (Block "
             "(Return (Literal \"1\"))) (When (Literal \"false\") (Block "
             "(Return (Literal \"2\"))) (Block (Return (Literal "
             "\"3\"))))))))");
@@ -481,14 +634,15 @@ TEST(Frontend, ModuleImportsAndVisibility) {
             "\"math\"))))))))");
 }
 
-TEST(Frontend, WildcardImport) {
-  auto Parsed = lexer.parse("import math.vector.*; fn main() { return; }");
+TEST(Frontend, ModuleImport) {
+  auto Parsed = lexer.parse("import math.vector; fn main() { return; }");
   ASSERT_TRUE(Parsed.ok());
+  EXPECT_FALSE(lexer.parse("import math.vector.*;").ok());
   EXPECT_EQ(lexer.dumpAst(*Parsed.root),
-            "(Module (Import \"math.vector.*\") (Function \"main\" (Block "
+            "(Module (Import \"math.vector\") (Function \"main\" (Block "
             "(Return))))");
   EXPECT_EQ(Format(Parsed),
-            "import math.vector.*;\n\nfn main() {\n  return;\n}\n");
+            "import math.vector;\n\nfn main() {\n  return;\n}\n");
 }
 
 TEST(Frontend, InlineAssembly) {
@@ -535,6 +689,7 @@ fn choose(x: i32, y: i32,) -> i32 {
   { obj.field = z; values[0] = z; }
   return z;
 }
+
 fn empty() { return; }
 )";
   auto program = lexer.parse(source);
@@ -563,11 +718,26 @@ fn empty() { return; }
       << "full declaration AST";
 }
 
+TEST(Frontend, ForInStatement) {
+  const auto Parsed = lexer.parse(R"(
+fn scan(values: *Range) -> i32 {
+  let total: i32 = 0;
+  for value in values {
+    total = total + value;
+  }
+  return total;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  EXPECT_NE(lexer.dumpAst(*Parsed.root).find("(For"), std::string::npos);
+  EXPECT_TRUE(lexer.parse(Format(Parsed)).ok());
+}
+
 TEST(Frontend, RejectInvalidModules) {
   for (const std::string invalid :
        {"let x = 1;", "fn f(x) {}", "fn f() { let x; }", "class S { x i32 }",
         "fn f() { 1 = 2; }", "fn f() { a = b = c; }", "fn f() { return 1 }",
-        "fn f() { if true return; }", "fn f() {", "fn f(x: [1.5]i32) {}",
+        "fn f() { if true return; }", "fn f() {",
         "fn f() { break 1; }", "fn f() { let fn = 1; }", "@ fn f() {}",
         "@Test let x = 1;", "module ; fn f() {}", "import ; fn f() {}"})
     ASSERT_FALSE(lexer.parse(invalid).ok())

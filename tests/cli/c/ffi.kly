@@ -3,6 +3,20 @@ import c "print.h";
 @main
 pub fn main() -> i32 {
   let pair: c.Pair = c.make_pair(20, 22);
+  let packet: c.Packet = c.make_packet();
+  packet.pair.left = 21;
+  packet.number.integer = 6;
+  packet.bytes[1] = 9;
+  packet.extra = 11;
+  let status: c.Status = c.status_value();
+  let status_code: i32 = match status {
+    c.STATUS_OK => 1,
+    c.STATUS_FAILURE => 0,
+    _ => 2,
+  };
+  if c.inspect_packet(packet) != 1 || status_code != 0 || c.STATUS_OK != 0 || pair.left != 20 || pair.right != 22 || c.make_anon().value != 42 {
+    return 1;
+  }
   let pointer: *c.Pair = c.pair_pointer();
   let total = c.sum_many(3, c.sum_pair(pair), c.sum_pair_pointer(pointer), c.sum_pair(*pointer));
   c.print_format("total=%d\n", total);

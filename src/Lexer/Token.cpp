@@ -25,6 +25,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "fn";
   case TokenKind::keyword_class:
     return "class";
+  case TokenKind::keyword_enum:
+    return "enum";
   case TokenKind::keyword_const:
     return "const";
   case TokenKind::keyword_this:
@@ -37,6 +39,10 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "else";
   case TokenKind::keyword_while:
     return "while";
+  case TokenKind::keyword_for:
+    return "for";
+  case TokenKind::keyword_in:
+    return "in";
   case TokenKind::keyword_return:
     return "return";
   case TokenKind::keyword_break:
@@ -51,6 +57,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "meta";
   case TokenKind::keyword_when:
     return "when";
+  case TokenKind::keyword_match:
+    return "match";
   case TokenKind::keyword_as:
     return "as";
   case TokenKind::keyword_parallel:
@@ -69,6 +77,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "asm";
   case TokenKind::op_arrow:
     return "->";
+  case TokenKind::op_fat_arrow:
+    return "=>";
   case TokenKind::op_assign:
     return "=";
   case TokenKind::op_add:
@@ -145,6 +155,10 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "AnnotationParameter";
   case TokenKind::ast_annotation_argument:
     return "AnnotationArgument";
+  case TokenKind::ast_annotation_uses:
+    return "AnnotationComposition";
+  case TokenKind::ast_annotation_body:
+    return "AnnotationBody";
   case TokenKind::ast_function:
     return "Function";
   case TokenKind::ast_generic_parameter:
@@ -163,6 +177,10 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Spread";
   case TokenKind::ast_class:
     return "Class";
+  case TokenKind::ast_enum:
+    return "Enum";
+  case TokenKind::ast_enum_variant:
+    return "EnumVariant";
   case TokenKind::ast_alias_decl:
     return "AliasDecl";
   case TokenKind::ast_base_type:
@@ -181,6 +199,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "PointerType";
   case TokenKind::ast_array_type:
     return "ArrayType";
+  case TokenKind::ast_slice_type:
+    return "SliceType";
   case TokenKind::ast_result_types:
     return "ResultTypes";
   case TokenKind::ast_function_type:
@@ -189,6 +209,14 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "BindingList";
   case TokenKind::ast_block:
     return "Block";
+  case TokenKind::ast_block_expr:
+    return "BlockExpression";
+  case TokenKind::ast_meta_block:
+    return "MetaBlock";
+  case TokenKind::ast_match:
+    return "Match";
+  case TokenKind::ast_match_arm:
+    return "MatchArm";
   case TokenKind::ast_let:
     return "Let";
   case TokenKind::ast_assign:
@@ -201,6 +229,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "When";
   case TokenKind::ast_while:
     return "While";
+  case TokenKind::ast_for:
+    return "For";
   case TokenKind::ast_break:
     return "Break";
   case TokenKind::ast_continue:
@@ -229,6 +259,8 @@ std::string kelyra::lex::GetTokenName(TokenKind kind) {
     return "Call";
   case TokenKind::ast_index:
     return "Index";
+  case TokenKind::ast_slice:
+    return "Slice";
   case TokenKind::ast_member:
     return "Member";
   case TokenKind::ast_group:

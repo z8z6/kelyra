@@ -1,0 +1,129 @@
+import std.aspect;
+
+class Trace {
+  @static
+  pub order: i32;
+}
+
+fn outer(call: *std.aspect.Invocation<i32>) -> i32 {
+  Trace.order = Trace.order * 10 + 1;
+  let result = call.proceed();
+  Trace.order = Trace.order * 10 + 4;
+  return result;
+}
+
+fn inner(call: *std.aspect.Invocation<i32>) -> i32 {
+  Trace.order = Trace.order * 10 + 2;
+  let result = call.proceed();
+  Trace.order = Trace.order * 10 + 3;
+  return result;
+}
+
+fn generic<R>(call: *std.aspect.Invocation<R>) -> R {
+  return call.proceed();
+}
+
+fn record_void(call: *std.aspect.VoidInvocation) -> void {
+  Trace.order = Trace.order * 10 + 5;
+  call.proceed();
+  Trace.order = Trace.order * 10 + 6;
+}
+
+@aspect(meta(generic))
+fn answer() -> i64 {
+  return 42;
+}
+
+@aspect(meta(generic))
+fn identity<T>(value: T) -> T {
+  return value;
+}
+
+pub class Payload {
+  pub value: i32;
+  init(value: i32) {
+    this.value = value;
+  }
+}
+
+@aspect(meta(generic))
+fn payload_pointer(value: *Payload) -> *Payload {
+  return value;
+}
+
+@aspect(meta(record_void))
+fn touch() -> void {
+  Trace.order = Trace.order * 10 + 7;
+}
+
+@aspect(meta(outer))
+@aspect(meta(inner))
+fn add(value: i32) -> i32 {
+  return value + 1;
+}
+
+class Counter {
+  value: i32;
+  init() {
+    value = 40;
+  }
+  @aspect(meta(inner))
+  pub fn next() -> i32 {
+    value = value + 1;
+    return value;
+  }
+  @static
+  @aspect(meta(inner))
+  pub fn static_next(value: i32) -> i32 {
+    return value + 1;
+  }
+}
+
+class GenericCounter<T> {
+  value: T;
+  init(value: T) {
+    this.value = value;
+  }
+  @aspect(meta(generic))
+  pub fn get() -> T {
+    return value;
+  }
+}
+
+@main
+fn main() -> i32 {
+  if add(41) != 42 || Trace.order != 1234 {
+    return 1;
+  }
+  Trace.order = 0;
+  let counter = Counter();
+  if counter.next() != 41 {
+    return 2;
+  }
+  if Trace.order != 23 {
+    return 3;
+  }
+  if answer() != 42 {
+    return 4;
+  }
+  if identity<i32>(42) != 42 {
+    return 9;
+  }
+  let payload = Payload(42);
+  if payload_pointer(&payload).value != 42 {
+    return 7;
+  }
+  if Counter.static_next(41) != 42 {
+    return 5;
+  }
+  let generic_counter = GenericCounter<i64>(42);
+  if generic_counter.get() != 42 {
+    return 8;
+  }
+  Trace.order = 0;
+  touch();
+  if Trace.order != 576 {
+    return 6;
+  }
+  return 0;
+}

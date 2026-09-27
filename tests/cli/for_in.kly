@@ -1,0 +1,83 @@
+import std.util.iterator;
+import std.util.maybe;
+
+class Cursor {
+  current: i32;
+  limit: i32;
+  pub init(current: i32, limit: i32) {
+    this.current = current;
+    this.limit = limit;
+  }
+  pub fn next() -> std.util.maybe.Maybe<i32> {
+    if current >= limit {
+      return std.util.maybe.none<i32>();
+    }
+    let value = current;
+    current = current + 1;
+    return std.util.maybe.some<i32>(value);
+  }
+}
+
+class Sequence {
+  first: i32;
+  limit: i32;
+  pub init(first: i32, limit: i32) {
+    this.first = first;
+    this.limit = limit;
+  }
+  pub fn iter() -> Cursor {
+    return Cursor(first, limit);
+  }
+}
+
+fn twice(value: i32) -> i32 { return value * 2; }
+fn above_two(value: i32) -> bool { return value > 2; }
+
+@main
+fn main() -> i32 {
+  let total: i32 = 0;
+  for item in Sequence(1, 6) {
+    if item == 2 {
+      continue;
+    }
+    if item == 5 {
+      break;
+    }
+    total = total + item;
+  }
+  if total != 8 {
+    return 1;
+  }
+  let sequence = Sequence(0, 3);
+  for item in &sequence {
+    total = total + item;
+  }
+  if total != 11 {
+    return 2;
+  }
+  let numbers: [3]i32;
+  numbers[0] = 1;
+  numbers[1] = 2;
+  numbers[2] = 3;
+  let view: []const i32 = numbers[:];
+  for item in std.util.iterator.slice<i32>(view) {
+    total = total + item;
+  }
+  if total != 17 {
+    return 3;
+  }
+  for item in std.util.iterator.pipe<i32>(view).map(twice).filter(above_two).take(1) {
+    total = total + item;
+  }
+  if total != 21 {
+    return 4;
+  }
+  let cursor = Cursor(0, 2);
+  for item in &cursor {
+    total = total + item;
+  }
+  if total != 22 {
+    return 5;
+  }
+  return 42;
+}

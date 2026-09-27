@@ -78,10 +78,6 @@ bool ApplyTargetConditions(lex::Node &Root, const std::string &Path,
                 }))
               Valid = false;
             if (Declaration->kind == K::ast_module_decl) {
-              if (std::any_of(Parts.begin(), Parts.end(), [](const auto &Part) {
-                    return Part->kind == K::ast_annotation;
-                  }))
-                Valid = false;
               ModuleEnabled = Enabled;
               return false;
             }
@@ -105,7 +101,16 @@ void ModuleLoader::AddExternalPath(const std::string &Path) {
 bool ModuleLoader::LoadEntry(const std::string &Path) {
   const auto Entry = std::filesystem::absolute(Path).lexically_normal();
   Root = Entry.parent_path();
-  return Load(Entry, {}, true);
+  if (!Load(Entry, {}, true))
+    return false;
+  if (States.contains("std.annotation"))
+    return true;
+  const auto Annotation = FindModule("std.annotation");
+  if (!Annotation) {
+    kerr() << "cannot find implicit module 'std.annotation'\n";
+    return false;
+  }
+  return Load(*Annotation, "std.annotation", false);
 }
 
 bool ModuleLoader::IsUnderExternalPath(
@@ -125,18 +130,27 @@ ModuleLoader::FindModule(const std::string &Name) const {
   std::replace(Relative.begin(), Relative.end(), '.', '/');
   Relative += ".kly";
   const std::filesystem::path RelativePath(Relative);
+  const auto DirectoryPath = RelativePath.parent_path() / RelativePath.stem() /
+                             RelativePath.filename();
   std::error_code Error;
-  const auto EntryCandidate = Root / RelativePath;
-  if (std::filesystem::is_regular_file(EntryCandidate, Error))
-    return EntryCandidate;
-  for (const auto &ModulePath : ModulePaths) {
-    const auto Candidate = ModulePath / RelativePath;
+  for (const auto &Candidate : {Root / RelativePath, Root / DirectoryPath})
     if (std::filesystem::is_regular_file(Candidate, Error))
       return Candidate;
+  for (const auto &ModulePath : ModulePaths) {
+    for (const auto &Candidate :
+         {ModulePath / RelativePath, ModulePath / DirectoryPath})
+      if (std::filesystem::is_regular_file(Candidate, Error))
+        return Candidate;
   }
 #ifdef KELYRA_STDLIB_SOURCE_DIR
-  if (Name == BuiltinAnnotationModule)
-    return std::filesystem::path(KELYRA_STDLIB_SOURCE_DIR) / RelativePath;
+  if (Name.starts_with("std.")) {
+    const auto StandardLibrary =
+        std::filesystem::path(KELYRA_STDLIB_SOURCE_DIR);
+    for (const auto &Candidate :
+         {StandardLibrary / RelativePath, StandardLibrary / DirectoryPath})
+      if (std::filesystem::is_regular_file(Candidate, Error))
+        return Candidate;
+  }
 #endif
   return std::nullopt;
 }
@@ -185,22 +199,23 @@ bool ModuleLoader::Load(const std::filesystem::path &Path, std::string Expected,
     while (std::getline(Parts, Part, '.'))
       ExpectedPath /= Part;
     ExpectedPath += ".kly";
+    const auto DirectoryPath = ExpectedPath.parent_path() /
+                               ExpectedPath.stem() / ExpectedPath.filename();
     const auto FullPath = std::filesystem::absolute(Path).lexically_normal();
-    auto Actual = FullPath.end();
-    auto Expected = ExpectedPath.end();
-    bool Matches = true;
-    while (Expected != ExpectedPath.begin()) {
-      --Expected;
-      if (Actual == FullPath.begin()) {
-        Matches = false;
-        break;
+    const auto HasSuffix = [&](const std::filesystem::path &Suffix) {
+      auto Actual = FullPath.end();
+      auto Expected = Suffix.end();
+      while (Expected != Suffix.begin()) {
+        --Expected;
+        if (Actual == FullPath.begin())
+          return false;
+        --Actual;
+        if (*Actual != *Expected)
+          return false;
       }
-      --Actual;
-      if (*Actual != *Expected) {
-        Matches = false;
-        break;
-      }
-    }
+      return true;
+    };
+    const bool Matches = HasSuffix(ExpectedPath) || HasSuffix(DirectoryPath);
     if (!Matches)
       kwarn() << Module.Path << ": warning: module '" << Name
               << "' does not match path suffix '" << ExpectedPath.string()
@@ -220,8 +235,10 @@ bool ModuleLoader::Load(const std::filesystem::path &Path, std::string Expected,
     if (Child->kind != lex::TokenKind::ast_import)
       continue;
     if (Child->text == "c") {
+      if (Child->children.empty())
+        continue;
       if (Child->children.size() != 1) {
-        kerr() << Module.Path << ": error: import c requires a header\n";
+        kerr() << Module.Path << ": error: invalid C header import\n";
         return false;
       }
       CHeaders.push_back(std::filesystem::absolute(
@@ -230,9 +247,7 @@ bool ModuleLoader::Load(const std::filesystem::path &Path, std::string Expected,
                              .string());
       continue;
     }
-    const bool Wildcard = Child->text.ends_with(".*");
-    const auto Imported =
-        Wildcard ? Child->text.substr(0, Child->text.size() - 2) : Child->text;
+    const auto &Imported = Child->text;
     if (Imported == "c")
       continue;
     const auto Known = States.find(Imported);

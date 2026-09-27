@@ -1,0 +1,98 @@
+@target(Target.Class T)
+annotation counter() {
+  @static
+  count: i32;
+
+  @static
+  pub fn next() -> i32 {
+    count = count + 1;
+    return count;
+  }
+
+  @static
+  pub fn identity(value: *T) -> *T {
+    return value;
+  }
+}
+
+@target(Target.Class T)
+annotation label(value: i32);
+
+@target(Target.Class T)
+annotation doubled(value: i32) = @label(value) + @counter;
+
+@target(Target.Class T)
+annotation configured(value: i32) {
+  @static
+  pub fn setting() -> i32 { return value; }
+}
+
+@target(Target.Class T)
+annotation visibility() {
+  @static
+  pub fn public_type() -> bool {
+    when meta(T).is_public() {
+      return true;
+    } else {
+      return false;
+    }
+  }
+}
+
+@target(Target.Field)
+annotation static_field() = @static;
+
+class ComposedStatic {
+  @static_field
+  value: i32;
+
+  @static
+  pub fn next() -> i32 {
+    value = value + 1;
+    return value;
+  }
+}
+
+@doubled(7)
+class First {}
+
+@counter
+class Second {}
+
+@counter
+class Generic<T> {}
+
+@configured(5)
+class Config {}
+
+@visibility
+pub class PublicType {}
+
+@main
+fn main() -> i32 {
+  when !meta(First).has_annotation(meta(label)) ||
+       !meta(First).has_annotation(meta(counter)) {
+    return 3;
+  }
+  if First.next() != 1 || First.next() != 2 || Second.next() != 1 {
+    return 1;
+  }
+  if Generic<i32>.next() != 1 || Generic<u8>.next() != 1 {
+    return 2;
+  }
+  let value = First();
+  let pointer = &value;
+  if First.identity(pointer) as usize != pointer as usize {
+    return 4;
+  }
+  if Config.setting() != 5 {
+    return 5;
+  }
+  if !PublicType.public_type() {
+    return 6;
+  }
+  if ComposedStatic.next() != 1 || ComposedStatic.next() != 2 {
+    return 7;
+  }
+  return 42;
+}

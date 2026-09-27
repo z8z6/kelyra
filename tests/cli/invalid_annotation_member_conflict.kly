@@ -1,0 +1,9 @@
+@target(Target.Class T)
+annotation extra() {
+  value: i32;
+}
+
+@extra
+class Example {
+  value: i32;
+}

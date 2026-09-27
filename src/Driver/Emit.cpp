@@ -11,6 +11,8 @@
 
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -18,9 +20,37 @@ using namespace kelyra;
 
 int driver::Emit(const ModuleLoader &Loader, const sema::Sema &Analysis) {
   const auto &Modules = Loader.GetModules();
+  const auto ModuleName = [](const lex::Node &Root) {
+    for (const auto &Child : Root.children)
+      if (Child->kind == lex::TokenKind::ast_module_decl)
+        return Child->text;
+    return std::string();
+  };
+  std::unordered_map<std::string, const SourceModule *> ByName;
+  for (const auto &Module : Modules)
+    ByName.emplace(ModuleName(*Module.Parsed.root), &Module);
+  std::unordered_set<std::string> RuntimeModules;
+  std::vector<std::string> Pending{ModuleName(*Modules.front().Parsed.root)};
+  while (!Pending.empty()) {
+    auto Name = std::move(Pending.back());
+    Pending.pop_back();
+    const auto Found = ByName.find(Name);
+    if (Found == ByName.end() || Analysis.IsMetaModule(Name) ||
+        !RuntimeModules.insert(Name).second)
+      continue;
+    for (const auto &Dependency : Analysis.GetRuntimeDependencies(Name))
+      Pending.push_back(Dependency);
+    for (const auto &Child : Found->second->Parsed.root->children) {
+      if (Child->kind != lex::TokenKind::ast_import)
+        continue;
+      Pending.push_back(Child->text);
+    }
+  }
   std::vector<const lex::Node *> Asts;
   std::set<const lex::Node *> External;
   for (const auto &Module : Modules) {
+    if (!RuntimeModules.contains(ModuleName(*Module.Parsed.root)))
+      continue;
     Asts.push_back(Module.Parsed.root.get());
     if (Module.IsExternal)
       External.insert(Module.Parsed.root.get());

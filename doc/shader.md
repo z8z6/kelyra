@@ -1,0 +1,46 @@
+# Shader compilation
+
+`kelyra --emit-spirv --shader-entry=vertex_main -o vertex.spv shader.kly`
+compiles a Kelyra `@vertex` or `@fragment` function to a Vulkan SPIR-V module.
+The compiler checks the Kelyra source first, lowers the supported shader subset
+to GLSL, invokes `glslangValidator`, and validates the output with `spirv-val`.
+Both external tools must be on `PATH`.
+
+A shader entry returns a data class. Annotate its vertex-position field with
+`@position` and other interface fields with `@location(N)`. Annotate a vertex
+entry's index parameter with `@vertex_index`; other entry parameters use
+`@location(N)`. Interface vectors are ordinary
+classes with two to four fields of the same `f32`, `i32`, or `u32` type.
+`std.graphics` provides `Vec2`, `Vec3`, and `Vec4` for this purpose. Import
+`std.graphics` and use `Vec2`, `Vec3`, or `Vec4` directly in shader signatures and
+constructors. This preserves the same Kelyra class and function syntax used by
+host code.
+See `kstd/examples/vulkan_triangle_shaders.kly` for a complete vertex and
+fragment pair.
+
+The first shader subset supports scalar `f32`, `i32`, `u32`, `bool`, data
+classes, direct calls to local or imported Kelyra functions, arithmetic,
+comparisons, typed or inferred
+local variables, `if`, `while`, and return statements. Data class constructors
+must copy their parameters into fields in declaration order. Unsupported
+operations are diagnosed; host pointers, heap allocation, slices, and runtime
+library calls cannot enter the GPU call graph. Shader interface support
+currently covers Vulkan vertex position, vertex index, and user locations.
+
+## Built-in interface values
+
+The interface annotations are declared in `std.graphics` and refer to shader
+semantics rather than backend spelling:
+
+| Kelyra | Vulkan SPIR-V / GLSL | D3D12 HLSL |
+| --- | --- | --- |
+| `@vertex_index` on a vertex entry's `u32` parameter | `VertexIndex` / `gl_VertexIndex` | `SV_VertexID` |
+| `@position` on a vertex output's `Vec4` field | `Position` / `gl_Position` | `SV_Position` |
+| `@location(0)` on a fragment output field | `Location 0` | `SV_Target0` |
+
+The compiler checks the annotation's target, shader stage, and value type.
+`@position` currently represents a vertex output in clip space; a fragment
+input with a similar HLSL semantic would need an explicit extension to the
+shader interface rules. The current backend emits SPIR-V only. The HLSL column
+defines the intended mapping for a future D3D12 backend; it does not imply
+that the current compiler emits HLSL or DXIL.

@@ -1,0 +1,16 @@
+import std.annotation;
+import std.meta;
+import std.util.string;
+
+annotation marker(kind: Type, label: StringSlice);
+
+@marker(meta(i32), "ok")
+fn marked() {}
+
+fn query() -> i32 {
+  when !meta(marked).is_public() {
+    return 1;
+  } else {
+    return missing;
+  }
+}

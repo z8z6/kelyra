@@ -1,0 +1,9 @@
+@target(Target.Class T)
+annotation invalid() {
+  when 1 {
+    pub fn answer() -> i32 { return 1; }
+  }
+}
+
+@invalid
+class Item {}

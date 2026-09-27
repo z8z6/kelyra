@@ -14,7 +14,15 @@ namespace kelyra::sema {
 using MetaId = std::uint32_t;
 inline constexpr MetaId InvalidMetaId = std::numeric_limits<MetaId>::max();
 
-enum class AnnotationValueKind { Bool, Integer, Float, String, Symbol, Type };
+enum class AnnotationValueKind {
+  Bool,
+  Integer,
+  Float,
+  String,
+  Symbol,
+  Type,
+  Enum
+};
 
 struct AnnotationValue {
   AnnotationValueKind Kind;
@@ -36,6 +44,8 @@ enum class MetaKind {
   Module,
   Function,
   Class,
+  Enum,
+  EnumVariant,
   Field,
   Parameter,
   Type,
@@ -51,7 +61,9 @@ enum class MetaTypeKind {
   Builtin,
   Pointer,
   Array,
+  Slice,
   Record,
+  Enum,
   Results,
   Function
 };
@@ -63,6 +75,7 @@ struct MetaDeclaration {
   std::string QualifiedName;
   MetaId Module = InvalidMetaId;
   bool Public = false;
+  bool Static = false;
   // Selected for future runtime reflection; compile-time metadata remains
   // available for every declaration regardless of this flag.
   bool RuntimeReflected = false;

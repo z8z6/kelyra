@@ -1,13 +1,50 @@
 #include "Sema/Sema.h"
 #include "SemaInternal.h"
+#include "Support/BuiltinAnnotation.h"
 
 #include <algorithm>
+#include <charconv>
 #include <unordered_map>
 #include <unordered_set>
 
 using namespace kelyra;
 
 namespace {
+std::string MetaIntrinsicName(const lex::Node &Node) {
+  using K = lex::TokenKind;
+  if (Node.kind == K::ast_name)
+    return Node.text;
+  if (Node.kind == K::ast_member && Node.children.size() == 1) {
+    const auto Parent = MetaIntrinsicName(*Node.children.front());
+    return Parent.empty() ? std::string() : Parent + "." + Node.text;
+  }
+  return {};
+}
+
+std::string MetaIntrinsicOperation(const lex::Node &Module,
+                                   std::string_view Callee) {
+  using K = lex::TokenKind;
+  for (const auto &Function : Module.children) {
+    if (Function->kind != K::ast_function ||
+        Callee != "std.meta." + Function->text)
+      continue;
+    for (const auto &Part : Function->children) {
+      if (Part->kind != K::ast_annotation ||
+          !IsBuiltinAnnotation(Part->text, "intrinsic"))
+        continue;
+      if (Part->children.empty())
+        return Function->text;
+      if (Part->children.size() != 1 ||
+          Part->children.front()->children.size() != 1)
+        continue;
+      const auto &Value = Part->children.front()->children.front()->text;
+      if (Value.size() >= 2 && Value.front() == '"' && Value.back() == '"')
+        return Value.substr(1, Value.size() - 2);
+    }
+  }
+  return {};
+}
+
 std::optional<std::unordered_set<std::string>>
 AsmPlaceholders(std::string_view Text) {
   std::unordered_set<std::string> Result;
@@ -49,6 +86,7 @@ void sema::Sema::CheckStatement(const lex::Node &Statement,
   using Handler = void (Sema::*)(const lex::Node &, unsigned);
   static const std::unordered_map<K, Handler> Handlers = {
       {K::ast_block, &Sema::CheckBlockStatement},
+      {K::ast_alias_decl, &Sema::CheckAliasStatement},
       {K::ast_let, &Sema::CheckLetStatement},
       {K::ast_assign, &Sema::CheckAssignStatement},
       {K::ast_expr_stmt, &Sema::CheckExpressionStatement},
@@ -56,6 +94,7 @@ void sema::Sema::CheckStatement(const lex::Node &Statement,
       {K::ast_if, &Sema::CheckIfStatement},
       {K::ast_when, &Sema::CheckWhenStatement},
       {K::ast_while, &Sema::CheckWhileStatement},
+      {K::ast_for, &Sema::CheckForStatement},
       {K::ast_break, &Sema::CheckLoopControlStatement},
       {K::ast_continue, &Sema::CheckLoopControlStatement},
       {K::ast_asm, &Sema::CheckAsmStatement},
@@ -65,12 +104,39 @@ void sema::Sema::CheckStatement(const lex::Node &Statement,
     Error(Statement, lex::DiagnosticKind::UnsupportedStatement);
     return;
   }
+  const auto PreviousLoopDepth = CurrentLoopDepth;
+  CurrentLoopDepth = LoopDepth;
   (this->*It->second)(Statement, LoopDepth);
+  CurrentLoopDepth = PreviousLoopDepth;
 }
 
 void sema::Sema::CheckBlockStatement(const lex::Node &Statement,
                                      unsigned LoopDepth) {
   CheckBlock(Statement, LoopDepth);
+}
+
+void sema::Sema::CheckAliasStatement(const lex::Node &Statement, unsigned) {
+  if (LocalTypeScopes.empty() || Statement.children.empty() ||
+      std::any_of(Statement.children.begin(), Statement.children.end(),
+                  [](const auto &Child) {
+                    return Child->kind == lex::TokenKind::ast_public ||
+                           Child->kind == lex::TokenKind::ast_annotation;
+                  })) {
+    Error(Statement, lex::DiagnosticKind::UnsupportedDeclaration);
+    return;
+  }
+  auto &Scope = LocalTypeScopes.back();
+  if (Scope.contains(Statement.text) || ParseBuiltinType(Statement.text)) {
+    Error(Statement, lex::DiagnosticKind::UnsupportedDeclaration);
+    return;
+  }
+  if (std::any_of(Statement.children.begin(), Statement.children.end(),
+                  [](const auto &Child) {
+                    return Child->kind == lex::TokenKind::ast_generic_parameter;
+                  }))
+    return;
+  if (auto Value = CheckType(*Statement.children.back()))
+    Scope.emplace(Statement.text, *Value);
 }
 
 void sema::Sema::CheckLetStatement(const lex::Node &Statement, unsigned) {
@@ -111,6 +177,10 @@ void sema::Sema::CheckLetStatement(const lex::Node &Statement, unsigned) {
                              : std::optional<Type>();
   ConstructionContext = nullptr;
   const auto Result = Declared ? Declared : Initial;
+  if (Result && !Initializer && !CanZeroInitialize(*Result)) {
+    Error(Statement, lex::DiagnosticKind::InvalidEnumInitialization);
+    return;
+  }
   if (Result && (Result->IsVoid() || Result->IsResults() ||
                  (Result->IsClass() && !Initializer))) {
     Error(Statement, lex::DiagnosticKind::ClassValueOperation);
@@ -141,7 +211,8 @@ void sema::Sema::CheckAssignStatement(const lex::Node &Statement, unsigned) {
   while (TargetNode->kind == lex::TokenKind::ast_group &&
          TargetNode->children.size() == 1)
     TargetNode = TargetNode->children.front().get();
-  if (GetFunctionValue(*TargetNode) || GetConstant(*TargetNode)) {
+  if (GetFunctionValue(*TargetNode) || GetConstant(*TargetNode) ||
+      GetExternalConstant(*TargetNode) || GetEnumVariant(*TargetNode)) {
     Error(Statement, lex::DiagnosticKind::InvalidAssignmentTarget);
     return;
   }
@@ -152,6 +223,18 @@ void sema::Sema::CheckAssignStatement(const lex::Node &Statement, unsigned) {
   }
   if (Target && Target->IsVoid()) {
     Error(Statement, lex::DiagnosticKind::ClassValueOperation);
+    return;
+  }
+  if (Target && TargetNode->kind == lex::TokenKind::ast_index &&
+      Types.at(TargetNode->children.front().get()).IsReadOnlySlice()) {
+    Error(Statement, lex::DiagnosticKind::InvalidAssignmentTarget);
+    return;
+  }
+  if (Target && TargetNode->kind == lex::TokenKind::ast_member &&
+      TargetNode->text == "len" &&
+      (Types.at(TargetNode->children.front().get()).IsSlice() ||
+       Types.at(TargetNode->children.front().get()).IsArray())) {
+    Error(Statement, lex::DiagnosticKind::InvalidAssignmentTarget);
     return;
   }
   if (Target && !Target->IsRecord() && GetBitWidth(*Target) > 128)
@@ -216,7 +299,8 @@ void sema::Sema::CheckIfStatement(const lex::Node &Statement,
 std::optional<sema::MetaId>
 sema::Sema::ResolveMetaTarget(const lex::Node &Target) {
   using K = lex::TokenKind;
-  if (Target.kind == K::ast_pointer_type || Target.kind == K::ast_array_type) {
+  if (Target.kind == K::ast_pointer_type || Target.kind == K::ast_array_type ||
+      Target.kind == K::ast_slice_type) {
     auto Type = CheckType(Target);
     return Type ? std::optional<MetaId>(GetOrCreateMetaType(*Type))
                 : std::nullopt;
@@ -231,9 +315,7 @@ sema::Sema::ResolveMetaTarget(const lex::Node &Target) {
       if (Record.Name == CurrentModule)
         return true;
       const auto Import = Imports.find(CurrentModule);
-      return Import != Imports.end() &&
-             (Import->second.contains(Record.Name) ||
-              Import->second.contains(Record.Name + ".*"));
+      return Import != Imports.end() && Import->second.contains(Record.Name);
     }
     if (Record.Module == InvalidMetaId)
       return true;
@@ -242,8 +324,7 @@ sema::Sema::ResolveMetaTarget(const lex::Node &Target) {
       return true;
     const auto Import = Imports.find(CurrentModule);
     return Record.Public && Import != Imports.end() &&
-           (Import->second.contains(Module) ||
-            Import->second.contains(Module + ".*"));
+           Import->second.contains(Module);
   };
   const auto Find = [&](std::string_view Name) -> std::optional<MetaId> {
     for (const auto &Record : Reflection.GetRecords())
@@ -267,7 +348,7 @@ sema::Sema::ResolveMetaTarget(const lex::Node &Target) {
       continue;
     const auto &Module = Reflection.Get(Record.Module).Name;
     const auto Import = Imports.find(CurrentModule);
-    if (Import == Imports.end() || !Import->second.contains(Module + ".*"))
+    if (Import == Imports.end() || !Import->second.contains(Module))
       continue;
     if (Result)
       return std::nullopt;
@@ -277,74 +358,109 @@ sema::Sema::ResolveMetaTarget(const lex::Node &Target) {
 }
 
 std::optional<bool> sema::Sema::EvaluateWhen(const lex::Node &Expression) {
-  using K = lex::TokenKind;
-  if (Expression.kind == K::ast_literal) {
-    if (Expression.text == "true")
-      return true;
-    if (Expression.text == "false")
-      return false;
+  auto Result = EvaluateConstant(Expression);
+  return Result && Result->Type == ConstValue::Kind::Bool
+             ? std::optional<bool>(Result->Text == "true")
+             : std::nullopt;
+}
+
+std::optional<sema::ConstValue>
+sema::Sema::EvaluateMetaIntrinsic(const lex::Node &Call,
+                                  const std::vector<ConstValue> &Arguments) {
+  if (!MetaModule || Call.kind != lex::TokenKind::ast_call ||
+      Call.children.empty() || Arguments.empty() ||
+      Arguments.front().Type != ConstValue::Kind::Integer)
     return std::nullopt;
+  const auto Operation = MetaIntrinsicOperation(
+      *MetaModule, MetaIntrinsicName(*Call.children.front()));
+  if (Operation.empty())
+    return std::nullopt;
+  MetaId Id = InvalidMetaId;
+  const auto &Digits = Arguments.front().Text;
+  const auto Parsed =
+      std::from_chars(Digits.data(), Digits.data() + Digits.size(), Id);
+  if (Parsed.ec != std::errc{} || Parsed.ptr != Digits.data() + Digits.size() ||
+      Id >= Reflection.GetRecords().size())
+    return std::nullopt;
+  const auto &Record = Reflection.Get(Id);
+  const bool FunctionRecord = Record.Kind == MetaKind::Function ||
+                              Record.Kind == MetaKind::Method ||
+                              Record.Kind == MetaKind::Constructor ||
+                              Record.Kind == MetaKind::Destructor;
+  if (Arguments.size() == 1) {
+    if (Operation == "__read_public" || Operation == "meta.read_public")
+      return ConstValue::Bool(Record.Public);
+    if (Operation == "__is_static" &&
+        (Record.Kind == MetaKind::Field || FunctionRecord))
+      return ConstValue::Bool(Record.Static);
+    if (FunctionRecord) {
+      if (Operation == "__is_method")
+        return ConstValue::Bool(Record.Kind == MetaKind::Method);
+      if (Operation == "__is_constructor")
+        return ConstValue::Bool(Record.Kind == MetaKind::Constructor);
+      if (Operation == "__is_destructor")
+        return ConstValue::Bool(Record.Kind == MetaKind::Destructor);
+    }
+    if (Record.Kind == MetaKind::Class) {
+      const auto *Class = GetClass(Record.QualifiedName);
+      if (!Class)
+        return std::nullopt;
+      if (Operation == "__has_constructor")
+        return ConstValue::Bool(Class->Constructor != nullptr);
+      if (Operation == "__has_default_constructor")
+        return ConstValue::Bool(Class->DefaultConstructible);
+      if (Operation == "__has_destructor")
+        return ConstValue::Bool(Class->Destructor != nullptr);
+      if (Operation == "__has_base_class")
+        return ConstValue::Bool(!Class->BaseName.empty());
+      if (Operation == "__is_interface")
+        return ConstValue::Bool(Class->IsInterface);
+      if (Operation == "__is_final")
+        return ConstValue::Bool(Class->Final);
+    }
   }
-  if (Expression.kind == K::ast_group && Expression.children.size() == 1)
-    return EvaluateWhen(*Expression.children.front());
-  if (Expression.kind == K::ast_unary && Expression.text == "!" &&
-      Expression.children.size() == 1) {
-    auto Value = EvaluateWhen(*Expression.children.front());
-    return Value ? std::optional<bool>(!*Value) : std::nullopt;
-  }
-  if (Expression.kind == K::ast_binary && Expression.children.size() == 2 &&
-      (Expression.text == "&&" || Expression.text == "||" ||
-       Expression.text == "==" || Expression.text == "!=")) {
-    auto Left = EvaluateWhen(*Expression.children.front());
-    if (!Left)
+  if (Arguments.size() != 2)
+    return std::nullopt;
+  if (Operation == "__has_annotation" || Operation == "meta.has_annotation") {
+    if (Arguments[1].Type != ConstValue::Kind::Integer)
       return std::nullopt;
-    if (Expression.text == "&&" && !*Left)
-      return false;
-    if (Expression.text == "||" && *Left)
-      return true;
-    auto Right = EvaluateWhen(*Expression.children.back());
-    if (!Right)
+    MetaId AnnotationId = InvalidMetaId;
+    const auto &Other = Arguments[1].Text;
+    const auto ParsedOther = std::from_chars(
+        Other.data(), Other.data() + Other.size(), AnnotationId);
+    if (ParsedOther.ec != std::errc{} ||
+        ParsedOther.ptr != Other.data() + Other.size() ||
+        AnnotationId >= Reflection.GetRecords().size() ||
+        Reflection.Get(AnnotationId).Kind != MetaKind::Annotation)
       return std::nullopt;
-    if (Expression.text == "&&")
-      return *Left && *Right;
-    if (Expression.text == "||")
-      return *Left || *Right;
-    return Expression.text == "==" ? *Left == *Right : *Left != *Right;
+    const auto &Name = Reflection.Get(AnnotationId).QualifiedName;
+    return ConstValue::Bool(
+        std::any_of(Record.Annotations.begin(), Record.Annotations.end(),
+                    [&](const AnnotationInstance &Instance) {
+                      return Instance.Name == Name;
+                    }));
   }
-  if (Expression.kind == K::ast_member && Expression.text == "is_public" &&
-      Expression.children.size() == 1 &&
-      Expression.children.front()->kind == K::ast_meta &&
-      Expression.children.front()->children.size() == 1) {
-    auto Id = ResolveMetaTarget(*Expression.children.front()->children.front());
-    return Id ? std::optional<bool>(Reflection.Get(*Id).Public) : std::nullopt;
+  if (Record.Kind != MetaKind::Class ||
+      Arguments[1].Type != ConstValue::Kind::String ||
+      (Operation != "__has_member" && Operation != "__has_field" &&
+       Operation != "__has_function"))
+    return std::nullopt;
+  const bool SameModule = Record.Module == InvalidMetaId ||
+                          Reflection.Get(Record.Module).Name == CurrentModule;
+  for (const auto ChildId : Record.Children) {
+    const auto &Child = Reflection.Get(ChildId);
+    if ((!SameModule && !Child.Public) || Child.Name != Arguments[1].Text)
+      continue;
+    const bool IsField = Child.Kind == MetaKind::Field;
+    const bool IsFunction = Child.Kind == MetaKind::Method ||
+                            Child.Kind == MetaKind::Constructor ||
+                            Child.Kind == MetaKind::Destructor;
+    if ((Operation == "__has_member" && (IsField || IsFunction)) ||
+        (Operation == "__has_field" && IsField) ||
+        (Operation == "__has_function" && IsFunction))
+      return ConstValue::Bool(true);
   }
-  if (Expression.kind != K::ast_call || Expression.children.size() != 2)
-    return std::nullopt;
-  const auto &Member = *Expression.children.front();
-  if (Member.kind != K::ast_member || Member.text != "has_annotation" ||
-      Member.children.size() != 1 ||
-      Member.children.front()->kind != K::ast_meta ||
-      Member.children.front()->children.size() != 1)
-    return std::nullopt;
-  auto Id = ResolveMetaTarget(*Member.children.front()->children.front());
-  const auto *Annotation = ResolveAnnotation(*Expression.children.back());
-  if (!Id || !Annotation)
-    return std::nullopt;
-  if (Annotation->Module != CurrentModule) {
-    const auto Import = Imports.find(CurrentModule);
-    if (!Annotation->Public || Import == Imports.end() ||
-        (!Import->second.contains(Annotation->Module) &&
-         !Import->second.contains(Annotation->Module + ".*")))
-      return std::nullopt;
-  }
-  const auto Name = Annotation->Module.empty()
-                        ? Annotation->Node->text
-                        : Annotation->Module + "." + Annotation->Node->text;
-  const auto &Annotations = Reflection.Get(*Id).Annotations;
-  return std::any_of(Annotations.begin(), Annotations.end(),
-                     [&](const AnnotationInstance &Instance) {
-                       return Instance.Name == Name;
-                     });
+  return ConstValue::Bool(false);
 }
 
 void sema::Sema::CheckWhenStatement(const lex::Node &Statement,
@@ -376,6 +492,81 @@ void sema::Sema::CheckWhileStatement(const lex::Node &Statement,
                                      unsigned LoopDepth) {
   CheckExpression(*Statement.children[0], Type{BuiltinType::Bool, {}});
   CheckBlock(*Statement.children[1], LoopDepth + 1);
+}
+
+void sema::Sema::CheckForStatement(const lex::Node &Statement,
+                                   unsigned LoopDepth) {
+  if (Statement.children.size() != 3 ||
+      Statement.children.front()->kind != lex::TokenKind::ast_name ||
+      Statement.children.back()->kind != lex::TokenKind::ast_block) {
+    Error(Statement, lex::DiagnosticKind::InvalidForIterator);
+    return;
+  }
+  const auto *PreviousConstruction = ConstructionContext;
+  ConstructionContext = Statement.children[1].get();
+  const auto Range = CheckExpression(*Statement.children[1]);
+  ConstructionContext = PreviousConstruction;
+  if (!Range)
+    return;
+  const auto *Container =
+      GetClass(Range->IsPointer() ? Range->Pointee() : *Range);
+  if (!Container || Container->IsInterface || Range->PointerDepth > 1) {
+    Error(*Statement.children[1], lex::DiagnosticKind::InvalidForIterator);
+    return;
+  }
+  const auto Method = [&](const ClassInfo *Owner,
+                          std::string_view Name) -> const FunctionInfo * {
+    for (; Owner; Owner = Owner->BaseName.empty() ? nullptr
+                                                  : GetClass(Owner->BaseName)) {
+      const auto It =
+          Functions.find(Owner->QualifiedName + "." + std::string(Name));
+      if (It == Functions.end())
+        continue;
+      const auto &Info = It->second;
+      if (Info.Static || Info.Abstract ||
+          (Info.Module != CurrentModule && !Info.Public))
+        return nullptr;
+      return &Info;
+    }
+    return nullptr;
+  };
+  const auto *Iter = Method(Container, "iter");
+  if (Iter && (Iter->Parameters.size() != 1 || !Iter->Return.IsClass())) {
+    Error(Statement, lex::DiagnosticKind::InvalidForIterator);
+    return;
+  }
+  const auto IteratorType =
+      Iter ? Iter->Return : (Range->IsPointer() ? Range->Pointee() : *Range);
+  const auto *Iterator = GetClass(IteratorType);
+  const auto *Next = Method(Iterator, "next");
+  if (!Next || Next->Parameters.size() != 1 || !Next->Return.IsClass()) {
+    Error(Statement, lex::DiagnosticKind::InvalidForIterator);
+    return;
+  }
+  const auto *Maybe = GetClass(Next->Return);
+  if (!Maybe || Maybe->Module != "std.util.maybe" ||
+      !Maybe->Name.starts_with("Maybe__G")) {
+    Error(Statement, lex::DiagnosticKind::InvalidForIterator);
+    return;
+  }
+  const auto *HasValue = Method(Maybe, "has_value");
+  const auto *Value = Method(Maybe, "value");
+  if (!HasValue || !Value || HasValue->Parameters.size() != 1 ||
+      HasValue->Return != Type{BuiltinType::Bool, {}} ||
+      Value->Parameters.size() != 1 || Value->Return.IsVoid() ||
+      Value->Return.IsResults()) {
+    Error(Statement, lex::DiagnosticKind::InvalidForIterator);
+    return;
+  }
+  ForLoops[&Statement] = {IteratorType, Value->Return,
+                          Next->Return, Iter ? Iter->Symbol : std::string(),
+                          Next->Symbol, HasValue->Symbol,
+                          Value->Symbol};
+  Types[Statement.children.front().get()] = Value->Return;
+  Scopes.emplace_back();
+  Scopes.back().emplace(Statement.children.front()->text, Value->Return);
+  CheckBlock(*Statement.children.back(), LoopDepth + 1);
+  Scopes.pop_back();
 }
 
 void sema::Sema::CheckLoopControlStatement(const lex::Node &Statement,

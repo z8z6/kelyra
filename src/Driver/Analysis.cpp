@@ -20,7 +20,7 @@ void driver::DumpAstIfRequested(const ModuleLoader &Loader) {
 
 bool driver::WantsCompilation() {
   return Option::LexVerify || Option::DumpClassLayout || Option::EmitMlir ||
-         Option::EmitObject || Option::EmitExecutable;
+         Option::EmitObject || Option::EmitExecutable || Option::EmitSpirv;
 }
 
 namespace {
@@ -101,7 +101,7 @@ bool driver::Analyze(const ModuleLoader &Loader,
     kinfo() << "  [check] " << Modules.size() << " Kelyra module(s)\n";
   const bool Valid =
       Analysis.CheckModules(Inputs, Declarations.Functions,
-                            Declarations.Types) &&
+                            Declarations.Types, Declarations.Constants) &&
       (!(Option::EmitExecutable ||
          (Option::EmitObject && Option::Runtime == "freestanding")) ||
        Analysis.CheckEntrypoint(*Modules.front().Parsed.root));

@@ -18,6 +18,28 @@ di::DITypeAttr codegen::IRGen::GetDebugType(const sema::Type &Type) {
   using namespace llvm::dwarf;
   if (Type.IsVoid() || Type.IsResults())
     return di::DINullTypeAttr::get(&Context);
+  if (Type.IsSlice()) {
+    auto ElementPointer = di::DIDerivedTypeAttr::get(
+        &Context, DW_TAG_pointer_type, {}, {}, 0, {},
+        GetDebugType(Type.Indexed()), sizeof(void *) * 8, alignof(void *) * 8,
+        0, std::nullopt, di::DIFlags::Zero, {});
+    auto LengthType = di::DIBasicTypeAttr::get(
+        &Context, DW_TAG_base_type, Builder.getStringAttr("usize"),
+        sizeof(std::size_t) * 8, DW_ATE_unsigned);
+    llvm::SmallVector<di::DINodeAttr> Fields;
+    Fields.push_back(di::DIDerivedTypeAttr::get(
+        &Context, DW_TAG_member, Builder.getStringAttr("data"), {}, 0, {},
+        ElementPointer, sizeof(void *) * 8, alignof(void *) * 8, 0,
+        std::nullopt, di::DIFlags::Zero, {}));
+    Fields.push_back(di::DIDerivedTypeAttr::get(
+        &Context, DW_TAG_member, Builder.getStringAttr("len"), {}, 0, {},
+        LengthType, sizeof(std::size_t) * 8, alignof(std::size_t) * 8,
+        sizeof(void *) * 8, std::nullopt, di::DIFlags::Zero, {}));
+    return di::DICompositeTypeAttr::get(
+        &Context, DW_TAG_structure_type, Builder.getStringAttr("slice"), {}, 0,
+        {}, {}, di::DIFlags::Zero, (sizeof(void *) + sizeof(std::size_t)) * 8,
+        alignof(void *) * 8, {}, {}, {}, {}, {}, {}, Fields);
+  }
   if (Type.IsArray()) {
     llvm::SmallVector<di::DINodeAttr> Bounds{di::DISubrangeAttr::get(
         &Context, Builder.getI64IntegerAttr(Type.ArrayLength()),

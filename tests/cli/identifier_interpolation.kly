@@ -1,0 +1,61 @@
+import std.util.string;
+
+@target(Target.Field F)
+annotation named(prefix: StringSlice) {
+  pub fn ${prefix + F.name}() -> F.type {
+    let literal = "${F.name}";
+    return F;
+  }
+}
+
+@target(Target.Class T)
+annotation named_class() {
+  pub fn ${"name_" + T.name}() -> i32 {
+    return 3;
+  }
+}
+
+@named_class
+class Named {}
+
+@target(Target.Field F)
+annotation literal_name() {
+  pub fn get_F() -> F.type {
+    return F;
+  }
+}
+
+class LiteralName {
+  @literal_name
+  data: i32;
+
+  init() {
+    data = 5;
+  }
+}
+
+class Item {
+  @named("load_")
+  value: i32;
+
+  init() {
+    value = 7;
+  }
+}
+
+@main
+fn main() -> i32 {
+  let item = Item();
+  if item.load_value() != 7 {
+    return 1;
+  }
+  let named = Named();
+  if named.name_Named() != 3 {
+    return 2;
+  }
+  let literal = LiteralName();
+  if literal.get_F() != 5 {
+    return 3;
+  }
+  return 0;
+}

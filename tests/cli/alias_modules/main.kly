@@ -4,6 +4,6 @@ import library;
 
 @main
 fn main() -> i32 {
-  let value: library.Identity<i32> = 42;
+  let value: Identity<i32> = 42;
   return value;
 }

@@ -92,8 +92,8 @@ TEST(IRGen, IntegerFunction) {
 TEST(IRGen, UserAnnotationMetadataDoesNotChangeLowering) {
   lex::Lexer Lexer;
   auto Parsed = Lexer.parse(R"(
-@target(function)
-annotation route(path: meta.string);
+@target(Target.Function)
+annotation route(path: std.util.string.StringSlice);
 @route("/")
 fn handler() -> i32 { return 0; }
 )");

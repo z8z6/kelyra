@@ -1,0 +1,54 @@
+enum Color: u8 {
+  Red,
+  Green = 3,
+  Blue,
+}
+
+enum Status {
+  Ready,
+  Done,
+}
+
+fn read_once(counter: *i32) -> Color {
+  *counter = *counter + 1;
+  return Color.Green;
+}
+
+fn early(flag: bool) -> i32 {
+  match flag {
+    true => {
+      return 2;
+    },
+    false => {
+      return 3;
+    },
+  };
+}
+
+@main
+fn main() -> i32 {
+  let status: Status;
+  let counter: i32 = 0;
+  let color: i32 = match read_once(&counter) {
+    Color.Red => 1,
+    Color.Green => {
+      let value: i32 = 2;
+      value
+    },
+    Color.Blue => 3,
+  };
+  let truth: i32 = match Color.Red == Color.Red {
+    true => 1,
+    false => 0,
+  };
+  let number: i32 = match 7 {
+    3 => 10,
+    _ => 4,
+  };
+  let initial: i32 = match status {
+    Status.Ready => 1,
+    Status.Done => 0,
+  };
+  let code: i32 = (Color.Blue as u8) as i32;
+  return color + truth + number + initial + counter + early(false) + code;
+}

@@ -1,6 +1,7 @@
 #include "CodeGen/IRGen.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "llvm/ADT/APFloat.h"
@@ -18,6 +19,28 @@ using K = lex::TokenKind;
 mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
   if (const auto *Constant = Analysis.GetConstant(Expression))
     return EmitExpression(*Constant);
+  if (const auto *Constant = Analysis.GetExternalConstant(Expression)) {
+    const auto Width = sema::GetBitWidth(Constant->Value);
+    const auto Negative = Constant->Integer.starts_with('-');
+    const llvm::StringRef Digits(Constant->Integer.data() + (Negative ? 1 : 0),
+                                 Constant->Integer.size() - (Negative ? 1 : 0));
+    auto Value = llvm::APInt(Width, Digits, 10);
+    if (Negative)
+      Value = -Value;
+    return mlir::arith::ConstantIntOp::create(
+        Builder, GetLocation(Expression.Loc), GetType(Constant->Value), Value);
+  }
+  if (const auto *Variant = Analysis.GetEnumVariant(Expression)) {
+    const auto &Type = Analysis.GetType(Expression);
+    const bool Negative = Variant->Value.starts_with('-');
+    const llvm::StringRef Digits(Variant->Value.data() + (Negative ? 1 : 0),
+                                 Variant->Value.size() - (Negative ? 1 : 0));
+    auto Value = llvm::APInt(sema::GetBitWidth(Type), Digits, 10);
+    if (Negative)
+      Value = -Value;
+    return mlir::arith::ConstantIntOp::create(
+        Builder, GetLocation(Expression.Loc), GetType(Type), Value);
+  }
   if (const auto *Symbol = Analysis.GetFunctionValue(Expression)) {
     const auto &Type = Analysis.GetType(Expression);
     llvm::SmallVector<mlir::Type> Parameters;
@@ -39,6 +62,7 @@ mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
   static const std::unordered_map<K, Handler> Handlers = {
       {K::ast_name, &IRGen::EmitNameExpression},
       {K::ast_index, &IRGen::EmitIndexExpression},
+      {K::ast_slice, &IRGen::EmitSliceExpression},
       {K::ast_member, &IRGen::EmitIndexExpression},
       {K::ast_call, &IRGen::EmitCallExpression},
       {K::ast_literal, &IRGen::EmitLiteralExpression},
@@ -46,6 +70,8 @@ mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
       {K::ast_unary, &IRGen::EmitUnaryExpression},
       {K::ast_binary, &IRGen::EmitBinaryExpression},
       {K::ast_cast, &IRGen::EmitCastExpression},
+      {K::ast_block_expr, &IRGen::EmitBlockExpression},
+      {K::ast_match, &IRGen::EmitMatchExpression},
   };
   const auto It = Handlers.find(Expression.kind);
   assert(It != Handlers.end() &&
@@ -130,6 +156,7 @@ codegen::IRGen::EmitInterfaceConversion(const lex::Node &Expression,
         else if ((Part->kind == K::ast_type ||
                   Part->kind == K::ast_pointer_type ||
                   Part->kind == K::ast_array_type ||
+                  Part->kind == K::ast_slice_type ||
                   Part->kind == K::ast_function_type) &&
                  !Analysis.GetType(*Part).IsVoid())
           Results.push_back(GetType(Analysis.GetType(*Part)));
@@ -166,6 +193,17 @@ mlir::Value codegen::IRGen::EmitNameExpression(const lex::Node &Expression) {
 
 mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
   const auto Loc = GetLocation(Expression.Loc);
+  if (Expression.kind == K::ast_member && Expression.text == "len") {
+    const auto &Base = *Expression.children.front();
+    const auto &BaseType = Analysis.GetType(Base);
+    if (BaseType.IsArray())
+      return mlir::arith::ConstantIntOp::create(Builder, Loc,
+                                                BaseType.ArrayLength(), 64);
+    if (BaseType.IsSlice()) {
+      auto Slice = EmitExpression(Base);
+      return mlir::LLVM::ExtractValueOp::create(Builder, Loc, Slice, 1);
+    }
+  }
   if (Expression.kind == K::ast_member && Analysis.GetField(Expression)) {
     const auto &Base = *Expression.children.front();
     if (Analysis.IsClassTemporary(Base)) {
@@ -185,6 +223,37 @@ mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
   return mlir::LLVM::LoadOp::create(Builder, Loc,
                                     GetType(Analysis.GetType(Expression)),
                                     EmitAddress(Expression));
+}
+
+mlir::Value codegen::IRGen::EmitSliceExpression(const lex::Node &Expression) {
+  const auto Loc = GetLocation(Expression.Loc);
+  auto [Data, Length] = EmitSliceParts(*Expression.children.front());
+  auto Zero = mlir::arith::ConstantIntOp::create(Builder, Loc, 0, 64);
+  mlir::Value Start = Zero;
+  mlir::Value End = Length;
+  if (Expression.text == "start" || Expression.text == "both")
+    Start = EmitSliceIndex(*Expression.children[1]);
+  if (Expression.text == "end")
+    End = EmitSliceIndex(*Expression.children[1]);
+  else if (Expression.text == "both")
+    End = EmitSliceIndex(*Expression.children[2]);
+  auto Ordered = mlir::arith::CmpIOp::create(
+      Builder, Loc, mlir::arith::CmpIPredicate::ule, Start, End);
+  auto InRange = mlir::arith::CmpIOp::create(
+      Builder, Loc, mlir::arith::CmpIPredicate::ule, End, Length);
+  auto Valid = mlir::arith::AndIOp::create(Builder, Loc, Ordered, InRange);
+  EmitSliceBoundsCheck(Valid, Loc);
+  auto Pointer = mlir::LLVM::GEPOp::create(
+      Builder, Loc, mlir::LLVM::LLVMPointerType::get(&Context),
+      GetType(Analysis.GetType(Expression).Indexed()), Data,
+      mlir::ValueRange{Start});
+  auto Count = mlir::arith::SubIOp::create(Builder, Loc, End, Start);
+  auto Result = mlir::LLVM::ZeroOp::create(
+      Builder, Loc, GetType(Analysis.GetType(Expression)));
+  auto WithPointer = mlir::LLVM::InsertValueOp::create(
+      Builder, Loc, Result, Pointer, Builder.getDenseI64ArrayAttr({0}));
+  return mlir::LLVM::InsertValueOp::create(Builder, Loc, WithPointer, Count,
+                                           Builder.getDenseI64ArrayAttr({1}));
 }
 
 mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
@@ -396,6 +465,91 @@ mlir::Value codegen::IRGen::EmitUnaryExpression(const lex::Node &Expression) {
   return mlir::arith::SubIOp::create(Builder, Loc, Zero, Value);
 }
 
+mlir::Value codegen::IRGen::EmitBlockExpression(const lex::Node &Expression) {
+  const auto Loc = GetLocation(Expression.Loc);
+  Scopes.emplace_back();
+  Cleanups.emplace_back();
+  mlir::Value Result;
+  for (std::size_t I = 0; I < Expression.children.size(); ++I) {
+    if (!Builder.getInsertionBlock()->empty() &&
+        Builder.getInsertionBlock()
+            ->back()
+            .hasTrait<mlir::OpTrait::IsTerminator>())
+      break;
+    const auto &Child = *Expression.children[I];
+    const bool Tail = I + 1 == Expression.children.size() &&
+                      lex::IsExpressionNode(Child.kind);
+    if (Tail)
+      Result = EmitExpression(Child);
+    else
+      EmitStatement(Child);
+  }
+  if (Builder.getInsertionBlock()->empty() ||
+      !Builder.getInsertionBlock()
+           ->back()
+           .hasTrait<mlir::OpTrait::IsTerminator>())
+    EmitCleanups(Cleanups.size() - 1, Loc);
+  Cleanups.pop_back();
+  Scopes.pop_back();
+  return Result;
+}
+
+mlir::Value codegen::IRGen::EmitMatchExpression(const lex::Node &Expression) {
+  const auto Loc = GetLocation(Expression.Loc);
+  auto Scrutinee = EmitExpression(*Expression.children.front());
+  const auto &ResultType = Analysis.GetType(Expression);
+  mlir::Value ResultAddress;
+  if (!ResultType.IsVoid())
+    ResultAddress = CreateAlloca(ResultType, Loc);
+  auto *Region = Builder.getInsertionBlock()->getParent();
+  auto *Join = new mlir::Block();
+  Region->push_back(Join);
+  for (std::size_t I = 1; I < Expression.children.size(); ++I) {
+    const auto &Arm = *Expression.children[I];
+    auto *Body = new mlir::Block();
+    Region->push_back(Body);
+    const auto *Pattern = Analysis.GetMatchPatternValue(*Arm.children.front());
+    const bool Last = I + 1 == Expression.children.size();
+    mlir::Block *Next = nullptr;
+    if (!Pattern || Last) {
+      mlir::cf::BranchOp::create(Builder, Loc, Body);
+    } else {
+      Next = new mlir::Block();
+      Region->push_back(Next);
+      const bool Negative = Pattern->starts_with('-');
+      llvm::StringRef Digits(Pattern->data() + (Negative ? 1 : 0),
+                             Pattern->size() - (Negative ? 1 : 0));
+      auto Integer = llvm::APInt(
+          sema::GetBitWidth(Analysis.GetType(*Expression.children.front())),
+          Digits, 10);
+      if (Negative)
+        Integer = -Integer;
+      auto Constant = mlir::arith::ConstantIntOp::create(
+          Builder, Loc, Scrutinee.getType(), Integer);
+      auto Equal = mlir::arith::CmpIOp::create(
+          Builder, Loc, mlir::arith::CmpIPredicate::eq, Scrutinee, Constant);
+      mlir::cf::CondBranchOp::create(Builder, Loc, Equal, Body, Next);
+    }
+    Builder.setInsertionPointToStart(Body);
+    auto Value = EmitExpression(*Arm.children.back());
+    if (Builder.getInsertionBlock()->empty() ||
+        !Builder.getInsertionBlock()
+             ->back()
+             .hasTrait<mlir::OpTrait::IsTerminator>()) {
+      if (ResultAddress)
+        mlir::LLVM::StoreOp::create(Builder, Loc, Value, ResultAddress);
+      mlir::cf::BranchOp::create(Builder, Loc, Join);
+    }
+    if (Next)
+      Builder.setInsertionPointToStart(Next);
+  }
+  Builder.setInsertionPointToStart(Join);
+  return ResultAddress ? mlir::LLVM::LoadOp::create(
+                             Builder, Loc, GetType(ResultType), ResultAddress)
+                             .getResult()
+                       : mlir::Value();
+}
+
 mlir::Value codegen::IRGen::EmitCastExpression(const lex::Node &Expression) {
   const auto Loc = GetLocation(Expression.Loc);
   const auto &Source = Analysis.GetType(*Expression.children.front());
@@ -431,7 +585,9 @@ mlir::Value codegen::IRGen::EmitCastExpression(const lex::Node &Expression) {
     return mlir::arith::UIToFPOp::create(Builder, Loc, ResultType, Value);
   }
   if (sema::GetBitWidth(Source) < sema::GetBitWidth(Target)) {
-    if (sema::IsSignedInteger(Source.Element))
+    const auto *Enum =
+        Source.IsEnum() ? Analysis.GetEnum(Source.EnumName) : nullptr;
+    if (sema::IsSignedInteger(Enum ? Enum->Underlying.Element : Source.Element))
       return mlir::arith::ExtSIOp::create(Builder, Loc, ResultType, Value);
     return mlir::arith::ExtUIOp::create(Builder, Loc, ResultType, Value);
   }

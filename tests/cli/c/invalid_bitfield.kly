@@ -1,0 +1,7 @@
+import c "print.h";
+
+@main
+pub fn main() -> i32 {
+  let packet = c.make_packet();
+  return packet.flags;
+}

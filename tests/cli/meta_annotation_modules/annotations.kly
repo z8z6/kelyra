@@ -1,0 +1,9 @@
+@meta
+module annotations;
+
+import helper;
+
+@target(Target.Class T)
+pub annotation add_answer() {
+  pub fn answer() -> i32 { return helper.value(); }
+}

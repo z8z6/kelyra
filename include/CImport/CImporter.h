@@ -9,6 +9,7 @@ namespace kelyra::cimport {
 struct ImportResult {
   std::vector<sema::ExternalFunction> Functions;
   std::vector<sema::ExternalType> Types;
+  std::vector<sema::ExternalConstant> Constants;
   std::vector<std::string> Diagnostics;
 
   bool Ok() const { return Diagnostics.empty(); }

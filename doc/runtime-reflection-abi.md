@@ -1,9 +1,11 @@
 # 通用注解运行时保留 ABI 草案
 
-> 状态：`@retention(runtime)` 的通用注解序列化仍是设计草案，暂未实现。
+> 状态：`@retention(std.annotation.Retention.Runtime)` 的通用注解序列化仍是设计草案，暂未实现。
 > `@reflect` 的字段元数据和读写 API 已实现，使用独立的逐类型对象文件
 > 描述符，不采用下述通用注解 ABI。参见
 > [`kstd` 运行时反射说明](../../kstd/doc/reflection.md)。
+> 该格式不应独立冻结；统一的运行期记录规划见
+> [编译期元数据与运行期反射](reflection-architecture.md)。
 
 ## 目标与边界
 
@@ -16,8 +18,8 @@
 后续实现接受：
 
 ```kelyra
-@retention(runtime)
-annotation route(path: meta.string);
+@retention(std.annotation.Retention.Runtime)
+annotation route(path: std.util.string.StringSlice);
 ```
 
 链接产物导出两个只读符号：
@@ -107,11 +109,11 @@ u32 text
 u32 reference            // 运行时记录编号
 ```
 
-标量值保留规范化文本；`meta.type` 和 `meta.symbol` 同时填写 `reference`。未知的 `value_kind` 必须按记录长度跳过。
+标量值保留规范化文本；`std.meta.Type` 和 `std.meta.Symbol` 同时填写 `reference`。未知的 `value_kind` 必须按记录长度跳过。
 
 ## 保留闭包与编号
 
-编译器先选择包含至少一个 `runtime` 注解的目标，然后加入这些目标所引用的模块、类型、子项，以及注解参数中的 `meta.type`/`meta.symbol` 目标。闭包之外的声明不进入 blob。最终记录重新按确定顺序编号，不能把编译期 `MetaId` 直接写入文件。
+编译器先选择包含至少一个 `runtime` 注解的目标，然后加入这些目标所引用的模块、类型、子项，以及注解参数中的 `std.meta.Type`/`std.meta.Symbol` 目标。闭包之外的声明不进入 blob。最终记录重新按确定顺序编号，不能把编译期 `MetaId` 直接写入文件。
 
 私有声明只有在显式使用运行时保留注解或被闭包引用时才会导出。编译器应对此给出可配置警告，因为导出的限定名和符号名可能泄露实现信息。
 
@@ -123,7 +125,7 @@ ABI v1 冻结后，仅允许在尾部增加新表或使用已有保留位。修�
 
 ## 实现顺序
 
-1. 接受 `@retention(runtime)` 并在注解实例中保存保留级别；
+1. 接受 `@retention(std.annotation.Retention.Runtime)` 并在注解实例中保存保留级别；
 2. 从现有 `ReflectionDatabase` 计算运行时闭包并重编号；
 3. 编码并严格自校验 blob；
 4. 在最终链接阶段合并元数据并导出两个符号；

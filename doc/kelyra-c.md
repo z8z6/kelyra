@@ -1,3 +1,13 @@
+## 当前 C 头文件导入
+
+`import c "header.h";` 使用 Clang 解析头文件及同目录下被包含的头文件，并将可导入的声明放在 `c` 命名空间。导入的 C `struct` 和 `union` 可以通过名称或 `typedef` 使用；字段可以读取、赋值，也可以对嵌套字段和定长数组进行访问。字段偏移、类型大小和对齐取自 Clang 在目标平台计算的布局。
+
+C 枚举类型按其 ABI 整数类型导入，枚举项作为 `c.名称` 整数常量使用。C 枚举允许未列出的整数值，因此这里没有将其映射为封闭的 Kelyra 枚举类型。
+
+位域、柔性数组和未对齐字段不能直接访问；编译器会在访问时报告不支持的类型。导入器也不会把函数指针、预处理器宏或任意 C 表达式翻译为 Kelyra 声明。
+
+以下内容是后续 C 互操作的整体设计方向：
+
 完全赞同。但需要区分一个关键点：
 
 > **Kelyra 应该天然兼容 C 的 ABI、头文件、目标文件和构建生态，而不是成为 C 的语法超集。**
@@ -83,7 +93,7 @@ flowchart TD
 
 不能简单地认为 C 的 `long` 就是 Kelyra 的 `i64`。Windows x64 和 Linux x86-64 上的 `long` 大小不同。
 
-标准库 `kstd/src/c.kly` 提供 `c` 模块中的公开类型别名；编译器保留这些类型的目标平台 ABI 信息：
+标准库 `kstd/src/std/c/c.kly` 提供隐式导入的 `c` 模块中的公开类型别名；编译器保留这些类型的目标平台 ABI 信息：
 
 | C 类型            | Kelyra 类型    |
 | --------------- | ------------ |
@@ -206,13 +216,13 @@ struct PngReader;
 手写 C ABI 类型建议使用：
 
 ```kly
-@layout(c)
+@layout(Layout.C)
 struct Point {
     x: c.int,
     y: c.int,
 }
 
-@layout(c)
+@layout(Layout.C)
 union Value {
     integer: c.int,
     floating: c.double,
@@ -582,7 +592,7 @@ C++ ABI 包含：
 ### 第一阶段：手写 FFI
 
 * `extern "C"`
-* `@layout(c)`
+* `@layout(Layout.C)`
 * C primitive types
 * raw pointer
 * 链接 `.o/.a/.so`

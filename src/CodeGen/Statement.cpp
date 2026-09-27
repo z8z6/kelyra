@@ -19,8 +19,8 @@ namespace {
 bool IsTypeNode(lex::TokenKind Kind) {
   using K = lex::TokenKind;
   return Kind == K::ast_type || Kind == K::ast_pointer_type ||
-         Kind == K::ast_array_type || Kind == K::ast_result_types ||
-         Kind == K::ast_function_type;
+         Kind == K::ast_array_type || Kind == K::ast_slice_type ||
+         Kind == K::ast_result_types || Kind == K::ast_function_type;
 }
 
 bool HasTerminator(mlir::Block *Block) {
@@ -62,6 +62,8 @@ void codegen::IRGen::EmitBlock(const lex::Node &Block) {
 
 void codegen::IRGen::EmitStatement(const lex::Node &Statement) {
   using K = lex::TokenKind;
+  if (Statement.kind == K::ast_alias_decl)
+    return;
   using Handler = void (IRGen::*)(const lex::Node &);
   static const std::unordered_map<K, Handler> Handlers = {
       {K::ast_block, &IRGen::EmitBlockStatement},
@@ -75,6 +77,7 @@ void codegen::IRGen::EmitStatement(const lex::Node &Statement) {
       {K::ast_if, &IRGen::EmitIfStatement},
       {K::ast_when, &IRGen::EmitWhenStatement},
       {K::ast_while, &IRGen::EmitWhileStatement},
+      {K::ast_for, &IRGen::EmitForStatement},
   };
   const auto It = Handlers.find(Statement.kind);
   assert(It != Handlers.end() &&
@@ -470,4 +473,92 @@ void codegen::IRGen::EmitWhileStatement(const lex::Node &Statement) {
   if (!HasTerminator(Builder.getInsertionBlock()))
     mlir::cf::BranchOp::create(Builder, Loc, Header);
   Builder.setInsertionPointToStart(After);
+}
+
+void codegen::IRGen::EmitForStatement(const lex::Node &Statement) {
+  const auto Loc = GetLocation(Statement.Loc);
+  const auto &Info = Analysis.GetForLoop(Statement);
+  const auto &Range = *Statement.children[1];
+  const auto &RangeType = Analysis.GetType(Range);
+  Scopes.emplace_back();
+  Cleanups.emplace_back();
+
+  mlir::Value Receiver;
+  if (RangeType.IsPointer()) {
+    Receiver = EmitExpression(Range);
+  } else {
+    auto [Address, Temporary] = EmitClassSourceAddress(Range);
+    Receiver = Address;
+    if (Temporary)
+      Cleanups.back().push_back({Analysis.GetClass(RangeType), Address});
+  }
+  mlir::Value Iterator = Receiver;
+  if (!Info.IterSymbol.empty()) {
+    auto Call = mlir::func::CallOp::create(
+        Builder, Loc, Info.IterSymbol, mlir::TypeRange{GetType(Info.Iterator)},
+        mlir::ValueRange{Receiver});
+    Iterator = CreateAlloca(Info.Iterator, Loc);
+    mlir::LLVM::StoreOp::create(Builder, Loc, Call.getResult(0), Iterator);
+    Cleanups.back().push_back({Analysis.GetClass(Info.Iterator), Iterator});
+  }
+  auto MaybeAddress = CreateAlloca(Info.Maybe, Loc);
+
+  auto *Region = Builder.getInsertionBlock()->getParent();
+  auto *Header = new mlir::Block();
+  auto *Body = new mlir::Block();
+  auto *Exhausted = new mlir::Block();
+  auto *After = new mlir::Block();
+  Region->push_back(Header);
+  Region->push_back(Body);
+  Region->push_back(Exhausted);
+  Region->push_back(After);
+  mlir::cf::BranchOp::create(Builder, Loc, Header);
+
+  Builder.setInsertionPointToStart(Header);
+  auto Next = mlir::func::CallOp::create(Builder, Loc, Info.NextSymbol,
+                                         mlir::TypeRange{GetType(Info.Maybe)},
+                                         mlir::ValueRange{Iterator});
+  mlir::LLVM::StoreOp::create(Builder, Loc, Next.getResult(0), MaybeAddress);
+  auto HasValue = mlir::func::CallOp::create(
+      Builder, Loc, Info.HasValueSymbol,
+      mlir::TypeRange{GetType(sema::Type{sema::BuiltinType::Bool, {}})},
+      mlir::ValueRange{MaybeAddress});
+  mlir::cf::CondBranchOp::create(Builder, Loc, HasValue.getResult(0), Body,
+                                 Exhausted);
+
+  Builder.setInsertionPointToStart(Body);
+  Scopes.emplace_back();
+  Cleanups.emplace_back();
+  auto ItemAddress = CreateAlloca(Info.Item, Loc);
+  auto Item = mlir::func::CallOp::create(Builder, Loc, Info.ValueSymbol,
+                                         mlir::TypeRange{GetType(Info.Item)},
+                                         mlir::ValueRange{MaybeAddress});
+  mlir::LLVM::StoreOp::create(Builder, Loc, Item.getResult(0), ItemAddress);
+  mlir::func::CallOp::create(Builder, Loc,
+                             Analysis.GetClass(Info.Maybe)->DestructorSymbol,
+                             mlir::TypeRange{}, mlir::ValueRange{MaybeAddress});
+  Scopes.back().emplace(Statement.children.front()->text,
+                        Variable{Info.Item, ItemAddress, {}});
+  if (Info.Item.IsClass())
+    Cleanups.back().push_back({Analysis.GetClass(Info.Item), ItemAddress});
+  Loops.push_back({After, Header, Cleanups.size() - 1});
+  EmitBlock(*Statement.children.back());
+  Loops.pop_back();
+  if (!HasTerminator(Builder.getInsertionBlock())) {
+    EmitCleanups(Cleanups.size() - 1, Loc);
+    mlir::cf::BranchOp::create(Builder, Loc, Header);
+  }
+  Cleanups.pop_back();
+  Scopes.pop_back();
+
+  Builder.setInsertionPointToStart(Exhausted);
+  mlir::func::CallOp::create(Builder, Loc,
+                             Analysis.GetClass(Info.Maybe)->DestructorSymbol,
+                             mlir::TypeRange{}, mlir::ValueRange{MaybeAddress});
+  mlir::cf::BranchOp::create(Builder, Loc, After);
+
+  Builder.setInsertionPointToStart(After);
+  EmitCleanups(Cleanups.size() - 1, Loc);
+  Cleanups.pop_back();
+  Scopes.pop_back();
 }

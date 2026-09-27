@@ -27,7 +27,10 @@ struct Node {
   std::size_t height = 1;
   bool GenericInstance = false;
   bool GenericArgument = false;
+  bool BoundFieldName = false;
+  std::size_t AssociatedOwnerArguments = 0;
   std::string GenericOriginModule;
+  std::string AnnotationOriginModule;
 };
 
 struct ParseResult {
@@ -62,7 +65,7 @@ class Lexer {
   [[noreturn]] void fail(Location Loc, DiagnosticKind Kind);
   Token expect(std::string_view spelling);
   Token name();
-  Ptr qualified(TokenKind Kind, bool AllowWildcard = false);
+  Ptr qualified(TokenKind Kind);
   class Guard {
     Lexer &lexer;
 
@@ -79,8 +82,12 @@ class Lexer {
   Ptr expr(int minBp = 0);
   void recover(bool top, std::size_t start);
   Ptr block();
+  Ptr blockExpression();
   Ptr assembly();
   Ptr stmt();
+  void classMembers(Node &Result, bool IsInterface,
+                    bool AnnotationBody = false);
+  Ptr annotationWhen();
   Ptr decl(std::vector<Ptr> annotations = {});
   void run();
   void runExpression();

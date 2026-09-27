@@ -1,0 +1,7 @@
+@target(Target.Class T)
+annotation first() = @second;
+
+@target(Target.Class T)
+annotation second() = @first;
+
+class Example {}

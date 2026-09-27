@@ -1,0 +1,26 @@
+module main;
+
+import ann.library;
+
+alias LocalValue = i32;
+
+class Container {
+  @ann.library.public_readable
+  value: LocalValue;
+  init() {
+    value = 7;
+  }
+}
+
+@ann.library.public_api
+class Example {
+}
+
+@main
+fn main() -> i32 {
+  let container = Container();
+  if container.read_value() != 7 {
+    return 1;
+  }
+  return Example.answer();
+}

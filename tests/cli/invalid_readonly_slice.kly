@@ -1,0 +1,7 @@
+@main
+fn main() -> i32 {
+  let values: [1]i32;
+  let view: []const i32 = values[:];
+  view[0] = 1;
+  return 0;
+}

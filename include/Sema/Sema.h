@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Lexer/Lexer.h"
+#include "Sema/ConstEval.h"
 #include "Sema/Reflection.h"
 #include "Sema/Type.h"
 
@@ -30,6 +31,19 @@ struct ExternalFunction {
 struct ExternalType {
   std::string Name;
   Type Value;
+  struct Field {
+    std::string Name;
+    Type Value;
+    std::uint64_t OffsetBits = 0;
+    bool Addressable = true;
+  };
+  std::vector<Field> Fields;
+};
+
+struct ExternalConstant {
+  std::string Name;
+  Type Value;
+  std::string Integer;
 };
 
 struct CWrapper {
@@ -44,6 +58,16 @@ struct CWrapper {
 struct Warning {
   lex::Location Loc;
   std::string Message;
+};
+
+struct ForLoopInfo {
+  Type Iterator{BuiltinType::Void, {}};
+  Type Item{BuiltinType::Void, {}};
+  Type Maybe{BuiltinType::Void, {}};
+  std::string IterSymbol;
+  std::string NextSymbol;
+  std::string HasValueSymbol;
+  std::string ValueSymbol;
 };
 
 struct ClassFieldInfo {
@@ -89,14 +113,13 @@ struct ClassInfo {
   std::vector<ClassStaticFieldInfo> StaticFields;
   std::vector<ClassConstantInfo> Constants;
   bool IsInterface = false;
+  bool RawStorage = false;
   bool Final = false;
-  bool Singleton = false;
   const lex::Node *Constructor = nullptr;
   const lex::Node *Destructor = nullptr;
   const lex::Node *Copy = nullptr;
   const lex::Node *Move = nullptr;
   std::string ConstructorSymbol;
-  std::string InstanceSymbol;
   std::string DestructorSymbol;
   std::string CopySymbol;
   std::string MoveSymbol;
@@ -109,6 +132,22 @@ struct ClassInfo {
   unsigned Alignment = 1;
 };
 
+struct EnumVariantInfo {
+  std::string Name;
+  std::string Value;
+  const lex::Node *Node = nullptr;
+};
+
+struct EnumInfo {
+  const lex::Node *Node = nullptr;
+  std::string Module;
+  std::string QualifiedName;
+  Type Underlying{BuiltinType::I32, {}};
+  std::vector<EnumVariantInfo> Variants;
+  bool Public = false;
+  bool HasZero = false;
+};
+
 class Sema {
   enum AnnotationTarget : unsigned {
     AnnotationFunction = 1u << 0,
@@ -119,6 +158,7 @@ class Sema {
     AnnotationConstructor = 1u << 5,
     AnnotationDestructor = 1u << 6,
     AnnotationParameterTarget = 1u << 7,
+    AnnotationModule = 1u << 8,
   };
 
   enum class AnnotationRetention { Source, Compile };
@@ -133,7 +173,7 @@ class Sema {
     const lex::Node *Node = nullptr;
     std::string Module;
     std::vector<AnnotationParameter> Parameters;
-    unsigned Targets = AnnotationFunction | AnnotationClass |
+    unsigned Targets = AnnotationModule | AnnotationFunction | AnnotationClass |
                        AnnotationDeclaration | AnnotationField |
                        AnnotationMethod | AnnotationConstructor |
                        AnnotationDestructor | AnnotationParameterTarget;
@@ -162,6 +202,7 @@ class Sema {
     const lex::Node *Node = nullptr;
     std::string Module;
     std::string QualifiedName;
+    std::string OwnerClass;
     bool Public = false;
     unsigned State = 0;
     std::optional<Type> Resolved;
@@ -173,10 +214,19 @@ class Sema {
   std::unordered_map<const lex::Node *, Type> Types;
   std::unordered_map<std::string, FunctionInfo> Functions;
   std::unordered_map<std::string, ClassInfo> Classes;
+  std::unordered_map<std::string, EnumInfo> Enums;
   std::unordered_map<std::string, TypeDeclarationInfo> TypeDeclarations;
   std::unordered_map<std::string, AnnotationInfo> AnnotationDeclarations;
+  std::unordered_set<std::string> MetaModules;
+  std::unordered_set<const lex::Node *> MetaDeclarations;
+  bool CurrentMetaContext = false;
+  bool MetaRestrictionsReady = false;
+  std::unordered_map<std::string, std::unordered_set<std::string>>
+      RuntimeDependencies;
   std::optional<lex::ParseResult> BuiltinAnnotations;
+  std::optional<lex::ParseResult> BuiltinMeta;
   std::optional<lex::ParseResult> BuiltinCTypes;
+  const lex::Node *MetaModule = nullptr;
   std::vector<const lex::Node *> EntrypointCandidates;
   std::unordered_map<const lex::Node *, std::vector<AnnotationInstance>>
       AnnotationInstances;
@@ -198,15 +248,29 @@ class Sema {
   std::unordered_map<const lex::Node *, std::pair<std::string, std::size_t>>
       StaticFieldReferences;
   std::unordered_map<const lex::Node *, const lex::Node *> ConstantReferences;
+  std::unordered_map<const lex::Node *, std::unique_ptr<lex::Node>>
+      EvaluatedConstants;
+  std::unordered_map<const lex::Node *, ExternalType::Field>
+      ExternalFieldReferences;
+  std::unordered_map<const lex::Node *, ExternalConstant>
+      ExternalConstantReferences;
+  std::unordered_map<const lex::Node *, EnumVariantInfo> EnumVariantReferences;
+  std::unordered_map<const lex::Node *, std::string> MatchPatternValues;
   std::unordered_set<const lex::Node *> MethodCalls;
   std::unordered_map<const lex::Node *, std::string> FunctionValues;
   std::unordered_set<const lex::Node *> IndirectCalls;
   std::unordered_map<const lex::Node *, const lex::Node *> WhenBranches;
+  std::unordered_map<const lex::Node *, ForLoopInfo> ForLoops;
   std::unordered_map<std::string, std::unordered_set<std::string>> Imports;
   std::unordered_map<std::string, Type> ExternalTypes;
+  std::unordered_map<std::string, std::vector<ExternalType::Field>>
+      ExternalFields;
+  std::unordered_map<std::string, ExternalConstant> ExternalConstants;
   std::vector<ExternalFunction> ExternalFunctions;
   std::vector<CWrapper> CWrappers;
   std::vector<std::unordered_map<std::string, Type>> Scopes;
+  std::vector<std::unordered_map<std::string, Type>> LocalTypeScopes;
+  unsigned CurrentLoopDepth = 0;
   std::optional<Type> ReturnType;
   std::string CurrentModule;
   std::string CurrentClass;
@@ -235,7 +299,8 @@ class Sema {
                           std::string_view Module);
   void CheckAnnotationDefinition(const lex::Node &Declaration);
   void CheckAnnotations(const lex::Node &Target);
-  const AnnotationInfo *ResolveAnnotation(const lex::Node &Annotation) const;
+  const AnnotationInfo *ResolveAnnotation(const lex::Node &Annotation,
+                                          bool &Ambiguous) const;
   std::optional<AnnotationValue>
   ParseAnnotationValue(const lex::Node &Expression,
                        std::string_view ExpectedType);
@@ -243,9 +308,14 @@ class Sema {
                                  std::string_view Module, bool Public);
   MetaId GetOrCreateMetaType(const Type &Type);
   std::optional<Type> CheckType(const lex::Node &Node);
+  bool ContainsMetaType(const Type &Value) const;
   std::optional<Type> ResolveTypeDeclaration(TypeDeclarationInfo &Declaration);
   std::optional<Type> FinishExpression(const lex::Node &Expression, Type Result,
                                        std::optional<Type> Expected);
+  std::optional<std::string>
+  EvaluateIntegerConstant(const lex::Node &Expression);
+  std::optional<ConstValue> EvaluateConstant(const lex::Node &Expression);
+  bool CanZeroInitialize(Type Value) const;
   std::optional<Type> CheckNameExpression(const lex::Node &Expression,
                                           std::optional<Type> Expected, bool);
   std::optional<Type> CheckLiteralExpression(const lex::Node &Expression,
@@ -254,6 +324,8 @@ class Sema {
   std::optional<Type> CheckGroupExpression(const lex::Node &Expression,
                                            std::optional<Type> Expected, bool);
   std::optional<Type> CheckIndexExpression(const lex::Node &Expression,
+                                           std::optional<Type> Expected, bool);
+  std::optional<Type> CheckSliceExpression(const lex::Node &Expression,
                                            std::optional<Type> Expected, bool);
   std::optional<Type> CheckMemberExpression(const lex::Node &Expression,
                                             std::optional<Type> Expected, bool);
@@ -267,6 +339,13 @@ class Sema {
                                           std::optional<Type> Expected, bool);
   std::optional<Type> CheckMetaExpression(const lex::Node &Expression,
                                           std::optional<Type> Expected, bool);
+  std::optional<Type> CheckMetaBlockExpression(const lex::Node &Expression,
+                                               std::optional<Type> Expected,
+                                               bool);
+  std::optional<Type> CheckBlockExpression(const lex::Node &Expression,
+                                           std::optional<Type> Expected, bool);
+  std::optional<Type> CheckMatchExpression(const lex::Node &Expression,
+                                           std::optional<Type> Expected, bool);
   void CheckFunction(const lex::Node &Function);
   void CheckClassMember(const lex::Node &Member, const ClassInfo &Class);
   bool CheckForwardConstructor(const lex::Node &Expression,
@@ -274,6 +353,7 @@ class Sema {
   void CheckTransferAccess(const Type &Value, bool Move, const lex::Node &Site);
   void CheckBlock(const lex::Node &Block, unsigned LoopDepth = 0);
   void CheckBlockStatement(const lex::Node &Statement, unsigned LoopDepth);
+  void CheckAliasStatement(const lex::Node &Statement, unsigned LoopDepth);
   void CheckLetStatement(const lex::Node &Statement, unsigned LoopDepth);
   void CheckAssignStatement(const lex::Node &Statement, unsigned LoopDepth);
   void CheckExpressionStatement(const lex::Node &Statement, unsigned LoopDepth);
@@ -281,6 +361,7 @@ class Sema {
   void CheckIfStatement(const lex::Node &Statement, unsigned LoopDepth);
   void CheckWhenStatement(const lex::Node &Statement, unsigned LoopDepth);
   void CheckWhileStatement(const lex::Node &Statement, unsigned LoopDepth);
+  void CheckForStatement(const lex::Node &Statement, unsigned LoopDepth);
   void CheckLoopControlStatement(const lex::Node &Statement,
                                  unsigned LoopDepth);
   void CheckAsmStatement(const lex::Node &Statement, unsigned LoopDepth);
@@ -292,20 +373,39 @@ class Sema {
   const Type *FindName(std::string_view Name) const;
   std::optional<MetaId> ResolveMetaTarget(const lex::Node &Target);
   std::optional<bool> EvaluateWhen(const lex::Node &Expression);
+  std::optional<ConstValue>
+  EvaluateMetaIntrinsic(const lex::Node &Call,
+                        const std::vector<ConstValue> &Arguments);
   bool AlwaysReturns(const lex::Node &Node) const;
 
 public:
   bool Check(const lex::Node &Module);
-  bool
-  CheckModules(const std::vector<ModuleInput> &Modules,
-               const std::vector<ExternalFunction> &ExternalDeclarations = {},
-               const std::vector<ExternalType> &ExternalTypeDeclarations = {});
+  bool CheckModules(
+      const std::vector<ModuleInput> &Modules,
+      const std::vector<ExternalFunction> &ExternalDeclarations = {},
+      const std::vector<ExternalType> &ExternalTypeDeclarations = {},
+      const std::vector<ExternalConstant> &ExternalConstantDeclarations = {});
   bool CheckEntrypoint(const lex::Node &Module);
+  bool IsMetaModule(std::string_view Name) const {
+    return MetaModules.contains(std::string(Name));
+  }
+  bool IsMetaDeclaration(const lex::Node &Node) const {
+    return MetaDeclarations.contains(&Node);
+  }
+  const std::unordered_set<std::string> &
+  GetRuntimeDependencies(std::string_view Module) const {
+    static const std::unordered_set<std::string> Empty;
+    const auto It = RuntimeDependencies.find(std::string(Module));
+    return It == RuntimeDependencies.end() ? Empty : It->second;
+  }
   const std::vector<lex::Diagnostic> &GetDiagnostics() const {
     return Diagnostics;
   }
   const std::vector<Warning> &GetWarnings() const { return Warnings; }
   const Type &GetType(const lex::Node &Node) const { return Types.at(&Node); }
+  const ForLoopInfo &GetForLoop(const lex::Node &Node) const {
+    return ForLoops.at(&Node);
+  }
   const std::string &GetSymbol(const lex::Node &Node) const {
     return Symbols.at(&Node);
   }
@@ -319,12 +419,29 @@ public:
   const CWrapper *GetCWrapper(const lex::Node &Node) const;
   const std::vector<CWrapper> &GetCWrappers() const { return CWrappers; }
   const ClassInfo *GetClass(std::string_view Name) const;
+  const EnumInfo *GetEnum(std::string_view Name) const;
   const ClassInfo *GetClass(const Type &Value) const;
   const ClassFieldInfo *GetField(const lex::Node &Node) const;
   const ClassStaticFieldInfo *GetStaticField(const lex::Node &Node) const;
   const lex::Node *GetConstant(const lex::Node &Node) const {
     const auto It = ConstantReferences.find(&Node);
     return It == ConstantReferences.end() ? nullptr : It->second;
+  }
+  const ExternalType::Field *GetExternalField(const lex::Node &Node) const {
+    const auto It = ExternalFieldReferences.find(&Node);
+    return It == ExternalFieldReferences.end() ? nullptr : &It->second;
+  }
+  const ExternalConstant *GetExternalConstant(const lex::Node &Node) const {
+    const auto It = ExternalConstantReferences.find(&Node);
+    return It == ExternalConstantReferences.end() ? nullptr : &It->second;
+  }
+  const EnumVariantInfo *GetEnumVariant(const lex::Node &Node) const {
+    const auto It = EnumVariantReferences.find(&Node);
+    return It == EnumVariantReferences.end() ? nullptr : &It->second;
+  }
+  const std::string *GetMatchPatternValue(const lex::Node &Node) const {
+    const auto It = MatchPatternValues.find(&Node);
+    return It == MatchPatternValues.end() ? nullptr : &It->second;
   }
   std::size_t GetFieldIndex(const lex::Node &Node) const;
   const ClassInfo *GetFieldOwner(const lex::Node &Node) const {

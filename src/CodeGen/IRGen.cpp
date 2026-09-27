@@ -63,8 +63,8 @@ namespace {
 bool IsTypeNode(lex::TokenKind Kind) {
   using K = lex::TokenKind;
   return Kind == K::ast_type || Kind == K::ast_pointer_type ||
-         Kind == K::ast_array_type || Kind == K::ast_result_types ||
-         Kind == K::ast_function_type;
+         Kind == K::ast_array_type || Kind == K::ast_slice_type ||
+         Kind == K::ast_result_types || Kind == K::ast_function_type;
 }
 
 bool HasTerminator(mlir::Block *Block) {
@@ -166,6 +166,11 @@ mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
     return mlir::LLVM::LLVMArrayType::get(GetType(Type.Indexed()),
                                           Type.ArrayLength());
   }
+  if (Type.IsSlice()) {
+    return mlir::LLVM::LLVMStructType::getLiteral(
+        &Context,
+        {mlir::LLVM::LLVMPointerType::get(&Context), Builder.getI64Type()});
+  }
   if (Type.IsPointer() && Type.PointerDepth == 1 && Type.Element == T::Class) {
     const auto *Class = Analysis.GetClass(Type.ClassName);
     if (Class && Class->IsInterface) {
@@ -212,6 +217,8 @@ mlir::Type codegen::IRGen::GetType(const sema::Type &Type) {
   if (Type.IsRecord())
     return mlir::LLVM::LLVMArrayType::get(Builder.getI8Type(),
                                           (sema::GetBitWidth(Type) + 7) / 8);
+  if (Type.IsEnum())
+    return Builder.getIntegerType(sema::GetBitWidth(Type));
   mlir::Type Result;
   if (sema::IsInteger(Type.Element))
     Result = Builder.getIntegerType(sema::GetBitWidth(Type));
@@ -271,8 +278,75 @@ mlir::Value codegen::IRGen::CreateAlloca(const sema::Type &Type,
                      : sema::GetAlignment(Type));
 }
 
+mlir::Value codegen::IRGen::EmitSliceIndex(const lex::Node &Expression) {
+  const auto Loc = GetLocation(Expression.Loc);
+  auto Value = EmitExpression(Expression);
+  const auto &Type = Analysis.GetType(Expression);
+  if (sema::GetBitWidth(Type) == 64)
+    return Value;
+  if (sema::IsSignedInteger(Type.Element))
+    return mlir::arith::ExtSIOp::create(Builder, Loc, Builder.getI64Type(),
+                                        Value);
+  return mlir::arith::ExtUIOp::create(Builder, Loc, Builder.getI64Type(),
+                                      Value);
+}
+
+std::pair<mlir::Value, mlir::Value>
+codegen::IRGen::EmitSliceParts(const lex::Node &Expression) {
+  const auto Loc = GetLocation(Expression.Loc);
+  const auto &Type = Analysis.GetType(Expression);
+  if (Type.IsSlice()) {
+    auto Value = EmitExpression(Expression);
+    return {mlir::LLVM::ExtractValueOp::create(Builder, Loc, Value, 0),
+            mlir::LLVM::ExtractValueOp::create(Builder, Loc, Value, 1)};
+  }
+  auto Address = EmitAddress(Expression);
+  auto Zero = mlir::arith::ConstantIntOp::create(Builder, Loc, 0, 32);
+  auto Data = mlir::LLVM::GEPOp::create(
+      Builder, Loc, mlir::LLVM::LLVMPointerType::get(&Context), GetType(Type),
+      Address, mlir::ValueRange{Zero, Zero});
+  auto Length =
+      mlir::arith::ConstantIntOp::create(Builder, Loc, Type.ArrayLength(), 64);
+  return {Data, Length};
+}
+
+void codegen::IRGen::EmitSliceBoundsCheck(mlir::Value Valid,
+                                          mlir::Location Loc) {
+  auto *Region = Builder.getInsertionBlock()->getParent();
+  auto *Failure = new mlir::Block();
+  auto *Continue = new mlir::Block();
+  Region->push_back(Failure);
+  Region->push_back(Continue);
+  mlir::cf::CondBranchOp::create(Builder, Loc, Valid, Continue, Failure);
+  Builder.setInsertionPointToStart(Failure);
+  mlir::LLVM::Trap::create(Builder, Loc);
+  mlir::LLVM::UnreachableOp::create(Builder, Loc);
+  Builder.setInsertionPointToStart(Continue);
+}
+
 mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
   using K = lex::TokenKind;
+  if (const auto *Field = Analysis.GetExternalField(Expression)) {
+    const auto &Base = *Expression.children.front();
+    const auto &BaseType = Analysis.GetType(Base);
+    const auto Loc = GetLocation(Expression.Loc);
+    mlir::Value Address;
+    if (BaseType.IsPointer()) {
+      Address = EmitExpression(Base);
+    } else if (Base.kind == K::ast_name || Base.kind == K::ast_member ||
+               Base.kind == K::ast_index ||
+               (Base.kind == K::ast_unary && Base.text == "*")) {
+      Address = EmitAddress(Base);
+    } else {
+      Address = CreateAlloca(BaseType, Loc);
+      mlir::LLVM::StoreOp::create(Builder, Loc, EmitExpression(Base), Address);
+    }
+    auto Offset = mlir::arith::ConstantIntOp::create(Builder, Loc,
+                                                     Field->OffsetBits / 8, 64);
+    return mlir::LLVM::GEPOp::create(
+        Builder, Loc, mlir::LLVM::LLVMPointerType::get(&Context),
+        Builder.getI8Type(), Address, mlir::ValueRange{Offset});
+  }
   if (const auto *Field = Analysis.GetStaticField(Expression))
     return mlir::LLVM::AddressOfOp::create(
         Builder, GetLocation(Expression.Loc),
@@ -300,6 +374,18 @@ mlir::Value codegen::IRGen::EmitAddress(const lex::Node &Expression) {
 
   const auto &Base = *Expression.children[0];
   const auto BaseType = Analysis.GetType(Base);
+  if (BaseType.IsSlice()) {
+    auto [Data, Length] = EmitSliceParts(Base);
+    auto Index = EmitSliceIndex(*Expression.children[1]);
+    auto Valid = mlir::arith::CmpIOp::create(
+        Builder, GetLocation(Expression.Loc), mlir::arith::CmpIPredicate::ult,
+        Index, Length);
+    EmitSliceBoundsCheck(Valid, GetLocation(Expression.Loc));
+    return mlir::LLVM::GEPOp::create(Builder, GetLocation(Expression.Loc),
+                                     mlir::LLVM::LLVMPointerType::get(&Context),
+                                     GetType(BaseType.Indexed()), Data,
+                                     mlir::ValueRange{Index});
+  }
   auto BaseAddress = EmitAddress(Base);
   const auto &IndexExpression = *Expression.children[1];
   const auto &IndexType = Analysis.GetType(IndexExpression);
@@ -383,11 +469,29 @@ void codegen::IRGen::EmitFunction(const lex::Node &Function,
     return;
   if (EmitReflectIntrinsic(Function, Func, DeclarationOnly))
     return;
+  if (EmitSliceIntrinsic(Function, Func, DeclarationOnly))
+    return;
   for (const auto &Annotation : Analysis.GetAnnotations(Function))
     if (Annotation.Name == "std.annotation.inline" &&
         !Annotation.Arguments.empty() &&
-        Annotation.Arguments.front().Value.Text == "always")
+        Annotation.Arguments.front().Value.Text ==
+            "std.annotation.InlineMode.Always")
       Func->setAttr("kelyra.always_inline", Builder.getUnitAttr());
+  if (std::any_of(Analysis.GetAnnotations(Function).begin(),
+                  Analysis.GetAnnotations(Function).end(),
+                  [](const auto &Annotation) {
+                    return Annotation.Name == "std.annotation.intrinsic";
+                  })) {
+    Func.setPrivate();
+    if (!DeclarationOnly) {
+      auto *Entry = Func.addEntryBlock();
+      Builder.setInsertionPointToStart(Entry);
+      const auto Loc = GetLocation(Function.Loc);
+      mlir::LLVM::Trap::create(Builder, Loc);
+      mlir::LLVM::UnreachableOp::create(Builder, Loc);
+    }
+    return;
+  }
   if (DeclarationOnly || !Body) {
     // The definition lives in a linked library; emit only the declaration.
     Func.setPrivate();
@@ -514,6 +618,8 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
     const bool External = ExternalModules.count(Module) != 0;
     for (const auto &Child : Module->children) {
       if (Child->kind == K::ast_class) {
+        if (Analysis.IsMetaDeclaration(*Child))
+          continue;
         const bool DeclarationOnly = External && !Child->GenericInstance;
         const sema::ClassInfo *Class = nullptr;
         for (const auto &[Name, Candidate] : Analysis.GetClasses())
@@ -556,6 +662,8 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
           if (Member->kind == K::ast_function ||
               Member->kind == K::ast_constructor ||
               Member->kind == K::ast_destructor) {
+            if (Analysis.IsMetaDeclaration(*Member))
+              continue;
             if (std::any_of(Member->children.begin(), Member->children.end(),
                             [](const auto &Part) {
                               return Part->kind == K::ast_generic_pack;
@@ -586,13 +694,11 @@ codegen::IRGen::Generate(llvm::ArrayRef<const lex::Node *> Modules) {
           Builder.setInsertionPointToEnd(Result.getBody());
           EmitDefaultTransfer(*Class, true, DeclarationOnly);
         }
-        if (Class->Singleton) {
-          Builder.setInsertionPointToEnd(Result.getBody());
-          EmitSingletonAccessor(*Class, DeclarationOnly);
-        }
         continue;
       }
       if (Child->kind != K::ast_function)
+        continue;
+      if (Analysis.IsMetaDeclaration(*Child))
         continue;
       Builder.setInsertionPointToEnd(Result.getBody());
       EmitFunction(*Child, nullptr, External && !Child->GenericInstance);

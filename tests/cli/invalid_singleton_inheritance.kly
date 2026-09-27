@@ -1,6 +1,0 @@
-@singleton
-class OnlyOne {
-}
-
-class Another: OnlyOne {
-}

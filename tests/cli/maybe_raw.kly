@@ -1,0 +1,38 @@
+import std.util.maybe;
+import std.memory;
+
+class Box {
+  value: i32;
+  pub init(value: i32) {
+    this.value = value;
+  }
+  pub fn get() -> i32 {
+    return value;
+  }
+}
+
+@main
+fn main() -> i32 {
+  let empty = std.util.maybe.none<Box>();
+  if empty.has_value() {
+    return 1;
+  }
+  let present = std.util.maybe.some<Box>(Box(42));
+  if !present.has_value() {
+    return 2;
+  }
+  let copy = present;
+  let value = copy.value();
+  if value.get() != 42 {
+    return 3;
+  }
+  if std.memory.size_of<std.util.maybe.Maybe<Box>>(
+      0 as*std.util.maybe.Maybe<Box>) != 8 {
+    return 4;
+  }
+  if std.memory.size_of<std.util.maybe.Maybe<i64>>(
+      0 as*std.util.maybe.Maybe<i64>) != 16 {
+    return 5;
+  }
+  return 42;
+}

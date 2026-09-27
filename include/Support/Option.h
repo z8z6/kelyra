@@ -81,6 +81,12 @@ public:
   inline static llvm::cl::opt<bool> EmitExecutable{
       "emit-exe", llvm::cl::desc("Generate a native executable"),
       llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<bool> EmitSpirv{
+      "emit-spirv", llvm::cl::desc("Compile a shader entry to Vulkan SPIR-V"),
+      llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<std::string> ShaderEntry{
+      "shader-entry", llvm::cl::desc("Kelyra shader entry function name"),
+      llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<std::string> Runtime{
       "runtime", llvm::cl::desc("Executable runtime: host or freestanding"),
       llvm::cl::init("host"), llvm::cl::cat(KelyraCategory)};

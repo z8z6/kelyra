@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace kelyra::codegen {
@@ -69,14 +70,21 @@ class IRGen {
   Variable *FindVariable(std::string_view Name);
   mlir::Value CreateAlloca(const sema::Type &Type, mlir::Location Loc);
   mlir::Value EmitAddress(const lex::Node &Expression);
+  mlir::Value EmitSliceIndex(const lex::Node &Expression);
+  void EmitSliceBoundsCheck(mlir::Value Valid, mlir::Location Loc);
+  std::pair<mlir::Value, mlir::Value>
+  EmitSliceParts(const lex::Node &Expression);
   mlir::Value EmitNameExpression(const lex::Node &Expression);
   mlir::Value EmitIndexExpression(const lex::Node &Expression);
+  mlir::Value EmitSliceExpression(const lex::Node &Expression);
   mlir::Value EmitCallExpression(const lex::Node &Expression);
   mlir::Value EmitLiteralExpression(const lex::Node &Expression);
   mlir::Value EmitGroupExpression(const lex::Node &Expression);
   mlir::Value EmitUnaryExpression(const lex::Node &Expression);
   mlir::Value EmitBinaryExpression(const lex::Node &Expression);
   mlir::Value EmitCastExpression(const lex::Node &Expression);
+  mlir::Value EmitBlockExpression(const lex::Node &Expression);
+  mlir::Value EmitMatchExpression(const lex::Node &Expression);
   mlir::Value EmitExpression(const lex::Node &Expression);
   mlir::Value EmitInterfaceConversion(const lex::Node &Expression,
                                       mlir::Value Object,
@@ -93,6 +101,7 @@ class IRGen {
   void EmitIfStatement(const lex::Node &Statement);
   void EmitWhenStatement(const lex::Node &Statement);
   void EmitWhileStatement(const lex::Node &Statement);
+  void EmitForStatement(const lex::Node &Statement);
   void EmitStatement(const lex::Node &Statement);
   void EmitFunction(const lex::Node &Function,
                     const sema::ClassInfo *Owner = nullptr,
@@ -101,6 +110,8 @@ class IRGen {
                            bool DeclarationOnly);
   bool EmitReflectIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
                             bool DeclarationOnly);
+  bool EmitSliceIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
+                          bool DeclarationOnly);
   void EmitReflectionGlobals(llvm::ArrayRef<const lex::Node *> Modules,
                              mlir::ModuleOp Output);
   void EmitConstruction(const lex::Node &Expression, mlir::Value Address);
@@ -118,8 +129,6 @@ class IRGen {
   void EmitDefaultDestructorDeclaration(const sema::ClassInfo &Class);
   void EmitDefaultTransfer(const sema::ClassInfo &Class, bool Move,
                            bool DeclarationOnly);
-  void EmitSingletonAccessor(const sema::ClassInfo &Class,
-                             bool DeclarationOnly);
   void EmitTransfer(const sema::ClassInfo &Class, mlir::Value Target,
                     mlir::Value Source, bool Move, mlir::Location Loc);
   mlir::Value FieldAddress(const sema::ClassInfo &Class, mlir::Value Address,

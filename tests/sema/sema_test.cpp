@@ -43,7 +43,7 @@ TEST(Sema, FunctionValuesRespectImports) {
   for (const auto Name :
        {"library.visible", "visible", "library.hidden", "hidden"}) {
     auto Main =
-        lex::Lexer().parse(std::string("module app; import library.*; fn "
+        lex::Lexer().parse(std::string("module app; import library; fn "
                                        "factory() -> fn() -> i32 { return ") +
                            Name + "; }");
     ASSERT_TRUE(Main.ok());
@@ -138,7 +138,7 @@ fn capacity() -> i32 { return Reader.CAPACITY; }
            "= 2; }",
            "@interface @interface class Bad {}",
            "@interface(1) class Bad {}",
-           "@interface @layout(c) class Bad {}",
+           "@interface @layout(\"c\") class Bad {}",
            "@interface fn bad() {}",
            "annotation interface();",
        }) {
@@ -233,7 +233,7 @@ TEST(Sema, CLayoutAnnotation) {
     long value;
   };
   auto Parsed = lex::Lexer().parse(R"(
-@layout(c)
+@layout(Layout.C)
 class Pair {
   pub tag: c.char;
   pub fraction: c.float;
@@ -253,10 +253,11 @@ class Pair {
   EXPECT_EQ(Class->Fields[3].Offset, offsetof(CPair, value));
   EXPECT_EQ(Class->Size, sizeof(CPair));
   for (const auto Source : {
-           "@layout(c) fn f() {}",
+           "@layout(\"c\") fn f() {}",
            "@layout(unknown) class Bad {}",
-           "@layout(c) @layout(c) class Bad {}",
-           "@layout(c) class Bad { value: char; }",
+           "@layout(Layout.C) @layout(Layout.C) "
+           "class Bad {}",
+           "@layout(Layout.C) class Bad { value: char; }",
        }) {
     auto Invalid = lex::Lexer().parse(Source);
     ASSERT_TRUE(Invalid.ok()) << Source;
@@ -264,10 +265,98 @@ class Pair {
   }
 }
 
+TEST(Sema, EnumAnnotationsAndMatchValidation) {
+  auto Valid = lex::Lexer().parse(R"(
+enum Mode: u8 { Off, On = Off + 3 }
+enum Signed: i8 { Negative = -128, Zero = 0, Positive = 127 }
+alias Selected = Mode;
+annotation choice(kind: Mode);
+@choice(Mode.On)
+class Box {}
+@layout(Layout.System)
+class Native {}
+@interface
+class Constants { const Two: i32 = 1 + 1; }
+fn choose(mode: Mode) -> i32 {
+  return match mode { (Mode.Off) => 0, Mode.On => 1 };
+}
+fn classify(value: i32) -> i32 {
+  return match value { Constants.Two => 2, _ => 0 };
+}
+fn copy(value: Selected) -> Mode { return value; }
+
+)");
+  ASSERT_TRUE(Valid.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Valid.root));
+  const auto *Mode = Analysis.GetEnum("Mode");
+  ASSERT_NE(Mode, nullptr);
+  ASSERT_EQ(Mode->Variants.size(), 2u);
+  EXPECT_EQ(Mode->Variants[1].Value, "3");
+  const auto *Signed = Analysis.GetEnum("Signed");
+  ASSERT_NE(Signed, nullptr);
+  EXPECT_TRUE(Signed->HasZero);
+  EXPECT_EQ(Signed->Variants.front().Value, "-128");
+  for (const auto &Child : Valid.root->children)
+    if (Child->kind == lex::TokenKind::ast_function && Child->text == "copy")
+      for (const auto &Part : Child->children)
+        if (Part->kind == lex::TokenKind::ast_parameter)
+          EXPECT_EQ(sema::GetBitWidth(Analysis.GetType(*Part)), 8u);
+  for (const auto Source : {
+           "enum E { A, A }",
+           "enum E { A = 1, B = 1 }",
+           "enum E: u8 { A = 256 }",
+           "enum E: u8 { A = 255, B }",
+           "enum E { A = 1 } fn f() { let value: E; }",
+           "enum E { A = 1 } class Box { value: E; }",
+           "enum E { A = 1 } class Box { @static value: E; }",
+           "enum E { A, B } fn f(e: E) -> i32 { return match e { E.A => 1 }; }",
+           "fn f(x: i32) -> i32 { return match x { 1 => 1 }; }",
+           "fn f(x: i32) -> i32 { return match x { 1 + 1 => 1, 2 => 2, _ => 0 "
+           "}; }",
+           "fn f(x: i32) -> i32 { return match x { _ => 1, 2 => 2 }; }",
+           "enum E { A } fn f(e: E) -> i32 { return match e { E.A => 1, _ => 2 "
+           "}; }",
+           "fn f(x: bool) -> i32 { return match x { true => 1, true => 2, "
+           "false => 0 }; }",
+           "enum E { A } fn f() -> bool { return E.A == 0; }",
+           "enum E { A } fn f() -> E { return 0 as E; }",
+           "enum E { A } annotation choice(kind: E); @choice(E.B) class Box {}",
+           "@layout(\"c\") class Box { field: i32; }",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Invalid = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Invalid.ok());
+    EXPECT_FALSE(Analysis.Check(*Invalid.root));
+  }
+}
+
+TEST(Sema, ImportedEnumKeepsItsTypeIdentity) {
+  auto Library =
+      lex::Lexer().parse("module colors; pub enum Color: u8 { Red, Blue } ");
+  auto Main = lex::Lexer().parse(R"(
+module app;
+import colors;
+fn choose(value: Color) -> i32 {
+  return match value { Color.Red => 1, Color.Blue => 2 };
+}
+)");
+  ASSERT_TRUE(Library.ok());
+  ASSERT_TRUE(Main.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {Library.root.get(), false}}));
+  auto Private =
+      lex::Lexer().parse("module colors; enum Color: u8 { Red, Blue }");
+  ASSERT_TRUE(Private.ok());
+  EXPECT_FALSE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {Private.root.get(), false}}));
+}
+
 TEST(Sema, ClassesThisAndMetadata) {
   auto Parsed = lex::Lexer().parse(R"(
-@target(class) annotation resource();
-@target(method) annotation query();
+@target(Target.Class) annotation resource();
+@target(Target.Method) annotation query();
 @resource
 class Value {
   number: i32;
@@ -283,8 +372,8 @@ fn use() -> i32 {
   pointer.set(8);
   return (*pointer).get();
 }
-annotation typed(value: meta.type);
-@typed(Value) fn annotated() {}
+annotation typed(value: std.meta.Type);
+@typed(meta(Value)) fn annotated() {}
 )");
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
@@ -404,6 +493,7 @@ pub class PrivateInit { init() {} }
            "let a = library.Item(1); return a.get();",
            "let a = library.Item(1); return a.value;",
            "let a: library.Item = library.Item(1); return a.get();",
+           "let a = Item(1); return a.value;",
        }) {
     auto Main = lex::Lexer().parse(
         std::string("module app; import library; fn main() -> i32 {") + Body +
@@ -418,10 +508,9 @@ pub class PrivateInit { init() {} }
            "let a = library.Item(1); a.hidden(); return 0;",
            "let a = library.Hidden(); return 0;",
            "let a = library.PrivateInit(); return 0;",
-           "let a = Item(1); return 0;",
        }) {
     auto Main = lex::Lexer().parse(
-        std::string("module app; import library.*; fn main() -> i32 {") + Body +
+        std::string("module app; import library; fn main() -> i32 {") + Body +
         "}");
     ASSERT_TRUE(Main.ok());
     sema::Sema Analysis;
@@ -533,12 +622,12 @@ TEST(Sema, ModulesRespectPublicVisibility) {
             lex::DiagnosticKind::PrivateDeclaration);
 }
 
-TEST(Sema, RejectAmbiguousWildcardFunction) {
+TEST(Sema, RejectAmbiguousImportedFunction) {
   lex::Lexer Lexer;
   auto Main = Lexer.parse(R"(
 module app.main;
-import first.*;
-import second.*;
+import first;
+import second;
 fn main() -> i32 { return answer(); }
 )");
   auto First =
@@ -555,6 +644,79 @@ fn main() -> i32 { return answer(); }
   ASSERT_FALSE(Analysis.GetDiagnostics().empty());
   EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
             lex::DiagnosticKind::AmbiguousName);
+}
+
+TEST(Sema, PlainImportExposesPublicTypesAndFunctions) {
+  auto Main = lex::Lexer().parse(R"(
+module app;
+import library;
+fn make() -> Item { return Item(); }
+fn answer() -> Number { return value(); }
+)");
+  auto Library = lex::Lexer().parse(R"(
+module library;
+pub class Item {}
+pub alias Number = i32;
+pub fn value() -> i32 { return 42; }
+)");
+  ASSERT_TRUE(Main.ok());
+  ASSERT_TRUE(Library.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {Library.root.get(), false}}));
+}
+
+TEST(Sema, AmbiguousImportedTypeRequiresQualification) {
+  auto First = lex::Lexer().parse("module first; pub class Item {}");
+  auto Second = lex::Lexer().parse("module second; pub class Item {}");
+  ASSERT_TRUE(First.ok());
+  ASSERT_TRUE(Second.ok());
+  for (const auto Source : {
+           "module app; import first; import second; fn use(value: Item) {}",
+           "module app; import first; import second; fn use(value: first.Item) "
+           "{}",
+       }) {
+    auto Main = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Main.ok());
+    sema::Sema Analysis;
+    const bool Qualified =
+        std::string_view(Source).find("first.Item") != std::string_view::npos;
+    EXPECT_EQ(Analysis.CheckModules({{Main.root.get(), true},
+                                     {First.root.get(), false},
+                                     {Second.root.get(), false}}),
+              Qualified);
+    if (!Qualified) {
+      ASSERT_FALSE(Analysis.GetDiagnostics().empty());
+      EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
+                lex::DiagnosticKind::AmbiguousName);
+    }
+  }
+}
+
+TEST(Sema, AmbiguousImportedAnnotationRequiresQualification) {
+  auto First = lex::Lexer().parse("module first; pub annotation tag();");
+  auto Second = lex::Lexer().parse("module second; pub annotation tag();");
+  ASSERT_TRUE(First.ok());
+  ASSERT_TRUE(Second.ok());
+  for (const auto Source : {
+           "module app; import first; import second; @tag class Item {}",
+           "module app; import first; import second; @first.tag class Item {}",
+       }) {
+    auto Main = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Main.ok());
+    sema::Sema Analysis;
+    const bool Qualified =
+        std::string_view(Source).find("@first.tag") != std::string_view::npos;
+    EXPECT_EQ(Analysis.CheckModules({{Main.root.get(), true},
+                                     {First.root.get(), false},
+                                     {Second.root.get(), false}}),
+              Qualified);
+    if (!Qualified) {
+      ASSERT_FALSE(Analysis.GetDiagnostics().empty());
+      EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
+                lex::DiagnosticKind::AmbiguousName);
+    }
+  }
 }
 
 TEST(Sema, InlineAssemblyAndForwardFunction) {
@@ -577,8 +739,8 @@ fn later() -> i32 {
 TEST(Sema, UserDefinedAnnotations) {
   lex::Lexer Lexer;
   auto Parsed = Lexer.parse(R"(
-@target(function)
-annotation route(path: meta.string, method: meta.string = "GET");
+@target(Target.Function)
+annotation route(path: std.util.string.StringSlice, method: std.util.string.StringSlice = "GET");
 
 @route("/users", method = "POST")
 fn handler() -> i32 { return 0; }
@@ -600,7 +762,7 @@ fn handler() -> i32 { return 0; }
 TEST(Sema, InlineAndDeprecatedAnnotations) {
   auto Parsed = lex::Lexer().parse(R"(
 @inline fn automatic() -> i32 { return 1; }
-@inline(always) @deprecated("use automatic")
+@inline(InlineMode.Always) @deprecated("use automatic")
 fn old() -> i32 { return 2; }
 fn caller() -> i32 { return old(); }
 )");
@@ -615,11 +777,12 @@ fn caller() -> i32 { return old(); }
             "use of deprecated function 'old': use automatic");
   const auto &Automatic = Analysis.GetAnnotations(*Parsed.root->children[0]);
   ASSERT_EQ(Automatic.size(), 1u);
-  EXPECT_EQ(Automatic.front().Arguments[0].Value.Text, "auto");
+  EXPECT_EQ(Automatic.front().Arguments[0].Value.Text,
+            "std.annotation.InlineMode.Auto");
   for (const auto Source : {
            "@inline(never) fn f() -> i32 { return 0; }",
-           "@inline(always) fn f();",
-           "@inline(always) class Box {}",
+           "@inline(InlineMode.Always) fn f();",
+           "@inline(InlineMode.Always) class Box {}",
            "@deprecated class Box {}",
        }) {
     auto Invalid = lex::Lexer().parse(Source);
@@ -637,8 +800,9 @@ TEST(Sema, RejectInvalidUserAnnotations) {
            "annotation tiny(value: u8); @tiny(256) fn f() -> i32 { return 0; }",
            "annotation flag(value: bool); @flag(true) @flag(false) fn f() -> "
            "i32 { return 0; }",
-           "@target(annotation) annotation marker(); @marker fn f() -> i32 { "
+           "@target(Target.Annotation) annotation marker(); @marker fn f() -> i32 { "
            "return 0; }",
+           "@target(Target.Unknown) annotation marker();",
            "@missing fn f() -> i32 { return 0; }",
        }) {
     auto Parsed = Lexer.parse(Source);
@@ -654,15 +818,20 @@ TEST(Sema, AnnotationModulesDefaultsAndRepeatable) {
 module app;
 import web;
 @web.route("/users")
+@web.transient
 @web.tag(1)
 @web.tag(2)
 fn handler() -> i32 { return 0; }
 )");
   auto Web = Lexer.parse(R"(
 module web;
-@target(function)
-pub annotation route(path: meta.string, method: meta.string = "GET");
-@target(function)
+@target(Target.Function)
+@retention(Retention.Compile)
+pub annotation route(path: std.util.string.StringSlice, method: std.util.string.StringSlice = "GET");
+@target(Target.Function)
+@retention(Retention.Source)
+pub annotation transient();
+@target(Target.Function)
 @repeatable
 pub annotation tag(value: i32);
 )");
@@ -682,7 +851,7 @@ pub annotation tag(value: i32);
 TEST(Sema, ReflectionMetadataAndReferences) {
   lex::Lexer Lexer;
   auto Parsed = Lexer.parse(R"(
-annotation binding(value_type: meta.type, function: meta.symbol);
+annotation binding(value_type: std.meta.Type, function: std.meta.Function);
 fn convert(value: i32) -> i32 { return value; }
 @binding(meta(*i32), meta(convert))
 fn registered() -> i32 { return 0; }
@@ -717,6 +886,57 @@ fn registered() -> i32 { return 0; }
   const auto Registered = Reflection.GetId(*Parsed.root->children.back());
   ASSERT_TRUE(Registered.has_value());
   EXPECT_EQ(Reflection.Get(*Registered).Annotations.size(), 1u);
+}
+
+TEST(Sema, AnnotationParametersUseConcreteMetaHandles) {
+  auto Parsed = lex::Lexer().parse(R"(
+annotation mark();
+class Box { pub value: i32; }
+fn handler() {}
+annotation references(
+  symbol: std.meta.Symbol,
+  kind: std.meta.Type,
+  owner: std.meta.Class,
+  field: std.meta.Field,
+  function: std.meta.Function,
+  marker: std.meta.Annotation,
+  label: std.util.string.StringSlice = "ok",
+);
+@references(meta(Box), meta(Box), meta(Box), meta(Box.value),
+            meta(handler), meta(mark))
+fn target() {}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  const bool Valid = Analysis.Check(*Parsed.root);
+  for (const auto &Diagnostic : Analysis.GetDiagnostics())
+    ADD_FAILURE() << Diagnostic;
+  ASSERT_TRUE(Valid);
+  const auto &Values = Analysis.GetAnnotations(*Parsed.root->children.back());
+  ASSERT_EQ(Values.size(), 1u);
+  ASSERT_EQ(Values.front().Arguments.size(), 7u);
+  EXPECT_EQ(Values.front().Arguments.back().Value.Kind,
+            sema::AnnotationValueKind::String);
+}
+
+TEST(Sema, AnnotationParametersRejectWrongMetaHandles) {
+  for (const auto Source : {
+           "annotation bad(value: meta.type); @bad(meta(i32)) fn use() {}",
+           "annotation bad(value: std.meta.Function); @bad(meta(i32)) fn use() "
+           "{}",
+           "annotation bad(value: std.meta.Type); fn f() {} @bad(meta(f)) fn "
+           "use() {}",
+           "annotation bad(value: std.meta.Function); fn f() {} @bad(f) fn "
+           "use() {}",
+           "annotation bad(value: std.util.string.StringSlice); @bad(1) fn "
+           "use() {}",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Parsed = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Parsed.ok());
+    sema::Sema Analysis;
+    EXPECT_FALSE(Analysis.Check(*Parsed.root));
+  }
 }
 
 TEST(Sema, ReflectAnnotationSelectsInstanceFields) {
@@ -774,7 +994,7 @@ TEST(Sema, ReflectionReferencesRespectModuleVisibility) {
   auto Main = Lexer.parse(R"(
 module app;
 import library;
-annotation callback(function: meta.symbol);
+annotation callback(function: std.meta.Function);
 @callback(meta(library.public_callback))
 fn registered() -> i32 { return 0; }
 )");
@@ -792,7 +1012,7 @@ fn private_callback() -> i32 { return 2; }
   auto PrivateMain = Lexer.parse(R"(
 module app;
 import library;
-annotation callback(function: meta.symbol);
+annotation callback(function: std.meta.Function);
 @callback(meta(library.private_callback))
 fn registered() -> i32 { return 0; }
 )");
@@ -818,7 +1038,9 @@ annotation selected();
 @selected
 fn target() -> i32 { return 0; }
 fn choose() -> i32 {
-  when meta(target).has_annotation(selected) && !meta(target).is_public {
+  when meta(target).name == "target" &&
+       meta(target).has_annotation(meta(selected)) &&
+       !meta(target).is_public() {
     return 7;
   } else {
     return missing;
@@ -838,4 +1060,305 @@ fn choose() -> i32 {
       [](const lex::Diagnostic &Diagnostic) {
         return Diagnostic.Kind == lex::DiagnosticKind::InvalidWhenCondition;
       }));
+}
+
+TEST(Sema, ArrayLengthRequiresCompileTimeInteger) {
+  lex::Lexer Lexer;
+  auto Parsed = Lexer.parse("fn f(x: [1.5]i32) {}");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  EXPECT_FALSE(Analysis.Check(*Parsed.root));
+}
+
+TEST(Sema, MetaBlockEvaluatesFunctionAndLocalControlFlow) {
+  lex::Lexer Lexer;
+  auto Parsed = Lexer.parse(R"(
+@meta fn sum(limit: i32) -> i32 {
+  let i = 0;
+  let total = 0;
+  while i < limit {
+    total = total + i;
+    i = i + 1;
+  }
+  return total;
+}
+fn use() -> i32 {
+  return meta { let result = sum(4); result + 1 };
+}
+fn choose() -> i32 {
+  when sum(4) == 6 { return 1; } else { return missing; }
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  const bool Valid = Analysis.Check(*Parsed.root);
+  for (const auto &Diagnostic : Analysis.GetDiagnostics())
+    ADD_FAILURE() << Diagnostic;
+  EXPECT_TRUE(Valid);
+}
+
+TEST(Sema, CompilerIntrinsicRequiresSupportedStandardLibraryDeclaration) {
+  for (const auto Source : {
+           "@intrinsic fn __read_public(id: usize) -> bool;",
+           "module std.meta; @intrinsic fn unknown(id: usize) -> bool;",
+           "@intrinsic(\"meta.read_public\") fn read(id: usize) -> bool;",
+           "module std.meta; @intrinsic(\"unknown\") fn read(id: usize) -> "
+           "bool;",
+           "module std.meta; @intrinsic(\"meta.read_public\") fn read(id: i32) "
+           "-> bool;",
+           "module std.meta; @intrinsic fn __declared_fields(id: usize) -> "
+           "bool;",
+           "module std.meta; @intrinsic(\"meta.read_public\") fn read(id: "
+           "usize) -> bool { return false; }",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Parsed = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Parsed.ok());
+    sema::Sema Analysis;
+    ASSERT_FALSE(Analysis.Check(*Parsed.root));
+    EXPECT_TRUE(std::any_of(
+        Analysis.GetDiagnostics().begin(), Analysis.GetDiagnostics().end(),
+        [](const lex::Diagnostic &Diagnostic) {
+          return Diagnostic.Kind ==
+                 lex::DiagnosticKind::InvalidIntrinsicDeclaration;
+        }));
+  }
+}
+
+TEST(Sema, ClassMetadataQueries) {
+  auto Parsed = lex::Lexer().parse(R"(
+class Plain {}
+class Explicit { init(value: i32) {} deinit() {} }
+class Derived: Plain {}
+@interface class Contract {}
+@final class FinalClass {}
+fn inspect() -> i32 {
+  when !meta(Plain).has_constructor() && meta(Plain).has_default_constructor() &&
+       !meta(Plain).has_destructor() && !meta(Plain).has_base_class() &&
+       meta(Explicit).has_constructor() && !meta(Explicit).has_default_constructor() &&
+       meta(Explicit).has_destructor() && meta(Derived).has_base_class() &&
+       meta(Contract).is_interface() && meta(FinalClass).is_final() {
+    return 1;
+  } else {
+    return missing;
+  }
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.Check(*Parsed.root));
+}
+
+TEST(Sema, MemberMetadataQueries) {
+  auto Parsed = lex::Lexer().parse(R"(
+class Inspect {
+  pub value: i32;
+  @static
+  pub shared: i32;
+  pub fn read() -> i32 { return value; }
+  @static
+  pub fn create() -> i32 { return 1; }
+  init() { value = 0; }
+  deinit() {}
+}
+@interface class Contract {
+  const CAPACITY: i32 = 64;
+}
+fn inspect() -> i32 {
+  when meta(Inspect).has_member("value") &&
+       meta(Inspect).has_field("shared") &&
+       meta(Inspect).has_function("read") &&
+       meta(Inspect).has_function("init") &&
+       !meta(Inspect).has_field("read") &&
+       !meta(Inspect).has_function("missing") &&
+       !meta(Inspect.value).is_static() &&
+       meta(Inspect.shared).is_static() &&
+       meta(Inspect.read).is_method() &&
+       !meta(Inspect.read).is_static() &&
+       meta(Inspect.create).is_static() &&
+       meta(Inspect.init).is_constructor() &&
+       meta(Inspect.deinit).is_destructor() &&
+       meta(Contract.CAPACITY).is_static() {
+    return 1;
+  } else {
+    return missing;
+  }
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  const bool Valid = Analysis.Check(*Parsed.root);
+  for (const auto &Diagnostic : Analysis.GetDiagnostics())
+    ADD_FAILURE() << Diagnostic;
+  EXPECT_TRUE(Valid);
+  if (!Valid)
+    return;
+  const auto ClassId =
+      Analysis.GetReflection().Find("Inspect", sema::MetaKind::Class);
+  ASSERT_TRUE(ClassId.has_value());
+  std::vector<std::string> Names;
+  for (const auto Id : Analysis.GetReflection().Get(*ClassId).Children)
+    Names.push_back(Analysis.GetReflection().Get(Id).Name);
+  EXPECT_EQ(Names, (std::vector<std::string>{"value", "shared", "read",
+                                             "create", "init", "deinit"}));
+}
+
+TEST(Sema, MemberMetadataQueriesRespectVisibility) {
+  lex::Lexer Lexer;
+  auto Main = Lexer.parse(R"(
+module app;
+import library;
+fn inspect() -> i32 {
+  when meta(library.Inspect).has_field("visible") &&
+       !meta(library.Inspect).has_field("hidden") &&
+       meta(library.Inspect).has_function("read") &&
+       !meta(library.Inspect).has_function("secret") {
+    return 1;
+  } else {
+    return missing;
+  }
+}
+)");
+  auto Library = Lexer.parse(R"(
+module library;
+pub class Inspect {
+  pub visible: i32;
+  hidden: i32;
+  pub fn read() -> i32 { return visible; }
+  fn secret() -> i32 { return hidden; }
+}
+)");
+  ASSERT_TRUE(Main.ok());
+  ASSERT_TRUE(Library.ok());
+  sema::Sema Analysis;
+  const bool Valid = Analysis.CheckModules(
+      {{Main.root.get(), true}, {Library.root.get(), false}});
+  for (const auto &Diagnostic : Analysis.GetDiagnostics())
+    ADD_FAILURE() << Diagnostic;
+  EXPECT_TRUE(Valid);
+}
+
+TEST(Sema, MetaQueriesUseLoadedModuleDefinition) {
+  lex::Lexer Lexer;
+  auto Main = Lexer.parse(R"(
+module app;
+import std.meta;
+pub fn target() {}
+fn inspect() -> i32 {
+  when meta(target).is_public() { return 1; } else { return 0; }
+}
+)");
+  auto Meta = Lexer.parse("module std.meta; pub class Symbol {} ");
+  ASSERT_TRUE(Main.ok());
+  ASSERT_TRUE(Meta.ok());
+  sema::Sema Analysis;
+  EXPECT_FALSE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {Meta.root.get(), false, true}}));
+  EXPECT_TRUE(std::any_of(
+      Analysis.GetDiagnostics().begin(), Analysis.GetDiagnostics().end(),
+      [](const auto &Diagnostic) {
+        return Diagnostic.Kind == lex::DiagnosticKind::InvalidWhenCondition;
+      }));
+}
+
+TEST(Sema, MetaQueryExecutesStandardLibraryMethodBody) {
+  lex::Lexer Lexer;
+  auto Main = Lexer.parse(R"(
+module app;
+import std.meta;
+pub fn target() {}
+fn inspect() -> i32 {
+  when meta(target).is_public() { return 1; } else { return missing; }
+}
+)");
+  auto Meta = Lexer.parse(R"(
+@meta module std.meta;
+pub class Symbol {
+  pub id: usize;
+  pub fn is_public() -> bool {
+    let result = std.meta.__read_public(id);
+    if result { return true; }
+    return false;
+  }
+}
+@intrinsic
+pub fn __read_public(id: usize) -> bool;
+)");
+  ASSERT_TRUE(Main.ok());
+  ASSERT_TRUE(Meta.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {Meta.root.get(), false, true}}));
+}
+
+TEST(Sema, MetaModuleIsCompileTimeOnly) {
+  lex::Lexer Lexer;
+  auto Meta = Lexer.parse(R"(
+@meta module catalog;
+pub class Descriptor {}
+pub fn flag() -> bool { return true; }
+)");
+  ASSERT_TRUE(Meta.ok());
+  {
+    auto Main = Lexer.parse("module app; import catalog; fn use() -> bool { "
+                            "return catalog.flag(); }");
+    ASSERT_TRUE(Main.ok());
+    sema::Sema Analysis;
+    EXPECT_FALSE(Analysis.CheckModules(
+        {{Main.root.get(), true}, {Meta.root.get(), false}}));
+    EXPECT_TRUE(Analysis.IsMetaModule("catalog"));
+  }
+  {
+    auto Main = Lexer.parse("module app; import catalog; class Store { "
+                            "value: catalog.Descriptor; }");
+    ASSERT_TRUE(Main.ok());
+    sema::Sema Analysis;
+    EXPECT_FALSE(Analysis.CheckModules(
+        {{Main.root.get(), true}, {Meta.root.get(), false}}));
+  }
+}
+
+TEST(Sema, MetaClassFunctionAndMethodAreCompileTimeOnly) {
+  lex::Lexer Lexer;
+  auto Library = Lexer.parse(R"(
+module catalog;
+@meta pub class Descriptor {}
+@meta pub fn inspect() -> bool { return true; }
+pub class Service {
+  @meta pub fn describe() -> bool { return true; }
+  pub fn run() -> bool { return true; }
+}
+)");
+  ASSERT_TRUE(Library.ok());
+  const auto Reject = [&](std::string_view Source) {
+    auto Main = Lexer.parse(std::string(Source));
+    EXPECT_TRUE(Main.ok());
+    if (!Main.ok())
+      return;
+    sema::Sema Analysis;
+    EXPECT_FALSE(Analysis.CheckModules(
+        {{Main.root.get(), true}, {Library.root.get(), false}}));
+  };
+  Reject(
+      "module app; import catalog; class Store { value: catalog.Descriptor; }");
+  Reject("module app; import catalog; fn use() -> bool { return "
+         "catalog.inspect(); }");
+  Reject("module app; import catalog; fn use() -> bool { return "
+         "catalog.Service().describe(); }");
+  auto Main =
+      Lexer.parse("module app; import catalog; fn use() -> bool { "
+                  "let service = catalog.Service(); return service.run(); }");
+  ASSERT_TRUE(Main.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {Library.root.get(), false}}));
+}
+
+TEST(Sema, MetaEntrypointIsRejected) {
+  lex::Lexer Lexer;
+  auto Source =
+      Lexer.parse("module app; @meta @main fn main() -> i32 { return 0; }");
+  ASSERT_TRUE(Source.ok());
+  sema::Sema Analysis;
+  EXPECT_FALSE(Analysis.CheckModules({{Source.root.get(), true}}));
 }

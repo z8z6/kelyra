@@ -1,0 +1,66 @@
+@target(Target.Class T)
+annotation conditional(enabled: bool) {
+  when false {
+    invalid: MissingType;
+  }
+  when enabled {
+    @static
+    selected: i32;
+
+    pub fn choice() -> i32 { return 10; }
+  } else when meta(T).has_field("id") {
+    pub fn choice() -> i32 { return id; }
+  } else {
+    pub fn choice() -> i32 { return 30; }
+  }
+}
+
+@target(Target.Class T)
+annotation inject_flag() {
+  flag: i32;
+}
+
+@target(Target.Class T)
+annotation inspect_original() {
+  when meta(T).has_field("flag") {
+    pub fn original_field_count() -> i32 { return 1; }
+  } else {
+    pub fn original_field_count() -> i32 { return 0; }
+  }
+}
+
+@conditional(true)
+class First {}
+
+@conditional(false)
+class Second {
+  id: i32;
+  init() { id = 2; }
+}
+
+@conditional(false)
+class Third {}
+
+@inject_flag
+@inspect_original
+class Fourth {}
+
+@conditional(false)
+class Generic<T> {
+  id: i32;
+  init() { id = 0; }
+}
+
+@main
+fn main() -> i32 {
+  if First.selected != 0 {
+    return 1;
+  }
+  let first = First();
+  let second = Second();
+  let third = Third();
+  let fourth = Fourth();
+  let generic = Generic<i32>();
+  return first.choice() + second.choice() + third.choice() +
+         fourth.original_field_count() + generic.choice();
+}

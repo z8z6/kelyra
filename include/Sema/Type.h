@@ -53,6 +53,7 @@ enum class BuiltinType {
   CDouble,
   CWChar,
   CRecord,
+  Enum,
   Class,
   Void,
   Results,
@@ -60,11 +61,12 @@ enum class BuiltinType {
   Count,
 };
 
-enum class TypeModifierKind { Pointer, Array };
+enum class TypeModifierKind { Pointer, Array, Slice };
 
 struct TypeModifier {
   TypeModifierKind Kind;
   std::uint64_t Length = 0;
+  bool ReadOnly = false;
 
   bool operator==(const TypeModifier &) const = default;
 };
@@ -78,6 +80,7 @@ struct Type {
   std::string CName;
   std::string CSpelling;
   std::string ClassName;
+  std::string EnumName;
   // Access to a type supplied to a generic is checked in its use module,
   // not in the module that owns the generic template.
   bool GenericArgument = false;
@@ -95,8 +98,18 @@ struct Type {
     return !Modifiers.empty() &&
            Modifiers.front().Kind == TypeModifierKind::Pointer;
   }
+  bool IsSlice() const {
+    return !Modifiers.empty() &&
+           Modifiers.front().Kind == TypeModifierKind::Slice;
+  }
+  bool IsReadOnlySlice() const {
+    return IsSlice() && Modifiers.front().ReadOnly;
+  }
   bool IsRecord() const {
     return Element == BuiltinType::CRecord && Modifiers.empty();
+  }
+  bool IsEnum() const {
+    return Element == BuiltinType::Enum && Modifiers.empty();
   }
   bool IsClass() const {
     return Element == BuiltinType::Class && Modifiers.empty();
@@ -119,6 +132,10 @@ struct Type {
     Dimensions.insert(Dimensions.begin(), Length);
   }
 
+  void AddSlice(bool ReadOnly = false) {
+    Modifiers.insert(Modifiers.begin(), {TypeModifierKind::Slice, 0, ReadOnly});
+  }
+
   Type Pointee() const {
     Type Result = *this;
     Result.Modifiers.erase(Result.Modifiers.begin());
@@ -129,7 +146,8 @@ struct Type {
   Type Indexed() const {
     Type Result = *this;
     Result.Modifiers.erase(Result.Modifiers.begin());
-    Result.Dimensions.erase(Result.Dimensions.begin());
+    if (IsArray())
+      Result.Dimensions.erase(Result.Dimensions.begin());
     return Result;
   }
 
@@ -138,8 +156,9 @@ struct Type {
   bool operator==(const Type &Other) const {
     return Element == Other.Element && Dimensions == Other.Dimensions &&
            PointerDepth == Other.PointerDepth && CName == Other.CName &&
-           ClassName == Other.ClassName && Results == Other.Results &&
-           Parameters == Other.Parameters && Modifiers == Other.Modifiers;
+           ClassName == Other.ClassName && EnumName == Other.EnumName &&
+           Results == Other.Results && Parameters == Other.Parameters &&
+           Modifiers == Other.Modifiers;
   }
 };
 
@@ -189,6 +208,7 @@ inline constexpr std::array BuiltinTypeInfos = {
     BuiltinTypeInfo{"c.wchar", TypeClass::SignedInteger, sizeof(wchar_t) * 8},
     BuiltinTypeInfo{"", TypeClass::Aggregate, 0},
     BuiltinTypeInfo{"", TypeClass::Aggregate, 0},
+    BuiltinTypeInfo{"", TypeClass::Aggregate, 0},
     BuiltinTypeInfo{"void", TypeClass::Aggregate, 0},
     BuiltinTypeInfo{"", TypeClass::Aggregate, 0},
     BuiltinTypeInfo{"", TypeClass::Aggregate, sizeof(void *) * 8},
@@ -202,6 +222,7 @@ inline const BuiltinTypeInfo &GetBuiltinTypeInfo(BuiltinType Type) {
 
 inline unsigned GetBitWidth(const Type &Type) {
   return Type.IsPointer() ? sizeof(void *) * 8
+         : Type.IsSlice() ? sizeof(void *) * 16
          : Type.IsArray() ? GetBitWidth(Type.Indexed())
          : Type.BitWidth  ? Type.BitWidth
                           : GetBuiltinTypeInfo(Type.Element).BitWidth;
@@ -209,6 +230,7 @@ inline unsigned GetBitWidth(const Type &Type) {
 
 inline unsigned GetAlignment(const Type &Type) {
   return Type.IsPointer() ? alignof(void *)
+         : Type.IsSlice() ? alignof(void *)
          : Type.IsArray() ? GetAlignment(Type.Indexed())
                           : Type.Alignment;
 }
@@ -250,7 +272,7 @@ inline bool IsCInteropCompatible(const Type &Left, const Type &Right) {
   const auto IsCType = [](BuiltinType Value) {
     return Value >= BuiltinType::CChar && Value < BuiltinType::CRecord;
   };
-  if (Left.IsArray() || Right.IsArray())
+  if (Left.IsArray() || Right.IsArray() || Left.IsSlice() || Right.IsSlice())
     return false;
   if (Left.IsPointer() || Right.IsPointer()) {
     if (!Left.IsPointer() || !Right.IsPointer() ||

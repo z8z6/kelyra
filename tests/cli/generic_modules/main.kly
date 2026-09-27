@@ -2,6 +2,6 @@ import library;
 
 @main
 fn launch() -> i32 {
-  let box: library.Box<i32> = library.make<i32>(42);
+  let box: Box<i32> = make<i32>(42);
   return box.get();
 }

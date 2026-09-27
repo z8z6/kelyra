@@ -16,14 +16,19 @@ Kelyra 不同时保留 `struct`：原有 Kelyra `struct` 声明和关键字已�
 
 ## 单例类
 
-`@singleton` 类通过 `Class.instance()` 返回唯一实例的指针。首次访问时运行无参数
-`init`，并发访问只初始化一次。直接调用 `Class()`、按值复制单例，以及继承单例类
-都会报错。单例类可以省略 `init`，由编译器生成默认初始化。
+标准库 `std.sync.singleton` 用带实现体的 `@singleton` 注解向目标类注入静态状态字段和
+`instance()` 方法。首次访问时运行无参数 `init`；并发调用只完成一次初始化。
+状态字段由 `std.sync.once.Once` 管理：一个调用者取得初始化权，其他调用者等待其发布结果。
+泛型类的每个具体类型拥有独立的静态状态。
 
 ```kelyra
+import std.sync.singleton;
+
 @singleton
 class Registry {
   count: i32;
+
+  init() { count = 0; }
 
   pub fn next() -> i32 {
     count = count + 1;
@@ -35,10 +40,16 @@ let registry: *Registry = Registry.instance();
 let id = registry.next();
 ```
 
-实例的存储持续到进程结束，编译器不会在退出时自动调用它的 `deinit`。
-`init` 不应直接或间接调用本类的 `instance()`。
-泛型单例类按具体类型分别拥有实例，例如 `Cache<i32>.instance()` 和
-`Cache<u8>.instance()` 返回不同对象。
+实例持续到进程结束，不自动调用 `deinit`；分配失败时 `instance()` 返回空指针。
+`std.sync.atomic.AtomicU32` 是对调用者持有的 `u32` 的借用封装，提供 acquire 读取、
+比较交换和 release 写入。`std.sync.once.Once` 借用零初始化的 `u32`，通过 `call()` 或
+允许失败重试的 `try_call()` 执行回调。需要在类方法内部直接构造对象时，可以调用
+`begin()` 取得初始化权，然后必须调用 `finish(true)` 发布完成，或调用
+`finish(false)` 允许重试。
+等待中的调用者会在状态变化时唤醒。当前 `std.sync.atomic` 的实现仅覆盖 x86-64。
+`init` 不应直接或间接调用本类的 `instance()`。注解不会禁止直接构造、复制或继承，
+这些限制须由类的可见性和普通类规则表达。注解注入的 `instance()` 方法在目标类
+所在模块调用 `init`，因此 `init` 可以保持私有。
 
 ## 静态成员
 
@@ -199,9 +210,9 @@ class Child: Base {
 派生类指针可隐式转换为基类指针，通过基类指针调用虚方法仍会派发到派生类实现。
 派生类目前不能自定义 `copy` 或 `move`。`@final` 类不可作为基类。
 
-class、函数和其他类型的限定名不能在同一模块中产生构造调用歧义。跨模块 class 类型
-使用限定名，例如 `app.file.File`；现有 `import module.*` 仍只省略公开函数的模块前缀，
-不把类型名称导入当前作用域。
+class、函数和其他类型的限定名不能在同一模块中产生构造调用歧义。导入模块后
+可以直接使用公开 class 的短名称；多个模块提供同名 class 时，使用限定名，
+例如 `app.file.File`。
 
 ## 构造与字段初始化
 

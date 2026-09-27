@@ -1,5 +1,0 @@
-@singleton
-class OnlyOne {
-  init(value: i32) {
-  }
-}

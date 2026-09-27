@@ -57,9 +57,13 @@ enum class DiagnosticKind {
   InvalidAnnotation,            // Annotation declaration or arguments invalid.
   InvalidAnnotationTarget,      // Annotation cannot target this declaration.
   InvalidExternDeclaration,     // @extern needs a bodyless top-level function.
+  InvalidIntrinsicDeclaration,  // @intrinsic needs a supported bodyless
+                                // function.
   MetaValueInRuntimeExpression, // Reflection metadata cannot escape.
   InvalidWhenCondition,         // When requires a compile-time boolean.
+  InvalidForIterator,           // For-in requires a matching iterator protocol.
   UnsupportedType,              // Type is not supported by IR generation.
+  UnsupportedCField,      // C bit field, flexible array, or unaligned field.
   UnsupportedDeclaration, // Declaration is not supported by IR generation.
   UnsupportedStatement,   // Statement is not supported by IR generation.
   InvalidInlineAssembly,  // Inline assembly constraints are invalid.
@@ -81,7 +85,14 @@ enum class DiagnosticKind {
   InvalidLifecycleCall,
   RecursiveClass,
   MissingDefaultConstructor, // A field cannot be default constructed.
-  Count,                     // Number of diagnostic kinds.
+  InvalidEnumDiscriminant,
+  DuplicateEnumVariant,
+  DuplicateEnumValue,
+  InvalidEnumInitialization,
+  InvalidMatchPattern,
+  NonExhaustiveMatch,
+  UnreachableMatchArm,
+  Count, // Number of diagnostic kinds.
 };
 
 struct Diagnostic {

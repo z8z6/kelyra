@@ -1,0 +1,21 @@
+module meta_block;
+import std.meta;
+
+@meta
+fn sum(limit: i32) -> i32 {
+  let index = 0;
+  let total = 0;
+  while index < limit {
+    total = total + index;
+    index = index + 1;
+  }
+  return total;
+}
+
+@main
+fn main() -> i32 {
+  let cells: [1 + 2]i32;
+  let public = meta { meta(sum).is_public() };
+  if public { return 1; }
+  return meta { let value = sum(4); value + 1 };
+}

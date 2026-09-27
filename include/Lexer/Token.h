@@ -18,12 +18,15 @@ enum class TokenKind {
   keyword_var,              // var
   keyword_fn,               // fn
   keyword_class,            // class
+  keyword_enum,             // enum
   keyword_const,            // const
   keyword_this,             // this
   keyword_annotation,       // annotation
   keyword_if,               // if
   keyword_else,             // else
   keyword_while,            // while
+  keyword_for,              // for
+  keyword_in,               // in
   keyword_return,           // return
   keyword_break,            // break
   keyword_continue,         // continue
@@ -31,6 +34,7 @@ enum class TokenKind {
   keyword_false,            // false
   keyword_meta,             // meta
   keyword_when,             // when
+  keyword_match,            // match
   keyword_as,               // as
   keyword_parallel,         // parallel
   keyword_extern,           // extern
@@ -40,6 +44,7 @@ enum class TokenKind {
   keyword_pub,              // pub
   keyword_asm,              // asm
   op_arrow,                 // ->
+  op_fat_arrow,             // =>
   op_assign,                // =
   op_add,                   // +
   op_subtract,              // -
@@ -78,6 +83,8 @@ enum class TokenKind {
   ast_annotation_decl,      // AST annotation declaration
   ast_annotation_parameter, // AST annotation parameter
   ast_annotation_argument,  // AST annotation argument
+  ast_annotation_uses,      // AST composed annotation uses
+  ast_annotation_body,      // AST members injected by annotation
   ast_function,             // AST function declaration
   ast_generic_parameter,    // AST declaration type parameter
   ast_generic_pack,         // AST declaration type parameter pack
@@ -87,6 +94,8 @@ enum class TokenKind {
   ast_parameter_pack,       // AST function parameter pack
   ast_spread,               // AST ...expression
   ast_class,                // AST class declaration
+  ast_enum,                 // AST enum declaration
+  ast_enum_variant,         // AST enum item
   ast_alias_decl,           // AST transparent type alias
   ast_base_type,            // AST inherited class or interface type
   ast_const_field,          // AST interface constant field
@@ -96,16 +105,22 @@ enum class TokenKind {
   ast_type,                 // AST named type
   ast_pointer_type,         // AST *type
   ast_array_type,           // AST [length]type
+  ast_slice_type,           // AST []type or []const type
   ast_result_types,         // AST (return types)
   ast_function_type,        // AST fn(types) -> result
   ast_binding_list,         // AST let (names)
   ast_block,                // AST {...}
+  ast_block_expr,           // AST block yielding its final expression
+  ast_meta_block,           // AST meta { ... } compile-time expression
+  ast_match,                // AST match expression
+  ast_match_arm,            // AST pattern and result
   ast_let,                  // AST let declaration
   ast_assign,               // AST assignment
   ast_return,               // AST return statement
   ast_if,                   // AST if statement
   ast_when,                 // AST compile-time conditional statement
   ast_while,                // AST while statement
+  ast_for,                  // AST for ... in statement
   ast_break,                // AST break statement
   ast_continue,             // AST continue statement
   ast_asm,                  // AST inline assembly statement
@@ -120,12 +135,36 @@ enum class TokenKind {
   ast_cast,                 // AST explicit type conversion
   ast_call,                 // AST call expression
   ast_index,                // AST index expression
+  ast_slice,                // AST range slice expression
   ast_member,               // AST member expression
   ast_group,                // AST parenthesized expression
   ast_meta                  // AST meta(...) reflection expression
 };
 
 std::string GetTokenName(TokenKind kind);
+inline bool IsExpressionNode(TokenKind Kind) {
+  switch (Kind) {
+  case TokenKind::ast_literal:
+  case TokenKind::ast_name:
+  case TokenKind::ast_unary:
+  case TokenKind::ast_binary:
+  case TokenKind::ast_cast:
+  case TokenKind::ast_call:
+  case TokenKind::ast_index:
+  case TokenKind::ast_slice:
+  case TokenKind::ast_member:
+  case TokenKind::ast_group:
+  case TokenKind::ast_meta:
+  case TokenKind::ast_block_expr:
+  case TokenKind::ast_meta_block:
+  case TokenKind::ast_match:
+  case TokenKind::ast_generic_apply:
+  case TokenKind::ast_spread:
+    return true;
+  default:
+    return false;
+  }
+}
 inline std::ostream &operator<<(std::ostream &os, TokenKind kind) {
   return os << GetTokenName(kind);
 }

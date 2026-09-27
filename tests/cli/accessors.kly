@@ -1,0 +1,62 @@
+@target(Target.Field F)
+annotation reader() {
+  pub fn read_${F.name}() -> F.type {
+    return F;
+  }
+}
+
+class Counter {
+  @accessors
+  value: i32;
+  @accessors(set = false)
+  id: i32;
+  @static
+  @accessors
+  total: i32;
+  init() {
+    value = 1;
+    id = 7;
+  }
+}
+
+class Box<T> {
+  @accessors(get = false)
+  item: T;
+  init(item: T) {
+    this.item = item;
+  }
+}
+
+class Custom {
+  @reader
+  data_F: i32;
+  init() {
+    data_F = 11;
+  }
+}
+
+@main
+fn main() -> i32 {
+  let counter = Counter();
+  if counter.get_value() != 1 || counter.get_id() != 7 {
+    return 1;
+  }
+  counter.set_value(42);
+  Counter.set_total(8);
+  if counter.get_value() != 42 {
+    return 2;
+  }
+  if Counter.get_total() != 8 {
+    return 3;
+  }
+  let box = Box<i32>(1);
+  box.set_item(9);
+  if box.item != 9 {
+    return 4;
+  }
+  let custom = Custom();
+  if custom.read_data_F() != 11 {
+    return 5;
+  }
+  return 0;
+}

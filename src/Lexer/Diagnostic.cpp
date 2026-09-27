@@ -33,7 +33,8 @@ constexpr std::array DiagnosticInfos = {
     DiagnosticInfo{"K0002", "expected '}' before declaration"},
     DiagnosticInfo{"K0002", "expected type annotation or initializer"},
     DiagnosticInfo{"K0002", "invalid assignment target"},
-    DiagnosticInfo{"K0002", "expected 'fn', 'class', 'alias', or 'annotation'"},
+    DiagnosticInfo{"K0002",
+                   "expected 'fn', 'class', 'enum', 'alias', or 'annotation'"},
     DiagnosticInfo{"K0002", "expected end of expression"},
     DiagnosticInfo{"K0004", "duplicate function"},
     DiagnosticInfo{"K0004", "duplicate parameter"},
@@ -43,16 +44,21 @@ constexpr std::array DiagnosticInfos = {
     DiagnosticInfo{"K0004", "invalid annotation declaration or argument"},
     DiagnosticInfo{"K0004", "annotation is not valid on this declaration"},
     DiagnosticInfo{"K0004", "invalid @extern function declaration"},
+    DiagnosticInfo{"K0004", "invalid @intrinsic function declaration"},
     DiagnosticInfo{"K0004",
                    "reflection metadata is only available at compile time"},
     DiagnosticInfo{"K0004", "when condition is not a compile-time boolean"},
+    DiagnosticInfo{"K0004",
+                   "for-in requires iter()/next() and a valid iterator"},
     DiagnosticInfo{"K0004", "unknown builtin type"},
+    DiagnosticInfo{"K0004", "C bit field, flexible array, or unaligned field "
+                            "cannot be accessed directly"},
     DiagnosticInfo{"K0004", "declaration is not supported by IR generation"},
     DiagnosticInfo{"K0004", "only a single return statement is supported"},
     DiagnosticInfo{"K0004", "invalid inline assembly constraint"},
     DiagnosticInfo{"K0004", "expression is not supported by IR generation"},
     DiagnosticInfo{"K0004", "unknown name"},
-    DiagnosticInfo{"K0004", "ambiguous name from wildcard imports"},
+    DiagnosticInfo{"K0004", "ambiguous name from imported modules"},
     DiagnosticInfo{"K0004", "integer literal does not fit its type"},
     DiagnosticInfo{"K0004", "function must return a value"},
     DiagnosticInfo{"K0004", "type mismatch"},
@@ -81,6 +87,18 @@ constexpr std::array DiagnosticInfos = {
     DiagnosticInfo{"K0004",
                    "field class has no default constructor; declare init "
                    "explicitly"},
+    DiagnosticInfo{"K0004", "enum discriminant is not a constant integer or "
+                            "does not fit its backing type"},
+    DiagnosticInfo{"K0004", "duplicate enum variant name"},
+    DiagnosticInfo{"K0004", "duplicate enum discriminant"},
+    DiagnosticInfo{
+        "K0004",
+        "enum has no zero variant and requires explicit initialization"},
+    DiagnosticInfo{
+        "K0004",
+        "match pattern must be a compile-time value of the scrutinee type"},
+    DiagnosticInfo{"K0004", "match does not cover every possible value"},
+    DiagnosticInfo{"K0004", "unreachable match arm"},
 };
 
 static_assert(DiagnosticInfos.size() ==

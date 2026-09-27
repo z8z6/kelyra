@@ -1,0 +1,8 @@
+@main
+fn main() -> i32 {
+  let values: [1]i32;
+  let view: []const i32 = values[:];
+  let pointer: *i32 = &view[0];
+  *pointer = 1;
+  return 0;
+}

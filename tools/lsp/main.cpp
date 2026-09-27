@@ -149,7 +149,6 @@ struct Document {
   struct ImportRef {
     std::string Module;
     Span Extent;
-    bool Wildcard = false;
   };
 
   std::string Path;
@@ -159,10 +158,10 @@ struct Document {
   std::string Module;
   Span ModuleSpan;
   std::vector<ImportRef> ImportRefs;
-  // `import c "header.h"` and `import c.*`: the resolved header and the span
+  // `import c "header.h"` and `import c;`: the resolved header and the span
   // of the string literal, so both C declarations and the header are reachable.
   std::vector<std::pair<std::string, Span>> CHeaders;
-  bool CImportWildcard = false;
+  bool CImported = false;
   std::vector<Symbol> Symbols;
 
   std::string_view Spelling(const lex::Token &Token) const {
@@ -383,7 +382,7 @@ struct Document {
     ModuleSpan = {};
     ImportRefs.clear();
     CHeaders.clear();
-    CImportWildcard = false;
+    CImported = false;
     Symbols.clear();
     if (!Parsed.root)
       return;
@@ -395,6 +394,8 @@ struct Document {
       } else if (Node->kind == K::ast_import) {
         if (Node->text == "c") {
           if (Node->children.empty())
+            CImported = true;
+          if (Node->children.empty())
             continue;
           const auto &Header = *Node->children.front();
           CHeaders.emplace_back(
@@ -402,15 +403,8 @@ struct Document {
                   .lexically_normal()
                   .string(),
               Span{Header.Loc.Offset + 1, Header.Loc.Len - 2});
-        } else if (Node->text == "c.*") {
-          CImportWildcard = true;
-        } else if (Node->text.ends_with(".*")) {
-          ImportRefs.push_back({Node->text.substr(0, Node->text.size() - 2),
-                                {Node->Loc.Offset, Node->Loc.Len},
-                                true});
         } else {
-          ImportRefs.push_back(
-              {Node->text, {Node->Loc.Offset, Node->Loc.Len}, false});
+          ImportRefs.push_back({Node->text, {Node->Loc.Offset, Node->Loc.Len}});
         }
       }
     }
@@ -838,6 +832,7 @@ class Server {
                     Local->Definition.Offset == Token->Loc.Offset))
         return {&Doc, Local};
     }
+    std::pair<const Document *, const Symbol *> Result;
     for (const auto &[Path, CandidateDoc] : Documents) {
       for (const auto &Candidate : CandidateDoc.Symbols) {
         if (Candidate.Name != Name || !Candidate.Owner.empty() ||
@@ -854,17 +849,20 @@ class Server {
         const bool Imported =
             std::any_of(Doc.ImportRefs.begin(), Doc.ImportRefs.end(),
                         [&](const Document::ImportRef &Ref) {
-                          return Ref.Module == Candidate.Module &&
-                                 (!Qualifier.empty() || Ref.Wildcard);
+                          return Ref.Module == Candidate.Module;
                         });
         const bool ImplicitBuiltin =
             AnnotationUse && Candidate.Module == "std.annotation" &&
             (Qualifier.empty() || Qualifier == "std.annotation");
-        if (Imported || ImplicitBuiltin)
-          return {&CandidateDoc, &Candidate};
+        if (Imported || ImplicitBuiltin) {
+          if (Result.first && Qualifier.empty() &&
+              Result.second->Module != Candidate.Module)
+            return {};
+          Result = {&CandidateDoc, &Candidate};
+        }
       }
     }
-    return {};
+    return Result;
   }
 
   // True when `Name` names a declaration of this document or of a module it
@@ -896,11 +894,9 @@ class Server {
         continue;
       if (Offset < Node->Loc.Offset || Offset > Node->Loc.End())
         continue;
-      if (Node->text == "c" || Node->text == "c.*")
+      if (Node->text == "c")
         return {};
-      return Node->text.ends_with(".*")
-                 ? Node->text.substr(0, Node->text.size() - 2)
-                 : Node->text;
+      return Node->text;
     }
     return {};
   }
@@ -1077,9 +1073,9 @@ class Server {
     std::size_t TokenIndex = 0;
     if (const auto *Token = TokenAt(Doc, Offset, &TokenIndex)) {
       const auto [Qualifier, Name] = QualifiedName(Doc, TokenIndex);
-      // `c.printf(...)` and unprefixed names after `import c.*` come from the
+      // `c.printf(...)` and unprefixed names after `import c;` come from the
       // C headers, so look there before giving up on the name.
-      if ((Qualifier == "c" || (Qualifier.empty() && Doc.CImportWildcard)) &&
+      if ((Qualifier == "c" || (Qualifier.empty() && Doc.CImported)) &&
           !(Qualifier.empty() && Doc.FindVisible(Name, Offset)))
         if (auto Found = FindCDeclaration(Doc, Name))
           if (auto Location = LocationOf(*Found))
@@ -1270,7 +1266,7 @@ public:
       std::size_t TokenIndex = 0;
       if (const auto *Token = TokenAt(Doc, Offset, &TokenIndex)) {
         const auto [Qualifier, Name] = QualifiedName(Doc, TokenIndex);
-        if ((Qualifier == "c" || (Qualifier.empty() && Doc.CImportWildcard)) &&
+        if ((Qualifier == "c" || (Qualifier.empty() && Doc.CImported)) &&
             !(Qualifier.empty() && Doc.FindVisible(Name, Offset))) {
           if (auto Found = FindCDeclaration(Doc, Name)) {
             Hover Result(Doc.ToRange({Offset, 1}));

@@ -40,3 +40,21 @@ int print_format(const char *format, ...) {
 float float_add(float left, float right) { return left + right; }
 
 double double_add(double left, double right) { return left + right; }
+
+Packet make_packet(void) {
+  Packet packet = {.pair = {20, 22},
+                   .number = {.integer = 5},
+                   .bytes = {1, 2, 3},
+                   .extra = 10};
+  return packet;
+}
+
+int inspect_packet(Packet packet) {
+  return packet.pair.left == 21 && packet.pair.right == 22 &&
+         packet.number.integer == 6 && packet.bytes[1] == 9 &&
+         packet.extra == 11;
+}
+
+Status status_value(void) { return STATUS_FAILURE; }
+
+Anon make_anon(void) { return (Anon){42}; }

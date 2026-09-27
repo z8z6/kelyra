@@ -1,0 +1,27 @@
+class OldIterator {
+  value_data: i32;
+  pub init(value_data: i32) {
+    this.value_data = value_data;
+  }
+  pub fn equals(other: *OldIterator) -> bool {
+    return value_data == other.value_data;
+  }
+  pub fn advance() -> void {
+    value_data = value_data + 1;
+  }
+  pub fn value() -> i32 {
+    return value_data;
+  }
+}
+class OldSequence {
+  pub fn begin() -> OldIterator {
+    return OldIterator(0);
+  }
+  pub fn end() -> OldIterator {
+    return OldIterator(2);
+  }
+}
+fn check() {
+  for item in OldSequence() {
+  }
+}

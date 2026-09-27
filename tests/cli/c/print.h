@@ -8,6 +8,8 @@ typedef struct Pair {
   int right;
 } Pair;
 
+#include "records.h"
+
 Pair make_pair(int left, int right);
 int sum_pair(Pair pair);
 Pair *pair_pointer(void);
@@ -16,5 +18,9 @@ int sum_many(int count, ...);
 int print_format(const char *format, ...);
 float float_add(float left, float right);
 double double_add(double left, double right);
+Packet make_packet(void);
+int inspect_packet(Packet packet);
+Status status_value(void);
+Anon make_anon(void);
 
 #endif

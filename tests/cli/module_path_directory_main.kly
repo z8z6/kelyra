@@ -1,0 +1,7 @@
+module module_path_directory_main;
+import directory.example;
+
+@main
+pub fn main() -> i32 {
+  return directory.example.answer();
+}

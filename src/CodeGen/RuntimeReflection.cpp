@@ -15,6 +15,9 @@ std::string TypeName(const sema::Type &Type) {
   if (Type.IsArray())
     return "[" + std::to_string(Type.ArrayLength()) + "]" +
            TypeName(Type.Indexed());
+  if (Type.IsSlice())
+    return "[]" + std::string(Type.IsReadOnlySlice() ? "const " : "") +
+           TypeName(Type.Indexed());
   if (Type.IsClass())
     return Type.ClassName;
   if (!Type.CName.empty())
@@ -111,6 +114,8 @@ void codegen::IRGen::EmitReflectionGlobals(
     const bool External = ExternalModules.count(Module) != 0;
     for (const auto &Child : Module->children) {
       if (Child->kind != lex::TokenKind::ast_class)
+        continue;
+      if (Analysis.IsMetaDeclaration(*Child))
         continue;
       const auto *Class = [&]() -> const sema::ClassInfo * {
         for (const auto &[Name, Candidate] : Analysis.GetClasses())

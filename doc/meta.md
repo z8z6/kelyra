@@ -1,14 +1,16 @@
 # `meta` 反射设计
 
 > 状态：编译期反射数据库、稳定 `MetaId`、基础 `meta(...)` 语法、
-> 注解中的 `meta.type`/`meta.symbol` 实体引用以及 `when` 已经实现。
+> 注解中的 `std.meta` 具体句柄类型检查及 `when` 已经实现；
+> 标量编译期求值器与 `meta { ... }` 已接入，复合值和反射集合遍历仍待实现。
 
-`meta` 专门表示只读反射元数据，不承担宏展开、AST 修改或编译期函数执行职责：
+`meta(...)` 表示只读反射句柄；`meta { ... }` 执行编译期表达式：
 
 ```text
 annotation 声明元数据结构
 @annotation(...) 写入元数据
 meta(...) 读取反射元数据
+meta { ... } 执行编译期求值
 ```
 
 ## 语法
@@ -30,13 +32,15 @@ meta-target     = qualified-name | type ;
 注解可以保存真实反射引用：
 
 ```kelyra
+import std.meta;
+
 annotation converter(
-  source: meta.type,
-  target: meta.type,
-  function: meta.symbol,
+  source: Type,
+  target: Type,
+  function: Function,
 );
 
-@converter(source = Source, target = Target, function = convert)
+@converter(source = meta(Source), target = meta(Target), function = meta(convert))
 fn register_converter() -> i32 { return 0; }
 ```
 
@@ -125,7 +129,7 @@ array_length
 2. 注册模块和声明并分配 `MetaId`；
 3. 解析类型、函数签名和注解声明；
 4. 解析注解实例；
-5. 将 `meta.type`、`meta.symbol` 转换为 `MetaId`；
+5. 将 `std.meta` 句柄转换为 `MetaId`；
 6. 完成并冻结反射数据库；
 7. 执行 `when` 等编译期查询；
 8. 检查函数体并生成 IR。
@@ -138,14 +142,16 @@ array_length
 
 ## 编译期与运行期
 
-`meta(...)` 默认只存在于编译期，不能作为普通函数参数、返回值或局部变量逃逸到运行期。运行期反射必须显式使用 `@retention(runtime)`；ABI 方案见 [运行时反射 ABI](runtime-reflection-abi.md)，当前暂不实现。
+`meta(...)` 默认只存在于编译期，不能作为普通函数参数、返回值或局部变量逃逸到运行期。
+当前运行期字段反射由 `@reflect` 选择；`@retention(std.annotation.Retention.Runtime)` 的通用注解保留仍处于草案阶段。
+两阶段的目标边界见[编译期元数据与运行期反射](reflection-architecture.md)。
 
 ## `when`
 
 `when` 在 Sema 中求值，只检查并生成被选中的分支：
 
 ```kelyra
-when meta(handler).has_annotation(route) && meta(handler).is_public {
+when meta(handler).has_annotation(meta(route)) && meta(handler).is_public() {
   return register(handler);
 } else {
   return 0;
@@ -154,18 +160,65 @@ when meta(handler).has_annotation(route) && meta(handler).is_public {
 
 首版条件支持 `true`、`false`、`!`、`&&`、`||`、`==`、`!=`，以及：
 
-- `meta(target).is_public`
-- `meta(target).has_annotation(annotation_name)`
+- `meta(target).is_public()`
+- `meta(target).has_annotation(meta(annotation_name))`
 
-条件必须得到编译期 `bool`。普通变量、函数调用和其他运行期表达式会产生错误。逻辑与、逻辑或采用短路求值；未选分支不做名称解析、类型检查或 IR 生成。
+条件必须得到编译期 `bool`。普通运行期变量和函数调用会产生错误；
+`std.meta` 的编译期查询方法可用。逻辑与、逻辑或采用短路求值；
+未选分支不做名称解析、类型检查或 IR 生成。
 
-`meta` 也不作为函数修饰符。未来编译期执行使用独立的 `comptime` 机制：
+当前标准库的 [`std.meta`](../../kstd/src/std/meta/meta.kly) 已声明
+`Symbol`、`Type`、`Class`、`Field`、`Function`、`Parameter`，
+这些类继承 `Symbol` 的 `id`、`name: std.util.string.StringSlice` 和基础查询方法；
+`Class` 还继承 `Type`。`Annotation` 也是独立的 `Symbol` 子类。
+`Field.owner`、`Function.owner`、`Parameter.owner` 分别为 `*Class`、
+`*Symbol`、`*Function`。`Class` 提供 `has_constructor()`、
+`has_default_constructor()`、`has_destructor()`、`has_base_class()`、
+`is_interface()` 和 `is_final()`；前者只判断显式声明的构造函数，
+默认构造函数查询也包含编译器生成的构造函数。
+成员集合遍历接口暂不提供；编译期求值器目前不能执行反射集合遍历。
+现在可在 `when` 中使用 `Class.has_member(name)`、`has_field(name)` 和
+`has_function(name)` 查询当前类直接声明的成员。参数是字符串字面量；
+`has_function` 包含方法、构造函数和析构函数。跨模块查询仅计入公开成员。
+`Field.is_static()` 以及 `Function.is_static()`、`is_method()`、
+`is_constructor()`、`is_destructor()` 也可用于 `when`。例如：
 
-- `meta`：读取反射数据；
-- `annotation`：写入元数据；
-- `when`：编译期条件选择；
-- `comptime`：编译期函数执行；
-- `@annotation_processor`：注册注解处理器。
+```kelyra
+when meta(User).has_field("name") &&
+     !meta(User.name).is_static() {
+  // User 声明了实例字段 name
+}
+```
+
+成员集合暂不能在 `when` 中遍历，其他元信息字段（例如名称、偏移和类型）
+也还没有通用的编译期求值支持。注解参数会按具体句柄类型检查，
+但普通表达式尚不能保存或传递 `meta(...)` 句柄。
+运行期描述符已经归入
+[`std.reflect`](../../kstd/src/std/reflect/reflect.kly)，两阶段的类彼此独立。
+编译器仅提供 `meta(...)` 句柄与私有元数据读取原语。原语在标准库中以
+无函数体的 `@intrinsic` 函数声明；未指定操作名时使用函数名。编译期求值器
+执行标准库方法的普通 Kelyra 函数体，只在调用私有原语时按其注解操作名读取
+宿主元数据。
+如果本次编译加载了 `std.meta` 模块，查询以加载的模块定义为准；
+直接调用 Sema 而没有提供该模块时，才使用构建时嵌入的定义。
+
+`meta(...)` 读取反射对象；`meta { ... }` 执行编译期块并产生常量。
+`@meta` 标在模块、类或函数上，限制声明仅供编译期使用。例子：
+
+```kelyra
+@meta
+fn twice(value: i32) -> i32 { return value * 2; }
+
+let count = meta { let base = twice(3); base + 1 };
+```
+
+编译期块按普通 Kelyra 规则检查类型，然后解释局部变量、赋值、`if`、
+`when`、`while`、返回语句及函数调用。解释器限制执行步数和调用深度。
+在编译期块中使用 `meta(...)` 的属性或方法时，按普通模块规则导入 `std.meta`。
+目前可向运行期输出布尔、整数、浮点字面量和字符串常量；反射句柄不能作为
+运行期常量。枚举判别值、整数注解参数、名称插值和普通 `when` 已开始共用
+标量求值器。数组长度现在可写编译期整数表达式，如 `[1 + 2]i32`。
+注解展开阶段的反射查询仍受原始成员快照和当前接口限制。
 
 ## 首轮实现
 
@@ -173,7 +226,7 @@ when meta(handler).has_annotation(route) && meta(handler).is_public {
 - [x] 稳定 `MetaId` 和只读数据库；
 - [x] 名称、限定名、模块、可见性、位置、函数签名和注解实例；
 - [x] `meta(...)` AST；
-- [x] `meta.type`、`meta.symbol` 的真实实体解析；
+- [x] 注解参数中的 `std.meta` 具体句柄类型检查和实体解析；
 - [x] 编译期限定与跨模块可见性检查。
 - [x] `when` 编译期求值和死分支裁剪。
 

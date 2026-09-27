@@ -1,0 +1,11 @@
+@target(Target.Field F)
+annotation bad_name() {
+  pub fn bad_${F.type}() -> i32 {
+    return 0;
+  }
+}
+
+class Box {
+  @bad_name
+  value: i32;
+}

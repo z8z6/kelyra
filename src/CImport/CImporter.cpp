@@ -2,19 +2,47 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
+#include "clang/AST/RecordLayout.h"
 #include "clang/AST/Type.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Tooling/Tooling.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Program.h"
 
+#include <algorithm>
+#include <filesystem>
+#include <functional>
 #include <optional>
 #include <sstream>
 
 using namespace kelyra;
 
 namespace {
+std::optional<std::string> FindClangResourceDir() {
+  auto Clang = llvm::sys::findProgramByName("clang");
+  if (!Clang)
+    return std::nullopt;
+  llvm::SmallString<128> Output;
+  if (llvm::sys::fs::createTemporaryFile("kelyra-clang-resource", "txt",
+                                         Output))
+    return std::nullopt;
+  llvm::FileRemover RemoveOutput(Output);
+  const llvm::StringRef Arguments[] = {*Clang, "-print-resource-dir"};
+  const std::optional<llvm::StringRef> Redirects[] = {
+      std::nullopt, Output.str(), std::nullopt};
+  if (llvm::sys::ExecuteAndWait(*Clang, Arguments, std::nullopt, Redirects, 10))
+    return std::nullopt;
+  auto Contents = llvm::MemoryBuffer::getFile(Output);
+  if (!Contents)
+    return std::nullopt;
+  return (*Contents)->getBuffer().trim().str();
+}
+
 std::optional<sema::Type> ConvertType(clang::ASTContext &Context,
                                       clang::QualType Type) {
   using C = clang::BuiltinType;
@@ -37,9 +65,29 @@ std::optional<sema::Type> ConvertType(clang::ASTContext &Context,
     Result->CSpelling = Spelling;
     return Result;
   }
+  if (const auto *Array = Context.getAsConstantArrayType(Type)) {
+    auto Result = ConvertType(Context, Array->getElementType());
+    if (!Result || Array->getSize().getActiveBits() > 64)
+      return std::nullopt;
+    Result->AddArray(Array->getSize().getZExtValue());
+    Result->CSpelling = Spelling;
+    return Result;
+  }
+  if (const auto *Enum = Type->getAs<clang::EnumType>()) {
+    const auto Integer = Enum->getDecl()->getIntegerType();
+    if (Integer.isNull())
+      return std::nullopt;
+    auto Result = ConvertType(Context, Integer);
+    if (Result)
+      Result->CSpelling = Spelling;
+    return Result;
+  }
   if (const auto *Record = Type->getAsRecordDecl()) {
     sema::Type Result{K::CRecord, {}};
     Result.CName = Record->getNameAsString();
+    if (Result.CName.empty())
+      if (const auto *Alias = Type->getAs<clang::TypedefType>())
+        Result.CName = Alias->getDecl()->getNameAsString();
     Result.CSpelling = Spelling;
     if (!Type->isIncompleteType()) {
       Result.BitWidth = Context.getTypeSize(Type);
@@ -111,6 +159,25 @@ cimport::ImportHeaders(const std::vector<std::string> &Headers,
   ImportResult Result;
   llvm::StringSet<> Seen;
   llvm::StringSet<> SeenTypes;
+  llvm::StringSet<> SeenConstants;
+  const bool HasResourceDir =
+      std::any_of(Arguments.begin(), Arguments.end(), [](const auto &Argument) {
+        return Argument.starts_with("-resource-dir");
+      });
+  const auto ResourceDir =
+      HasResourceDir ? std::nullopt : FindClangResourceDir();
+  const auto AddType = [&](sema::ExternalType Imported) {
+    if (SeenTypes.insert(Imported.Name).second) {
+      Result.Types.push_back(std::move(Imported));
+      return;
+    }
+    if (!Imported.Fields.empty())
+      for (auto &Existing : Result.Types)
+        if (Existing.Name == Imported.Name && Existing.Fields.empty()) {
+          Existing = std::move(Imported);
+          break;
+        }
+  };
   for (const auto &Header : Headers) {
     auto Buffer = llvm::MemoryBuffer::getFile(Header);
     if (!Buffer) {
@@ -118,54 +185,124 @@ cimport::ImportHeaders(const std::vector<std::string> &Headers,
       continue;
     }
     std::vector<std::string> Args{"-x", "c", "-std=c17"};
+    if (ResourceDir)
+      Args.push_back("-resource-dir=" + *ResourceDir);
     Args.insert(Args.end(), Arguments.begin(), Arguments.end());
     auto Ast = clang::tooling::buildASTFromCodeWithArgs((*Buffer)->getBuffer(),
                                                         Args, Header, "clang");
-    if (!Ast) {
+    if (!Ast || Ast->getDiagnostics().hasErrorOccurred()) {
       Result.Diagnostics.push_back("Clang could not parse C header: " + Header);
       continue;
     }
 
     auto &Context = Ast->getASTContext();
     const auto &Sources = Context.getSourceManager();
+    const auto Directory = std::filesystem::path(Header).parent_path();
+    const auto InImportedHeaders = [&](const clang::Decl *Declaration) {
+      const auto Location = Sources.getExpansionLoc(Declaration->getLocation());
+      if (Sources.isWrittenInMainFile(Location))
+        return true;
+      const auto File = Sources.getFilename(Location);
+      if (File.empty())
+        return false;
+      if (!Sources.isInSystemHeader(Location))
+        return true;
+      const auto Path = std::filesystem::path(File.str()).lexically_normal();
+      const auto Relative = Path.lexically_relative(Directory);
+      return !Relative.empty() && *Relative.begin() != ".." &&
+             !Relative.is_absolute();
+    };
+    const auto RecordFields = [&](const clang::RecordDecl *Record) {
+      std::vector<sema::ExternalType::Field> Fields;
+      if (!Record || !Record->getDefinition())
+        return Fields;
+      Record = Record->getDefinition();
+      std::function<void(const clang::RecordDecl *, std::uint64_t)> AddFields =
+          [&](const clang::RecordDecl *Owner, std::uint64_t Base) {
+            const auto &Layout = Context.getASTRecordLayout(Owner);
+            for (const auto *Field : Owner->fields()) {
+              const auto Offset =
+                  Base + Layout.getFieldOffset(Field->getFieldIndex());
+              if (Field->isAnonymousStructOrUnion()) {
+                if (const auto *Nested = Field->getType()->getAsRecordDecl())
+                  AddFields(Nested, Offset);
+                continue;
+              }
+              if (Field->getName().empty())
+                continue;
+              auto Value = ConvertType(Context, Field->getType());
+              const bool Addressable =
+                  Value && !Field->isBitField() && Offset % 8 == 0 &&
+                  (Offset / 8) % std::max(1u, sema::GetAlignment(*Value)) == 0;
+              Fields.push_back(
+                  {Field->getNameAsString(),
+                   Value.value_or(sema::Type{sema::BuiltinType::Void, {}}),
+                   Offset, Addressable});
+            }
+          };
+      AddFields(Record, 0);
+      return Fields;
+    };
     for (const auto *Declaration : Context.getTranslationUnitDecl()->decls()) {
       const auto *Typedef = llvm::dyn_cast<clang::TypedefNameDecl>(Declaration);
-      if (!Typedef || !Sources.isWrittenInMainFile(Typedef->getLocation()))
+      if (!Typedef || !InImportedHeaders(Typedef))
         continue;
       auto Type = ConvertType(Context, Typedef->getUnderlyingType());
-      if (!Type ||
-          (Type->Element != sema::BuiltinType::CRecord && !Type->IsPointer()))
+      if (!Type || Type->IsVoid())
         continue;
-      if (Type->CName.empty())
+      if (Type->Element == sema::BuiltinType::CRecord && Type->CName.empty())
         Type->CName = Typedef->getNameAsString();
       Type->CSpelling = Typedef->getNameAsString();
       const auto Name = "c." + Typedef->getNameAsString();
-      if (SeenTypes.insert(Name).second)
-        Result.Types.push_back(sema::ExternalType{Name, std::move(*Type)});
+      AddType(sema::ExternalType{
+          Name, std::move(*Type),
+          RecordFields(Typedef->getUnderlyingType()->getAsRecordDecl())});
     }
     for (const auto *Declaration : Context.getTranslationUnitDecl()->decls()) {
       const auto *Record = llvm::dyn_cast<clang::RecordDecl>(Declaration);
       if (!Record || Record->getName().empty() ||
-          !Record->isCompleteDefinition() ||
-          !Sources.isWrittenInMainFile(Record->getLocation()))
+          !Record->isCompleteDefinition() || !InImportedHeaders(Record))
         continue;
       auto Type = ConvertType(Context, Context.getCanonicalTagType(Record));
       const auto Name = "c." + Record->getNameAsString();
-      if (Type && SeenTypes.insert(Name).second)
-        Result.Types.push_back(sema::ExternalType{Name, std::move(*Type)});
+      if (Type)
+        AddType(
+            sema::ExternalType{Name, std::move(*Type), RecordFields(Record)});
+    }
+    for (const auto *Declaration : Context.getTranslationUnitDecl()->decls()) {
+      const auto *Enum = llvm::dyn_cast<clang::EnumDecl>(Declaration);
+      if (!Enum || !Enum->isCompleteDefinition() || !InImportedHeaders(Enum))
+        continue;
+      if (!Enum->getName().empty()) {
+        auto Type = ConvertType(Context, Context.getCanonicalTagType(Enum));
+        const auto Name = "c." + Enum->getNameAsString();
+        if (Type)
+          AddType({Name, std::move(*Type), {}});
+      }
+      for (const auto *Item : Enum->enumerators()) {
+        const auto Name = "c." + Item->getNameAsString();
+        if (!SeenConstants.insert(Name).second)
+          continue;
+        auto Type = ConvertType(Context, Item->getType());
+        if (!Type)
+          continue;
+        llvm::SmallString<32> Integer;
+        Item->getInitVal().toString(Integer, 10);
+        Result.Constants.push_back({Name, *Type, std::string(Integer)});
+      }
     }
     for (const auto *Declaration : Context.getTranslationUnitDecl()->decls()) {
       const auto *Function = llvm::dyn_cast<clang::FunctionDecl>(Declaration);
       if (!Function || Function->getIdentifier() == nullptr ||
-          !Sources.isWrittenInMainFile(Function->getLocation()) ||
-          !Function->hasExternalFormalLinkage())
+          !InImportedHeaders(Function) || !Function->hasExternalFormalLinkage())
         continue;
       const auto Name = Function->getNameAsString();
       if (!Seen.insert(Name).second)
         continue;
       auto Return = ConvertType(Context, Function->getReturnType());
       if (!Return) {
-        Result.Diagnostics.push_back("unsupported C return type for " + Name);
+        if (Sources.isWrittenInMainFile(Function->getLocation()))
+          Result.Diagnostics.push_back("unsupported C return type for " + Name);
         continue;
       }
       sema::ExternalFunction Imported;
@@ -184,8 +321,9 @@ cimport::ImportHeaders(const std::vector<std::string> &Headers,
       for (const auto *Parameter : Function->parameters()) {
         auto Type = ConvertType(Context, Parameter->getType());
         if (!Type) {
-          Result.Diagnostics.push_back("unsupported C parameter type for " +
-                                       Name);
+          if (Sources.isWrittenInMainFile(Function->getLocation()))
+            Result.Diagnostics.push_back("unsupported C parameter type for " +
+                                         Name);
           Supported = false;
           break;
         }

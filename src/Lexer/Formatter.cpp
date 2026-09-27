@@ -92,6 +92,7 @@ bool IsUnary(const std::vector<Token> &Tokens, std::size_t Index) {
          Previous == TokenKind::keyword_if ||
          Previous == TokenKind::keyword_when ||
          Previous == TokenKind::keyword_while ||
+         Previous == TokenKind::keyword_for ||
          Previous == TokenKind::keyword_return;
 }
 
@@ -107,6 +108,9 @@ void CollectTypeOffsets(const Node &Node,
   if (Node.kind == TokenKind::ast_pointer_type)
     Pointers.insert(Node.Loc.Offset);
   if (Node.kind == TokenKind::ast_array_type && !Node.children.empty())
+    ArrayElements.insert(Node.children.back()->Loc.Offset);
+  if (Node.kind == TokenKind::ast_slice_type && Node.text.empty() &&
+      !Node.children.empty())
     ArrayElements.insert(Node.children.front()->Loc.Offset);
   for (const auto &Child : Node.children)
     CollectTypeOffsets(*Child, Pointers, ArrayElements);
@@ -114,6 +118,8 @@ void CollectTypeOffsets(const Node &Node,
 
 void CollectAnnotationEnds(const Node &Node,
                            std::unordered_set<std::size_t> &Ends) {
+  if (Node.kind == TokenKind::ast_annotation_uses)
+    return;
   if (Node.kind == TokenKind::ast_annotation)
     Ends.insert(Node.Loc.End());
   for (const auto &Child : Node.children)
@@ -126,12 +132,23 @@ void CollectGenericAngles(const Node &Node, std::string_view Source,
       Node.kind == TokenKind::ast_generic_apply) {
     const auto Start = Node.kind == TokenKind::ast_generic_apply
                            ? Node.children.front()->Loc.End()
-                           : Node.Loc.Offset + Node.text.size();
+                           : Node.Loc.Offset;
     const auto Open = Source.find('<', Start);
     if (Open < Node.Loc.End())
       Angles.insert(Open);
-    if (Node.Loc.End() > 0 && Source[Node.Loc.End() - 1] == '>')
-      Angles.insert(Node.Loc.End() - 1);
+    if (Node.AssociatedOwnerArguments) {
+      const auto OwnerClose = Source.find(
+          '>', Node.children[Node.AssociatedOwnerArguments - 1]->Loc.End());
+      if (OwnerClose < Node.Loc.End()) {
+        Angles.insert(OwnerClose);
+        const auto AliasOpen = Source.find('<', OwnerClose + 1);
+        if (AliasOpen < Node.Loc.End())
+          Angles.insert(AliasOpen);
+      }
+    }
+    const auto Close = Source.find('>', Node.children.back()->Loc.End());
+    if (Close < Node.Loc.End())
+      Angles.insert(Close);
   }
   if (Node.kind == TokenKind::ast_class ||
       Node.kind == TokenKind::ast_function ||
@@ -167,8 +184,6 @@ std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
     std::size_t End;
     std::string Module;
     std::string Identity;
-    bool Plain;
-    bool Wildcard;
 
     bool Decorated() const {
       return Begin != StatementBegin || End != StatementEnd;
@@ -194,7 +209,7 @@ std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
     if (Parsed.tokens[Index].kind != TokenKind::keyword_import)
       continue;
 
-    Import Current{Index, Index, Index, Index, {}, {}, true, false};
+    Import Current{Index, Index, Index, Index, {}, {}};
     if (Index + 1 < Parsed.tokens.size())
       if (const auto It =
               ImportAnnotations.find(Parsed.tokens[Index + 1].Loc.Offset);
@@ -228,12 +243,9 @@ std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
                             .substr(Token.Loc.Offset, Token.Loc.Len);
       Current.Identity += Text;
       Current.Identity += '\x1f';
-      if (Token.kind == TokenKind::string)
-        Current.Plain = false;
-      else
+      if (Token.kind != TokenKind::string)
         Current.Module += Text;
     }
-    Current.Wildcard = Current.Module.ends_with(".*");
     Imports.push_back(std::move(Current));
   }
   if (Imports.size() < 2)
@@ -245,17 +257,10 @@ std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
     for (std::size_t Index = Import.Begin; Index <= Import.End; ++Index)
       IsImportToken[Index] = true;
 
-  std::unordered_set<std::string> Wildcards;
-  for (const auto &Import : Imports)
-    if (Import.Wildcard)
-      Wildcards.insert(Import.Module.substr(0, Import.Module.size() - 2));
-
   std::unordered_set<std::string> Seen;
   std::erase_if(Imports, [&](const Import &Import) {
     const bool Duplicate = !Seen.insert(Import.Identity).second;
-    return !Import.Decorated() &&
-           (Duplicate || (Import.Plain && !Import.Wildcard &&
-                          Wildcards.contains(Import.Module)));
+    return !Import.Decorated() && Duplicate;
   });
   std::stable_sort(Imports.begin(), Imports.end(),
                    [](const Import &Left, const Import &Right) {
@@ -276,18 +281,273 @@ std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
       Tokens.push_back(Parsed.tokens[Index]);
   return Tokens;
 }
+
+std::vector<Token> NormalizeDeclarations(const ParseResult &Parsed,
+                                         const std::vector<Token> &Tokens) {
+  if (!Parsed.root)
+    return Tokens;
+  struct Unit {
+    std::size_t Begin;
+    std::size_t End;
+    std::string Name;
+  };
+  std::vector<Unit> Classes;
+  std::vector<Unit> Functions;
+  std::vector<bool> Moved(Tokens.size());
+  for (const auto &Declaration : Parsed.root->children) {
+    const bool Class = Declaration->kind == TokenKind::ast_class;
+    if (!Class && Declaration->kind != TokenKind::ast_function)
+      continue;
+    auto Begin =
+        std::find_if(Tokens.begin(), Tokens.end(), [&](const Token &Token) {
+          return Token.Loc.Offset >= Declaration->Loc.Offset;
+        });
+    if (Begin == Tokens.end() || Begin->kind == TokenKind::end)
+      continue;
+    auto End = std::find_if(Begin, Tokens.end(), [&](const Token &Token) {
+      return Token.Loc.End() >= Declaration->Loc.End();
+    });
+    if (End == Tokens.end())
+      continue;
+    auto First = std::size_t(Begin - Tokens.begin());
+    auto Last = std::size_t(End - Tokens.begin());
+    if (Tokens[Last].kind != TokenKind::punc_semicolon &&
+        Tokens[Last].kind != TokenKind::punc_right_brace &&
+        Last + 1 < Tokens.size() &&
+        Tokens[Last + 1].kind == TokenKind::punc_semicolon)
+      ++Last;
+    while (First && Tokens[First - 1].kind == TokenKind::comment &&
+           !Moved[First - 1]) {
+      const auto &Comment = Tokens[First - 1];
+      const auto Gap = std::string_view(Parsed.source)
+                           .substr(Comment.Loc.End(), Tokens[First].Loc.Offset -
+                                                          Comment.Loc.End());
+      if (std::count(Gap.begin(), Gap.end(), '\n') > 1 ||
+          (First > 1 && Tokens[First - 2].Loc.Line == Comment.Loc.Line &&
+           Tokens[First - 2].kind != TokenKind::comment))
+        break;
+      --First;
+    }
+    if (Last + 1 < Tokens.size() &&
+        Tokens[Last + 1].kind == TokenKind::comment &&
+        Tokens[Last + 1].Loc.Line == Tokens[Last].Loc.Line)
+      ++Last;
+    if (std::any_of(Moved.begin() + First, Moved.begin() + Last + 1,
+                    [](bool Value) { return Value; }))
+      continue;
+    std::fill(Moved.begin() + First, Moved.begin() + Last + 1, true);
+    (Class ? Classes : Functions).push_back({First, Last, Declaration->text});
+  }
+  const auto ByName = [](const Unit &Left, const Unit &Right) {
+    return Left.Name < Right.Name;
+  };
+  std::stable_sort(Classes.begin(), Classes.end(), ByName);
+  std::stable_sort(Functions.begin(), Functions.end(), ByName);
+  std::vector<Token> Result;
+  std::vector<Token> Tail;
+  Result.reserve(Tokens.size());
+  const auto FinalDeclaration = std::max_element(
+      Parsed.root->children.begin(), Parsed.root->children.end(),
+      [](const auto &Left, const auto &Right) {
+        return Left->Loc.End() < Right->Loc.End();
+      });
+  const auto FinalOffset = FinalDeclaration == Parsed.root->children.end()
+                               ? 0
+                               : (*FinalDeclaration)->Loc.End();
+  for (std::size_t Index = 0; Index < Tokens.size(); ++Index)
+    if (!Moved[Index] && Tokens[Index].kind != TokenKind::end) {
+      if (Tokens[Index].Loc.Offset >= FinalOffset)
+        Tail.push_back(Tokens[Index]);
+      else
+        Result.push_back(Tokens[Index]);
+    }
+  for (const auto &Group : {Classes, Functions})
+    for (const auto &Item : Group)
+      Result.insert(Result.end(), Tokens.begin() + Item.Begin,
+                    Tokens.begin() + Item.End + 1);
+  Result.insert(Result.end(), Tail.begin(), Tail.end());
+  Result.push_back(Tokens.back());
+  return Result;
+}
+
+std::string MemberName(const Node &Node) {
+  if (Node.kind == TokenKind::ast_name)
+    return Node.text;
+  if (Node.kind == TokenKind::ast_member && Node.children.size() == 1) {
+    auto Parent = MemberName(*Node.children.front());
+    if (!Parent.empty())
+      return Parent + "." + Node.text;
+  }
+  return {};
+}
+
+std::vector<Token> ShortenQualifiedNames(const ParseResult &Parsed,
+                                         const std::vector<Token> &Tokens,
+                                         const FormatSymbols &Symbols) {
+  if (!Parsed.root || !Symbols.Complete)
+    return Tokens;
+  std::vector<std::unordered_set<std::string>> Shadows;
+  const auto Shadowed = [&](std::string_view Name) {
+    for (auto Scope = Shadows.rbegin(); Scope != Shadows.rend(); ++Scope)
+      if (Scope->contains(std::string(Name)))
+        return true;
+    return false;
+  };
+  std::unordered_set<std::size_t> Omit;
+  const auto Visit = [&](const auto &Self, const Node &Node,
+                         bool InInheritedClass) -> void {
+    bool Scoped = false;
+    if (Node.kind == TokenKind::ast_class) {
+      InInheritedClass = std::any_of(
+          Node.children.begin(), Node.children.end(), [](const auto &Child) {
+            return Child->kind == TokenKind::ast_base_type;
+          });
+      Shadows.emplace_back();
+      Scoped = true;
+      for (const auto &Part : Node.children)
+        if (Part->kind == TokenKind::ast_alias_decl ||
+            Part->kind == TokenKind::ast_field ||
+            Part->kind == TokenKind::ast_const_field ||
+            Part->kind == TokenKind::ast_function ||
+            Part->kind == TokenKind::ast_constructor ||
+            Part->kind == TokenKind::ast_destructor ||
+            Part->kind == TokenKind::ast_generic_parameter)
+          Shadows.back().insert(Part->text);
+    } else if (Node.kind == TokenKind::ast_function ||
+               Node.kind == TokenKind::ast_constructor ||
+               Node.kind == TokenKind::ast_destructor) {
+      Shadows.emplace_back();
+      Scoped = true;
+      for (const auto &Part : Node.children)
+        if (Part->kind == TokenKind::ast_parameter ||
+            Part->kind == TokenKind::ast_generic_parameter)
+          Shadows.back().insert(Part->text);
+    } else if (Node.kind == TokenKind::ast_block ||
+               Node.kind == TokenKind::ast_block_expr) {
+      Shadows.emplace_back();
+      for (const auto &Child : Node.children) {
+        Self(Self, *Child, InInheritedClass);
+        if (Child->kind == TokenKind::ast_alias_decl)
+          Shadows.back().insert(Child->text);
+        if (Child->kind == TokenKind::ast_let && !Child->children.empty() &&
+            Child->children.front()->kind == TokenKind::ast_name)
+          Shadows.back().insert(Child->children.front()->text);
+      }
+      Shadows.pop_back();
+      return;
+    } else if (Node.kind == TokenKind::ast_for && Node.children.size() == 3) {
+      Self(Self, *Node.children[1], InInheritedClass);
+      Shadows.emplace_back();
+      Shadows.back().insert(Node.children.front()->text);
+      Self(Self, *Node.children.back(), InInheritedClass);
+      Shadows.pop_back();
+      return;
+    }
+    std::string Qualified;
+    if (Node.kind == TokenKind::ast_type ||
+        Node.kind == TokenKind::ast_generic_type ||
+        Node.kind == TokenKind::ast_annotation)
+      Qualified = Node.text;
+    else if (Node.kind == TokenKind::ast_member && !InInheritedClass)
+      Qualified = MemberName(Node);
+    std::string Module;
+    std::string Symbol;
+    for (const auto &[Candidate, Names] : Symbols.Visible) {
+      if (!Qualified.starts_with(Candidate + ".") ||
+          Candidate.size() <= Module.size())
+        continue;
+      auto Remainder = std::string_view(Qualified).substr(Candidate.size() + 1);
+      const auto Dot = Remainder.find('.');
+      const auto Name = std::string(Remainder.substr(0, Dot));
+      if (Names.contains(Name)) {
+        Module = Candidate;
+        Symbol = Name;
+      }
+    }
+    const auto ModuleHead = Module.substr(0, Module.find('.'));
+    if (!Module.empty() && !Shadowed(Symbol) && !Shadowed(ModuleHead) &&
+        !Symbols.TopLevelNames.contains(ModuleHead) &&
+        (Module == Symbols.CurrentModule ||
+         !Symbols.TopLevelNames.contains(Symbol))) {
+      bool Ambiguous = false;
+      if (Module != Symbols.CurrentModule)
+        for (const auto &[Other, Names] : Symbols.Visible)
+          if (Other != Module && Names.contains(Symbol))
+            Ambiguous = true;
+      if (!Ambiguous) {
+        const auto Start =
+            Node.Loc.Offset + (Node.kind == TokenKind::ast_annotation ? 1 : 0);
+        auto First =
+            std::find_if(Tokens.begin(), Tokens.end(), [&](const Token &Token) {
+              return Token.Loc.Offset == Start;
+            });
+        const auto Segments = 1 + std::count(Module.begin(), Module.end(), '.');
+        auto Index = std::size_t(First - Tokens.begin());
+        bool Matches = Index + Segments * 2 <= Tokens.size();
+        if (Matches) {
+          std::size_t SegmentStart = 0;
+          for (std::size_t I = 0; I < Segments; ++I) {
+            const auto SegmentEnd = Module.find('.', SegmentStart);
+            const auto Expected =
+                Module.substr(SegmentStart, SegmentEnd == std::string::npos
+                                                ? std::string::npos
+                                                : SegmentEnd - SegmentStart);
+            if (std::string_view(Parsed.source)
+                    .substr(Tokens[Index + I * 2].Loc.Offset,
+                            Tokens[Index + I * 2].Loc.Len) != Expected ||
+                Tokens[Index + I * 2 + 1].kind != TokenKind::punc_dot) {
+              Matches = false;
+              break;
+            }
+            SegmentStart = SegmentEnd + 1;
+          }
+        }
+        if (Matches)
+          for (std::size_t I = 0; I < Segments * 2; ++I)
+            Omit.insert(Tokens[Index + I].Loc.Offset);
+      }
+    }
+    for (const auto &Child : Node.children)
+      Self(Self, *Child, InInheritedClass);
+    if (Scoped)
+      Shadows.pop_back();
+  };
+  Visit(Visit, *Parsed.root, false);
+  if (Omit.empty())
+    return Tokens;
+  std::vector<Token> Result;
+  Result.reserve(Tokens.size());
+  for (const auto &Token : Tokens)
+    if (!Omit.contains(Token.Loc.Offset))
+      Result.push_back(Token);
+  return Result;
+}
 } // namespace
 
-std::string kelyra::lex::Format(const ParseResult &Parsed) {
-  const auto Tokens = NormalizeImports(Parsed);
+std::string kelyra::lex::Format(const ParseResult &Parsed,
+                                const FormatSymbols &Symbols) {
+  const auto Tokens = ShortenQualifiedNames(
+      Parsed, NormalizeDeclarations(Parsed, NormalizeImports(Parsed)), Symbols);
   std::unordered_set<std::size_t> TypePointers;
   std::unordered_set<std::size_t> ArrayElements;
   std::unordered_set<std::size_t> GenericAngles;
   std::unordered_set<std::size_t> AnnotationEnds;
+  std::unordered_set<std::size_t> BlankAfterComments;
   if (Parsed.root) {
     CollectTypeOffsets(*Parsed.root, TypePointers, ArrayElements);
     CollectGenericAngles(*Parsed.root, Parsed.source, GenericAngles);
     CollectAnnotationEnds(*Parsed.root, AnnotationEnds);
+  }
+  for (std::size_t Index = 0; Index + 1 < Parsed.tokens.size(); ++Index) {
+    const auto &Comment = Parsed.tokens[Index];
+    const auto &Next = Parsed.tokens[Index + 1];
+    if (Comment.kind != TokenKind::comment || Next.kind == TokenKind::end)
+      continue;
+    const auto Gap =
+        std::string_view(Parsed.source)
+            .substr(Comment.Loc.End(), Next.Loc.Offset - Comment.Loc.End());
+    if (std::count(Gap.begin(), Gap.end(), '\n') > 1)
+      BlankAfterComments.insert(Comment.Loc.Offset);
   }
   Writer Output;
   std::vector<bool> StructBraces;
@@ -314,7 +574,8 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       if (!Output.IsLineStart())
         Output.Space();
       Output.Write(Text);
-      Output.NewLine(BlankAfterComment);
+      Output.NewLine(BlankAfterComment ||
+                     BlankAfterComments.contains(Token.Loc.Offset));
       BlankAfterComment = false;
       Previous = Token.kind;
       continue;
@@ -329,7 +590,9 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
       bool IsStruct = false;
       for (std::size_t I = Index; I > 0; --I) {
         const auto Kind = Tokens[I - 1].kind;
-        if (Kind == TokenKind::keyword_class) {
+        if (Kind == TokenKind::keyword_class ||
+            Kind == TokenKind::keyword_enum ||
+            Kind == TokenKind::keyword_match) {
           IsStruct = true;
           break;
         }
@@ -353,6 +616,9 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
         AsmBraces.pop_back();
       const auto Next =
           Index + 1 < Tokens.size() ? Tokens[Index + 1].kind : TokenKind::end;
+      if (Next == TokenKind::punc_comma || Next == TokenKind::punc_semicolon ||
+          Next == TokenKind::punc_right_paren)
+        break;
       if (Next == TokenKind::keyword_else)
         Output.Space();
       else if (WasAsm && Next == TokenKind::punc_dot) {
@@ -425,7 +691,8 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
     case TokenKind::punc_left_paren:
       if (Previous == TokenKind::keyword_if ||
           Previous == TokenKind::keyword_when ||
-          Previous == TokenKind::keyword_while)
+          Previous == TokenKind::keyword_while ||
+          Previous == TokenKind::keyword_for)
         Output.Space();
       Output.Write(Text);
       ++Parentheses;
@@ -474,7 +741,8 @@ std::string kelyra::lex::Format(const ParseResult &Parsed) {
         if (StartsWord(Token.kind) &&
             (StartsWord(Previous) || Previous == TokenKind::punc_right_paren ||
              (Previous == TokenKind::punc_right_bracket &&
-              !ArrayElements.contains(Token.Loc.Offset))))
+              !ArrayElements.contains(Token.Loc.Offset) &&
+              Token.kind != TokenKind::keyword_const)))
           Output.Space();
         Output.Write(Text);
       }

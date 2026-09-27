@@ -1,0 +1,28 @@
+module ann.library;
+
+alias Value = i32;
+
+fn private_value() -> Value {
+  return 42;
+}
+
+@target(Target.Class T)
+annotation hidden() {
+  @static
+  pub fn answer() -> Value {
+    return private_value();
+  }
+}
+
+@target(Target.Class T)
+pub annotation public_api() = @hidden;
+
+@target(Target.Field F)
+annotation readable_field() {
+  pub fn read_${F.name}() -> F.type {
+    return F;
+  }
+}
+
+@target(Target.Field)
+pub annotation public_readable() = @readable_field;

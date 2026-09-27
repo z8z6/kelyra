@@ -1,0 +1,12 @@
+module main;
+
+import annotations;
+
+@annotations.add_answer
+class Item {}
+
+@main
+fn main() -> i32 {
+  let item = Item();
+  return item.answer();
+}

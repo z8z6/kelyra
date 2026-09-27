@@ -20,5 +20,6 @@ bool WantsCompilation();
 bool Analyze(const ModuleLoader &Loader,
              const cimport::ImportResult &Declarations, sema::Sema &Analysis);
 int Emit(const ModuleLoader &Loader, const sema::Sema &Analysis);
+int EmitShader(const ModuleLoader &Loader, const sema::Sema &Analysis);
 int Run();
 } // namespace kelyra::driver

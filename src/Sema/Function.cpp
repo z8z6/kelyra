@@ -37,18 +37,18 @@ sema::Sema::CheckFunctionValue(const lex::Node &Node,
       };
   const auto Name = NameOf(Node);
   const bool Qualified = Name.find('.') != std::string::npos;
+  const auto &LookupModule = Node.AnnotationOriginModule.empty()
+                                 ? CurrentModule
+                                 : Node.AnnotationOriginModule;
   const auto Key =
-      Qualified || CurrentModule.empty() ? Name : CurrentModule + "." + Name;
+      Qualified || LookupModule.empty() ? Name : LookupModule + "." + Name;
   auto Function = Functions.find(Key);
-  if (Function == Functions.end() && Qualified && !CurrentModule.empty())
-    Function = Functions.find(CurrentModule + "." + Name);
-  const auto Import = Imports.find(CurrentModule);
+  if (Function == Functions.end() && Qualified && !LookupModule.empty())
+    Function = Functions.find(LookupModule + "." + Name);
+  const auto Import = Imports.find(LookupModule);
   if (!Qualified && Function == Functions.end() && Import != Imports.end()) {
     for (const auto &Module : Import->second) {
-      if (!Module.ends_with(".*"))
-        continue;
-      const auto Candidate =
-          Functions.find(Module.substr(0, Module.size() - 2) + "." + Name);
+      const auto Candidate = Functions.find(Module + "." + Name);
       if (Candidate == Functions.end() || !Candidate->second.Public ||
           !Candidate->second.OwnerClass.empty())
         continue;
@@ -64,10 +64,19 @@ sema::Sema::CheckFunctionValue(const lex::Node &Node,
     return std::nullopt;
   }
   const auto &Info = Function->second;
-  if (Info.Module != CurrentModule &&
+  if ((MetaModules.contains(Info.Module) ||
+       (Info.Node && MetaDeclarations.contains(Info.Node)) ||
+       (!Info.OwnerClass.empty() &&
+        MetaDeclarations.contains(Classes.at(Info.OwnerClass).Node))) &&
+      !CurrentMetaContext) {
+    Error(Node, lex::DiagnosticKind::UnsupportedExpression);
+    return std::nullopt;
+  }
+  if (!CurrentMetaContext)
+    RuntimeDependencies[CurrentModule].insert(Info.Module);
+  if (Info.Module != CurrentModule && Info.Module != LookupModule &&
       (!Info.Public || Import == Imports.end() ||
-       (!Import->second.contains(Info.Module) &&
-        !Import->second.contains(Info.Module + ".*")))) {
+       !Import->second.contains(Info.Module))) {
     Error(Node, lex::DiagnosticKind::PrivateDeclaration);
     return std::nullopt;
   }

@@ -20,6 +20,8 @@ std::unique_ptr<lex::Node> CloneNode(const lex::Node &Source) {
   Result->height = Source.height;
   Result->GenericInstance = Source.GenericInstance;
   Result->GenericArgument = Source.GenericArgument;
+  Result->AssociatedOwnerArguments = Source.AssociatedOwnerArguments;
+  Result->BoundFieldName = Source.BoundFieldName;
   Result->GenericOriginModule = Source.GenericOriginModule;
   for (const auto &Child : Source.children)
     Result->children.push_back(CloneNode(*Child));
@@ -105,6 +107,8 @@ unsigned CFieldAlignment(const sema::Type &Type) {
   if (Type.IsPointer() || Type.IsFunction())
     return alignof(void *);
   if (Type.IsRecord())
+    return Type.Alignment;
+  if (Type.IsEnum())
     return Type.Alignment;
   switch (Type.Element) {
   case T::I8:
@@ -274,14 +278,13 @@ void sema::Sema::CheckClassLayouts() {
       return false;
     }
     for (auto &Field : Class.Fields) {
-      if (Field.Value.IsClass() &&
-          Classes.at(Field.Value.ClassName).Singleton) {
-        Error(*Field.Node, lex::DiagnosticKind::ClassValueOperation);
+      if (!Class.Constructor && !CanZeroInitialize(Field.Value)) {
+        Error(*Field.Node, lex::DiagnosticKind::InvalidEnumInitialization);
         return false;
       }
       if (Field.Value.IsClass() && !Visit(Classes.at(Field.Value.ClassName)))
         return false;
-      if (Field.Value.IsClass()) {
+      if (Field.Value.IsClass() && !Class.RawStorage) {
         const auto &Child = Classes.at(Field.Value.ClassName);
         if (Child.Module != Class.Module &&
             (!Child.Public || (Child.Copy && !IsPublic(*Child.Copy)) ||
@@ -378,6 +381,23 @@ void sema::Sema::CheckClassLayouts() {
         return false;
       }
     }
+    if (Class.RawStorage &&
+        (Class.Fields.size() != 1 || Class.Fields.front().Name != "data" ||
+         !Class.BaseName.empty() || !Class.Constructor)) {
+      Error(*Class.Node, lex::DiagnosticKind::InvalidClass);
+      return false;
+    }
+    if (!Class.RawStorage)
+      for (const auto &Field : Class.Fields) {
+        const auto *Stored =
+            Field.Value.IsClass() ? GetClass(Field.Value) : nullptr;
+        if (Stored && Stored->RawStorage &&
+            (!Class.Constructor || !Class.Destructor || !Class.Copy ||
+             !Class.Move)) {
+          Error(*Class.Node, lex::DiagnosticKind::InvalidClass);
+          return false;
+        }
+      }
     Class.Size = std::max<std::uint64_t>(1, (Size + Alignment - 1) / Alignment *
                                                 Alignment);
     Class.Alignment = Alignment;
@@ -441,6 +461,14 @@ void sema::Sema::CheckClassMember(const lex::Node &Member,
 
   if (CurrentConstructor) {
     Scopes.emplace_back();
+    if (Class.RawStorage) {
+      CheckBlock(*Body);
+      Scopes.pop_back();
+      CurrentConstructor = nullptr;
+      CurrentClass.clear();
+      InDestructor = false;
+      return;
+    }
     if (Body->children.size() < Class.UserFieldCount)
       Error(*Body, lex::DiagnosticKind::InvalidInitialization);
     for (std::size_t I = 0; I < Body->children.size(); ++I) {
@@ -510,10 +538,6 @@ void sema::Sema::CheckTransferAccess(const Type &Value, bool Move,
   if (!Value.IsClass())
     return;
   const auto *Class = GetClass(Value);
-  if (Class && Class->Singleton) {
-    Error(Site, lex::DiagnosticKind::ClassValueOperation);
-    return;
-  }
   const auto &AccessModule =
       Value.GenericArgument ? Value.GenericOriginModule : CurrentModule;
   if (!Class || Class->Module == AccessModule)

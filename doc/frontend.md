@@ -3,6 +3,10 @@
 当前实现提供词法分析、Pratt 表达式解析、递归下降声明/语句解析、带源码范围的 AST 和错误诊断。`--check` 只检查语法；`--emit-mlir` 生成 MLIR；`--emit-obj -o <file>` 生成本机目标文件；`--emit-exe -o <file>` 生成本机可执行文件。
 
 Kelyra 源文件默认使用 `.kly` 后缀。
+模块 `a.b` 可放在 `a/b.kly` 或 `a/b/b.kly`；同一搜索根目录下两者都存在时，
+优先使用前者。标准库采用目录入口形式，例如 `std.alloc` 位于
+`std/alloc/alloc.kly`，子模块 `std.alloc.linux` 位于
+`std/alloc/linux/linux.kly`。
 
 ## 使用
 
@@ -18,8 +22,15 @@ ctest --test-dir build --output-on-failure
 ./build/bin/kelyra --emit-exe -o main tests/cli/main.kly
 ```
 
-构建时会读取标准库的 `std/annotation.kly` 和 `c.kly`，分别加载内置注解与 C ABI 类型声明。
-默认查找同级 `kstd/src`；标准库在别处时可传入
+构建时会读取标准库的 `std/annotation/annotation.kly`、`std/meta/meta.kly`
+和 `std/c/c.kly`。直接调用 Sema 的工具和测试仍使用嵌入的注解与元数据
+定义；普通项目通过模块加载器读取隐式的 `std.annotation` 及其依赖。
+`c` 类型别名仍由 Sema 隐式提供。`@meta` 标记的模块只供编译期使用，
+不生成运行期实现。
+普通 `import std.name;` 通过模块搜索器加载源码：先查项目目录与
+`--module-path`，再查编译器配置的标准库目录。`c` 模块由编译器隐式导入，
+可直接使用 `c.int` 等类型；`import c "header.h"` 仍用于引入 C 头文件。
+标准库目录默认是同级 `kstd/src`；位于别处时可传入
 `-DKELYRA_STDLIB_SOURCE_DIR=/path/to/kstd/src`。
 
 默认优化级别为 `-O0`，不运行优化并保留调试信息；也可指定 `-O1`、`-O2`
@@ -33,7 +44,7 @@ ctest --test-dir build --output-on-failure
 
 内置类型为 `i8/i16/i32/i64/i128/isize`、`u8/u16/u32/u64/u128/usize`、`f32/f64/f128/f256/f512`、`bool` 和 `char`。`usize` 和 `isize` 使用本机指针宽度。`bool` lowering 为 `i1`；`char` 表示 Unicode 标量值并 lowering 为 `i32`。MLIR 没有原生 `f256/f512`，因此它们表示为 `!kelyra.f256` 和 `!kelyra.f512`，目前仅支持函数签名与参数透传，不支持字面量和算术。
 
-`alias Name = Existing;` 声明透明类型别名，也可写成 `alias Pointer<T> = *T;`，在使用时通过 `Pointer<i32>` 指定参数。别名可加 `pub` 并通过模块名引用；别名和目标类型可以直接互用。C ABI 类型由标准库 `c.kly` 中的公开别名提供，例如 `c.int`、`c.long` 和 `c.char`。
+`alias Name = Existing;` 声明透明类型别名，也可写成 `alias Pointer<T> = *T;`，在使用时通过 `Pointer<i32>` 指定参数。别名可以出现在模块、类体或语句块中；块内别名从声明处到块末尾可见，内层块可以遮蔽外层别名。类体别名可以使用类泛型参数，并可通过 `Box<i32>.Item` 或 `Box<i32>.Pointer<u8>` 访问。模块和类体别名可加 `pub`；别名和目标类型可以直接互用。C ABI 类型由标准库 `c.kly` 中的公开别名提供，例如 `c.int`、`c.long` 和 `c.char`。
 
 前端库本身没有 LLVM 依赖。测试统一使用独立的 GoogleTest 子模块，可按测试套件筛选：
 
@@ -46,12 +57,14 @@ ctest --test-dir build --output-on-failure
 
 测试包含 AST 结构、错误定位与恢复、嵌套限制、dialect 验证和命令行行为。CTest 仅负责运行 GoogleTest 自动发现的用例。
 
+`kelyra-format` 将文件顶层的类移到函数之前，并分别按名称排序；类成员顺序保持原样。工具在能加载导入模块且短名称仍唯一时省略类型、调用和注解引用中的模块前缀。可用 `--module-path=<目录>` 指定搜索目录；找不到导入模块时保留限定名并继续格式化。
+
 ## 当前语法
 
 ```ebnf
 module       = [ module-decl ], { import }, { declaration } ;
 module-decl  = { annotation }, "module", qualified-name, ";" ;
-import       = { annotation }, "import", qualified-name, [ ".", "*" ], ";" ;
+import       = { annotation }, "import", qualified-name, ";" ;
 qualified-name = name, { ".", name } ;
 declaration  = { annotation }, [ "pub" ],
                ( function | class | alias-declaration | annotation-declaration ) ;
@@ -78,7 +91,8 @@ parameter    = { annotation }, name, ":", [ "..." ], type ;
 class        = "class", name, [ generic-parameters ],
                [ ":", type, { ",", type } ], "{", { class-member }, "}" ;
 class-member = { annotation }, [ "pub" ],
-               ( field | constant-field | function | constructor | destructor ) ;
+               ( field | constant-field | function | constructor | destructor
+               | alias-declaration ) ;
 (* @interface class 仅允许 constant-field 与 function，后者可用分号省略函数体。 *)
 constant-field = "const", name, ":", type, "=", constant-expression, ";" ;
 field        = name, ":", type, ";" ;
@@ -88,14 +102,16 @@ type         = "*", type | qualified-name, [ "<", type, { ",", type }, ">" ],
                { "[", integer, "]" }
              | "fn", "(", [ type, { ",", type } ], ")", [ "->", result-type ] ;
 block        = "{", { statement }, "}" ;
-statement    = block | let | assignment | return | if | while
-             | asm | "break", ";" | "continue", ";" | expression, ";" ;
+statement    = block | let | assignment | return | if | while | for-in
+             | alias-declaration | asm | "break", ";" | "continue", ";"
+             | expression, ";" ;
 let          = "let", name, [ ":", type ], [ "=", expression ], ";"
              | "let", "(", name, { ",", name }, ")", "=", expression, ";" ;
 assignment   = expression, "=", expression, ";" ;
 return       = "return", [ expression, { ",", expression } ], ";" ;
 if           = "if", expression, block, [ "else", ( block | if ) ] ;
 while        = "while", expression, block ;
+for-in       = "for", name, "in", expression, block ;
 asm          = "asm", raw-block, { asm-chain }, ";" ;
 asm-chain    = ".", ( "in" | "out" ), "(", name, [ ",", name ], ")"
              | ".", "op", "(", asm-option, { ",", asm-option }, ")" ;
@@ -140,7 +156,7 @@ Kelyra 函数会使用包含模块路径的符号名；`@main` 函数无论源�
 
 ```kelyra
 @extern("getpid")
-@callconv("c")
+@callconv(CallingConvention.C)
 fn process_id() -> c.int;
 ```
 
@@ -157,22 +173,23 @@ Kernel32 等系统导出符号。可执行文件仍需通过链接器找到相�
 生成或导入 C 头文件。结构体按值、可变参数和其他调用约定尚未支持。
 
 用户可以声明带类型的注解，并在定义之前使用。注解支持位置参数、命名参数和默认值；
-参数值必须是编译期常量。模块外使用公开注解时需要写限定名，例如
-`@web.route("/")`。完整模型见 [`annotation` 设计](annotation.md)。
+参数值必须是编译期常量。导入模块后可直接使用公开注解；同名注解有歧义时，
+写限定名，例如 `@web.route("/")`。完整模型见 [`annotation` 设计](annotation.md)。
 
-`meta(target)` 构造目标的编译期反射引用，可用于 `meta.type` 和
-`meta.symbol` 注解参数；反射值不能进入普通运行期表达式。完整模型见
+`meta(target)` 构造目标的编译期反射引用，可用于 `std.meta.Type` 和
+`std.meta.Symbol` 注解参数；反射值不能进入普通运行期表达式。完整模型见
 [`meta` 反射设计](meta.md)。
 
-`import math.vector.*;` 会加载同一模块，并让其公开函数可以不带
-`math.vector.` 前缀调用。它不导入私有函数或类型。当前模块中的同名函数
-优先；如果两个通配导入同时提供同名函数，调用处会报歧义错误。
+`import math.vector;` 会加载模块，并将其公开的类型、别名、函数和注解
+引入当前模块的名称解析范围。私有声明不会被引入。本模块的同名声明优先；
+若多个导入模块提供同名声明，使用处报歧义错误，应写 `math.vector.Name`
+等限定名。导入不会自动导出给其他模块。`import module.*;` 不再支持。
 
 C 头文件使用固定的 `c` 模块导入：
 
 ```kelyra
 import c "print.h";
-import c.*;
+import c;
 
 @main
 pub fn main() -> i32 {
@@ -200,20 +217,24 @@ kelyra --emit-c-defs --c-defs-module=bridge -o bridge.kly main.kly
 
 生成文件包含 `module bridge;`、原始 C header 导入和公开的非可变参数函数包装。
 将 `bridge.kly` 放在模块搜索目录下后，可用 `import bridge;` 调用这些函数。
-无法表达的签名会跳过；原始 `c.*` API 仍可直接使用。包装模块仍需相应的 C
+无法表达的签名会跳过；原始 `c` 模块 API 仍可直接使用。包装模块仍需相应的 C
 实现或预编译库参与最终链接。
 
-`@layout(c)` 可用于 class，字段按宿主平台的 C 结构体顺序、大小和对齐排列。
+`@layout(Layout.C)` 可用于 class，字段按宿主平台的 C 结构体顺序、大小和对齐排列。
 当前仅适用于可表达为 C 数据字段的类型；嵌套 class 也必须标注
-`@layout(c)`。该注解不自动导出 C 函数符号。
+`@layout(Layout.C)`。该注解不自动导出 C 函数符号。
 
 当前 C 导入支持表中的 C 标量类型（含 `c.float`、`c.double`）、数据指针、
 完整结构体和可变参数函数。结构体值
 保持 opaque，由 Clang 编译 ABI thunk 负责按值传递；可使用 `*c.Pair` 标注指针类型，
-字符串字面量可传给 `*c.char` 参数。结构体字段访问、函数指针、枚举、宏常量和非默认
-calling convention 尚未支持。
+字符串字面量可传给 `*c.char` 参数。C 枚举按开放的整数类型导入；Kelyra 原生纯枚举及 `match` 语法见 [枚举与 match](enum-match.md)。
 
 原始指针类型写作 `*T`。一元 `&` 取得名称、数组元素或解引用表达式的地址，一元 `*` 读取指针指向的值，也可以作为赋值目标。指针不区分只读和可写，编译器不执行借用或生命周期检查。
+
+切片类型写作 `[]T` 或只读的 `[]const T`。定长数组和已有切片可通过
+`a[start:end]`、`a[:end]`、`a[start:]`、`a[:]` 取得切片；切片保存地址和
+长度，可用 `.len` 读取长度、`a[index]` 访问元素。索引与范围始终检查边界。
+详见 [切片](slice.md)。
 
 `asm { ... }` 保留原始汇编文本；`{name}` 通过 `.in(name)` 或
 `.out(name)` 绑定 Kelyra 变量并自动分配寄存器。第二个参数可指定固定
@@ -336,7 +357,7 @@ fn main() -> i32 {
 ```
 
 `fn(参数类型...) -> 返回类型` 表示函数值类型；函数类型内部省略返回类型同样表示 `void`。
-直接使用函数名称获得函数值，不需要 `&`；支持限定名和 `import module.*` 的可见性规则。
+直接使用函数名称获得函数值，不需要 `&`；支持限定名和普通模块导入的可见性规则。
 可存入变量、作为参数或返回值，也可作为多返回值的一项。支持 `choose()(41)` 连续调用。
 签名必须精确匹配；调用时先求接收的函数值，再从左到右求各参数。
 

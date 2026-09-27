@@ -1,0 +1,20 @@
+module meta_declarations;
+
+@meta
+class Hidden {}
+
+@meta
+fn hidden() -> i32 { return 99; }
+
+class Visible {
+  @meta
+  fn hidden() -> i32 { return 99; }
+
+  fn run() -> i32 { return 7; }
+}
+
+@main
+fn main() -> i32 {
+  let visible = Visible();
+  return visible.run();
+}

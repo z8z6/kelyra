@@ -1,5 +1,5 @@
 module wildcard_main;
-import math.vector.*;
+import math.vector;
 
 @main
 pub fn main() -> i32 {

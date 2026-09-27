@@ -11,7 +11,8 @@ namespace kelyra::sema::detail {
 inline bool IsTypeNode(lex::TokenKind Kind) {
   using K = lex::TokenKind;
   return Kind == K::ast_type || Kind == K::ast_pointer_type ||
-         Kind == K::ast_array_type || Kind == K::ast_result_types ||
+         Kind == K::ast_array_type || Kind == K::ast_slice_type ||
+         Kind == K::ast_result_types ||
          Kind == K::ast_function_type;
 }
 

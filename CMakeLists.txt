@@ -49,10 +49,12 @@ add_executable(kelyra
   src/Driver/CImport.cpp
   src/Driver/Analysis.cpp
   src/Driver/Emit.cpp
+  src/Driver/Shader.cpp
   src/Driver/Generics.cpp
   src/Driver/ModuleLoader.cpp)
 target_compile_definitions(kelyra PRIVATE
   KELYRA_STDLIB_SOURCE_DIR="${KELYRA_STDLIB_SOURCE_DIR}")
+target_include_directories(kelyra PRIVATE "${PROJECT_BINARY_DIR}/generated")
 target_link_libraries(kelyra PRIVATE
   kelyra_codegen
   kelyra_cimport
