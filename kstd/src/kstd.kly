@@ -1,0 +1,25 @@
+module kstd;
+
+// Library entry point: import modules that can be linked without a host CRT.
+// Other modules remain available from source for host programs.
+import std.alloc;
+import std.annotation;
+import std.util.ascii;
+import std.aspect;
+import std.sync.atomic;
+import std.io.file;
+import std.io;
+import std.util.iterator;
+import std.math.integer;
+import std.util.maybe;
+import std.memory;
+import std.meta;
+import std.sync.once;
+import std.util.option;
+import std.reflect;
+import std.util.result;
+import std.sync.signal;
+import std.util.slice;
+import std.sync.singleton;
+import std.util.string;
+import std.sync.thread;

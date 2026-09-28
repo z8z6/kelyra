@@ -1,0 +1,40 @@
+import std.sync.signal;
+import std.sync.signal.hosted;
+import std.sync.thread;
+import std.sync.thread.hosted;
+
+@cfg(os="linux", arch="x86_64")
+fn increment(context: *u8) -> *u8 {
+  *context = *context + 1;
+  return context;
+}
+
+@cfg(os="linux", arch="x86_64")
+fn handle_signal(number: i32) -> void { return; }
+
+@cfg(os="linux", arch="x86_64")
+@main
+pub fn main() -> i32 {
+  let value: u8 = 41;
+  let thread_id: usize = 0;
+  if std.sync.thread.hosted.spawn(increment, &value, &thread_id) != 0 {
+    return 1;
+  }
+  let result: *u8 = 0 as *u8;
+  if std.sync.thread.hosted.join(thread_id, &result) != 0 || value != 42 {
+    return 2;
+  }
+
+  let previous = std.sync.signal.hosted.install_handler(10, handle_signal);
+  if previous as usize == (-1) as usize {
+    return 3;
+  }
+  if std.sync.signal.send_process(std.sync.thread.current_id(), 10) != 0 {
+    return 4;
+  }
+  let ignored = std.sync.signal.hosted.install_handler(10, previous);
+  if ignored as usize == (-1) as usize {
+    return 5;
+  }
+  return 0;
+}

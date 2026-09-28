@@ -1,0 +1,50 @@
+import std.sync.atomic;
+import std.sync.once;
+
+fn increment(context: *u8) -> void {
+  *context = *context + 1;
+}
+
+fn succeed_after_first(context: *u8) -> bool {
+  *context = *context + 1;
+  return *context == 2;
+}
+
+@main
+fn main() -> i32 {
+  let word: u32 = 0;
+  let atomic = std.sync.atomic.AtomicU32(&word);
+  if atomic.load() != 0 || !atomic.compare_exchange(0, 7) {
+    return 1;
+  }
+  if atomic.compare_exchange(0, 8) || atomic.load() != 7 {
+    return 2;
+  }
+  atomic.store(0);
+  let once = std.sync.once.Once(&word);
+  if !once.begin() {
+    return 3;
+  }
+  once.finish(false);
+  if !once.begin() {
+    return 4;
+  }
+  once.finish(true);
+  if once.begin() || atomic.load() != 2 {
+    return 5;
+  }
+  let second_state: u32 = 0;
+  let second = std.sync.once.Once(&second_state);
+  let count: u8 = 0;
+  if second.try_call(&count, succeed_after_first) || count != 1 {
+    return 6;
+  }
+  if !second.try_call(&count, succeed_after_first) || count != 2 {
+    return 7;
+  }
+  second.call(&count, increment);
+  if count != 2 || second_state != 2 {
+    return 8;
+  }
+  return 0;
+}

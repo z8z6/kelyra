@@ -1,0 +1,43 @@
+module std.util.ascii;
+
+pub fn is_ascii(value: u8) -> bool {
+  return value <= 127;
+}
+
+pub fn is_digit(value: u8) -> bool {
+  return value >= 48 && value <= 57;
+}
+
+pub fn is_lower(value: u8) -> bool {
+  return value >= 97 && value <= 122;
+}
+
+pub fn is_upper(value: u8) -> bool {
+  return value >= 65 && value <= 90;
+}
+
+pub fn is_alpha(value: u8) -> bool {
+  return is_lower(value) || is_upper(value);
+}
+
+pub fn is_alphanumeric(value: u8) -> bool {
+  return is_alpha(value) || is_digit(value);
+}
+
+pub fn is_whitespace(value: u8) -> bool {
+  return value == 32 || (value >= 9 && value <= 13);
+}
+
+pub fn to_lower(value: u8) -> u8 {
+  if is_upper(value) {
+    return value + 32;
+  }
+  return value;
+}
+
+pub fn to_upper(value: u8) -> u8 {
+  if is_lower(value) {
+    return value - 32;
+  }
+  return value;
+}

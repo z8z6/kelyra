@@ -1,0 +1,37 @@
+@cfg(os="windows", arch="x86_64") module vulkan_triangle_example;
+
+import std.graphics.window;
+import std.io;
+import std.io.file;
+
+fn read_shader(path: *c.char, output: *u8, capacity: usize) -> i64 {
+  let handle = std.io.file.open(path, 0);
+  if handle < 0 { return handle; }
+  let length = std.io.file.read(handle, output, capacity);
+  std.io.file.close(handle);
+  return length;
+}
+
+@main
+pub fn main() -> i32 {
+  let vertex: [8192]u8;
+  let fragment: [8192]u8;
+  let vertex_size = read_shader("build/vulkan_triangle.vert.spv",
+                                &vertex[0], 8192);
+  let fragment_size = read_shader("build/vulkan_triangle.frag.spv",
+                                  &fragment[0], 8192);
+  if vertex_size <= 0 || fragment_size <= 0 {
+    std.io.println("Cannot read compiled Kelyra shaders");
+    return 1;
+  }
+  let result = std.graphics.window.run_backend(
+      std.graphics.window.Backend.Vulkan, "Kelyra Vulkan triangle",
+      800, 600, &vertex[0], vertex_size as usize,
+      &fragment[0], fragment_size as usize, 3);
+  if result != 0 {
+    std.io.print("Vulkan window failed at stage ");
+    std.io.print_int(result as i64);
+    std.io.println("");
+  }
+  return result;
+}

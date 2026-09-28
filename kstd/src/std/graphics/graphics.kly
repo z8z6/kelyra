@@ -1,0 +1,59 @@
+module std.graphics;
+
+import std.annotation;
+import std.util.string;
+
+@target(Target.Function)
+pub annotation vertex();
+
+@target(Target.Function)
+pub annotation fragment();
+
+@target(Target.Field)
+pub annotation position();
+
+@target(Target.Parameter)
+pub annotation vertex_index();
+
+@target(Target.Field, Target.Parameter)
+pub annotation location(index: usize);
+
+// Maps a declared shader-only function to a target's standard GPU intrinsic.
+@target(Target.Function)
+pub annotation gpu_builtin(name: StringSlice);
+
+pub class Vec2 {
+  pub x: f32;
+  pub y: f32;
+
+  pub init(x: f32, y: f32) {
+    this.x = x;
+    this.y = y;
+  }
+}
+
+pub class Vec3 {
+  pub x: f32;
+  pub y: f32;
+  pub z: f32;
+
+  pub init(x: f32, y: f32, z: f32) {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+  }
+}
+
+pub class Vec4 {
+  pub x: f32;
+  pub y: f32;
+  pub z: f32;
+  pub w: f32;
+
+  pub init(x: f32, y: f32, z: f32, w: f32) {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+    this.w = w;
+  }
+}

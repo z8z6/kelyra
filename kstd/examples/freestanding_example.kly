@@ -1,0 +1,73 @@
+import std.alloc;
+import std.io.file;
+import std.io;
+
+@main
+pub fn main() -> i32 {
+  let empty: *u8 = std.alloc.allocate(0);
+  if std.alloc.is_null(empty) {
+    return 12;
+  }
+  std.alloc.release(empty);
+  if !std.alloc.is_null(std.alloc.allocate(18446744073709551615)) {
+    return 13;
+  }
+  let bytes: *u8 = std.alloc.allocate(4);
+  if std.alloc.is_null(bytes) {
+    return 1;
+  }
+  std.alloc.fill(bytes, 97, 3);
+  std.alloc.store(bytes, 3, 0);
+  let grown: *u8 = std.alloc.reallocate(bytes, 8);
+  if std.alloc.is_null(grown) {
+    std.alloc.release(bytes);
+    return 2;
+  }
+  if std.alloc.load(grown, 0) != 97 || std.alloc.load(grown, 2) != 97 {
+    std.alloc.release(grown);
+    return 3;
+  }
+  if !std.alloc.is_null(std.alloc.reallocate(grown, 18446744073709551615)) || std.alloc.load(grown, 0) != 97 {
+    std.alloc.release(grown);
+    return 14;
+  }
+
+  let handle: i64 = std.io.file.open("roundtrip.txt", 1);
+  if handle < 0 {
+    std.alloc.release(grown);
+    return 4;
+  }
+  let written: i64 = std.io.file.write(handle, grown, 3);
+  let closed: i64 = std.io.file.close(handle);
+  if written != 3 || closed != 0 {
+    std.alloc.release(grown);
+    return 5;
+  }
+  handle = std.io.file.open("roundtrip.txt", 0);
+  if handle < 0 {
+    std.alloc.release(grown);
+    return 6;
+  }
+  let read_count: i64 = std.io.file.read(handle, grown, 8);
+  if std.io.file.close(handle) != 0 || read_count != 3 {
+    std.alloc.release(grown);
+    return 7;
+  }
+  if std.alloc.load(grown, 0) != 97 || std.alloc.load(grown, 1) != 97 || std.alloc.load(grown, 2) != 97 {
+    std.alloc.release(grown);
+    return 8;
+  }
+  if std.io.file.open("definitely-missing-kstd-file.txt", 0) >= 0 {
+    std.alloc.release(grown);
+    return 10;
+  }
+  if std.io.file.open("roundtrip.txt", 42) >= 0 {
+    std.alloc.release(grown);
+    return 11;
+  }
+  std.alloc.release(grown);
+  if std.io.write_stdout("ok\n" as *u8, 3) != 3 {
+    return 9;
+  }
+  return 0;
+}

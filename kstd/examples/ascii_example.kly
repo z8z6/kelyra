@@ -1,0 +1,18 @@
+import std.util.ascii;
+
+@main
+pub fn main() -> i32 {
+  if !is_digit(53) || is_digit(65) {
+    return 1;
+  }
+  if !is_alpha(65) || !is_alphanumeric(122) {
+    return 2;
+  }
+  if !is_whitespace(10) || is_whitespace(65) {
+    return 3;
+  }
+  if to_lower(65) != 97 || to_upper(122) != 90 {
+    return 4;
+  }
+  return 0;
+}

@@ -1,0 +1,192 @@
+module std.util.string;
+
+import std.alloc;
+import std.util.slice;
+
+pub alias StringSlice = []const u8;
+
+fn text_length(text: *c.char) -> usize {
+  if text as usize == 0 {
+    return 0;
+  }
+  let size: usize = 0;
+  while load(text as*u8, size) != 0 {
+    size = size + 1;
+  }
+  return size;
+}
+
+// Borrows a NUL-terminated C string. The result does not include the NUL.
+pub fn from_cstr(text: *c.char) -> StringSlice {
+  return std.util.slice.from_raw_parts_const<u8>(text as*u8, text_length(text));
+}
+
+pub fn equal(left: StringSlice, right: StringSlice) -> bool {
+  if left.len != right.len {
+    return false;
+  }
+  let index: usize = 0;
+  while index < left.len {
+    if left[index] != right[index] {
+      return false;
+    }
+    index = index + 1;
+  }
+  return true;
+}
+
+// An owned, mutable byte string. The buffer is allocated through std.alloc and
+// released by deinit, so a String local cleans up when it leaves its scope.
+pub class String {
+  size: usize;
+  reserved: usize;
+  data: *u8;
+  // Creates a string holding a copy of `text`.
+  pub init(text: *c.char) {
+    size = 0;
+    reserved = 1;
+    data = allocate(reserved);
+    if !is_null(data) {
+      store(data, 0, 0);
+    }
+    assign(text);
+  }
+  // Releases the buffer.
+  deinit() {
+    release(data);
+  }
+  pub fn copy(other: *String) {
+    size = 0;
+    reserved = 1;
+    data = allocate(reserved);
+    if !is_null(data) {
+      store(data, 0, 0);
+    }
+    assign_view(other.view());
+  }
+  pub fn move(other: *String) {
+    size = other.size;
+    reserved = other.reserved;
+    data = other.data;
+    other.size = 0;
+    other.reserved = 0;
+    other.data = 0 as*u8;
+  }
+  // Number of bytes, excluding the terminator.
+  pub fn length() -> usize {
+    return size;
+  }
+  // Borrows the current bytes. The view is invalidated by a mutation.
+  pub fn view() -> StringSlice {
+    return std.util.slice.from_raw_parts_const<u8>(data, size);
+  }
+  // Bytes currently reserved, including the terminator.
+  pub fn capacity() -> usize {
+    return reserved;
+  }
+  // Reports whether the string holds no bytes.
+  pub fn empty() -> bool {
+    return size == 0;
+  }
+  // Byte at `index`, or 0 when the index is out of range.
+  pub fn at(index: usize) -> u8 {
+    if index >= size {
+      return 0;
+    }
+    return load(data, index);
+  }
+  // Replaces the byte at `index`; out-of-range writes are ignored.
+  pub fn set(index: usize, value: u8) -> void {
+    if index >= size {
+      return;
+    }
+    store(data, index, value);
+  }
+  // Replaces the contents with a copy of `text`.
+  pub fn assign(text: *c.char) -> void {
+    assign_view(from_cstr(text));
+  }
+  pub fn assign_view(text: StringSlice) -> void {
+    let incoming: usize = text.len;
+    reserve(incoming + 1);
+    if is_null(data) || reserved <= incoming {
+      return;
+    }
+    let index: usize = 0;
+    while index < incoming {
+      store(data, index, text[index]);
+      index = index + 1;
+    }
+    size = incoming;
+    store(data, size, 0);
+  }
+  // Appends a copy of `text`.
+  pub fn append(text: *c.char) -> void {
+    append_view(from_cstr(text));
+  }
+  // The source must not borrow this String because growth can move its buffer.
+  pub fn append_view(text: StringSlice) -> void {
+    reserve(size + text.len + 1);
+    if is_null(data) || reserved <= size + text.len {
+      return;
+    }
+    let index: usize = 0;
+    while index < text.len {
+      store(data, size + index, text[index]);
+      index = index + 1;
+    }
+    size = size + text.len;
+    store(data, size, 0);
+  }
+  // Appends one byte.
+  pub fn append_byte(value: u8) -> void {
+    reserve(size + 2);
+    if is_null(data) {
+      return;
+    }
+    store(data, size, value);
+    size = size + 1;
+    store(data, size, 0);
+  }
+  // Removes every byte but keeps the allocation.
+  pub fn clear() -> void {
+    size = 0;
+    if !is_null(data) {
+      store(data, 0, 0);
+    }
+  }
+  // Compares the contents with a C string.
+  pub fn equals(text: *c.char) -> bool {
+    return equals_view(from_cstr(text));
+  }
+  pub fn equals_view(text: StringSlice) -> bool {
+    return equal(view(), text);
+  }
+  // Pointer to the null-terminated bytes, valid until the next mutation.
+  pub fn data_pointer() -> *c.char {
+    return data as*c.char;
+  }
+  // Grows the allocation to hold at least `needed` bytes, including the
+  // terminator. A failed growth keeps the existing buffer.
+  fn reserve(needed: usize) -> void {
+    if needed <= reserved {
+      return;
+    }
+    let next: usize = reserved * 2;
+    if next < reserved || next < needed {
+      next = needed;
+    }
+    let grown: *u8 = reallocate(data, next);
+    if is_null(grown) {
+      return;
+    }
+    data = grown;
+    reserved = next;
+  }
+}
+
+pub fn to_owned(text: StringSlice) -> String {
+  let result = String("");
+  result.assign_view(text);
+  return result;
+}

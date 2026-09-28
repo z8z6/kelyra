@@ -1,0 +1,16 @@
+import std.math.basic;
+import std.math.integer;
+
+@main
+pub fn main() -> i32 {
+  if abs_i64(-7) != 7 || clamp_i64(12, 0, 10) != 10 {
+    return 1;
+  }
+  if gcd_i64(1071, 462) != 21 || pow_i64(3, 4) != 81 {
+    return 2;
+  }
+  if abs_f64(-1.5) != 1.5 || lerp_f64(10.0, 20.0, 0.25) != 12.5 {
+    return 3;
+  }
+  return 0;
+}

@@ -1,0 +1,93 @@
+import std.reflect;
+import std.util.string;
+
+@reflect
+class Actor {
+  pub health: i32;
+  hidden: i32;
+  @reflect
+  id: u64;
+}
+
+class Sparse {
+  pub unmarked: i32;
+  @reflect
+  chosen: i32;
+}
+
+@reflect
+class Generic<T> {
+  pub item: T;
+}
+
+@main
+fn run() -> i32 {
+  let actor = Actor();
+  actor.health = 42;
+  let type = std.reflect.type_of<Actor>();
+  if !std.util.string.equal(type.name(), std.util.string.from_cstr("Actor")) {
+    return 12;
+  }
+  if !type.has_field("health") || !type.has_field("id") || type.has_field("hidden") {
+    return 1;
+  }
+  if type.field_count() != 2 {
+    return 2;
+  }
+  let found = type.field("health");
+  if !found.valid || !found.ok {
+    return 3;
+  }
+  let field = found.value();
+  if !field.owner.type.same_type(type) || !field.field_type.same_type(std.reflect.type_of<i32>()) {
+    return 16;
+  }
+  if !std.util.string.equal(field.owner.name(), std.util.string.from_cstr("Actor")) {
+    return 17;
+  }
+  if !std.util.string.equal(field.name(), std.util.string.from_cstr("health")) || !type.has_field_bytes(std.util.string.from_cstr("health")) {
+    return 13;
+  }
+  let copied_name = std.util.string.to_owned(field.name());
+  if !copied_name.equals("health") {
+    return 14;
+  }
+  let found_bytes = type.field_bytes(std.util.string.from_cstr("health"));
+  if !found_bytes.valid || !found_bytes.ok {
+    return 15;
+  }
+  if !field.type().same_type(std.reflect.type_of<i32>()) {
+    return 4;
+  }
+  let object = std.reflect.value<Actor>(&actor);
+  let read = std.reflect.read<i32>(field, object);
+  if !read.valid || !read.ok || read.value() != 42 {
+    return 5;
+  }
+  let written = std.reflect.write<i32>(field, object, 77);
+  if !written.valid || !written.ok || actor.health != 77 {
+    return 6;
+  }
+  let wrong_type = std.reflect.read<u64>(field, object);
+  if !wrong_type.valid || wrong_type.ok || wrong_type.error() != 2 {
+    return 8;
+  }
+  let sparse = std.reflect.type_of<Sparse>();
+  if sparse.has_field("unmarked") || !sparse.has_field("chosen") {
+    return 7;
+  }
+  let other = Sparse();
+  let wrong_owner = std.reflect.read<i32>(field, std.reflect.value<Sparse>(&other));
+  if !wrong_owner.valid || wrong_owner.ok || wrong_owner.error() != 1 {
+    return 9;
+  }
+  let generic = std.reflect.type_of<Generic<i32>>();
+  if !generic.has_field("item") {
+    return 10;
+  }
+  let item = generic.field("item");
+  if !item.valid || !item.ok || !item.value().type().same_type(std.reflect.type_of<i32>()) {
+    return 11;
+  }
+  return 0;
+}

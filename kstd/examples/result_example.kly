@@ -1,0 +1,55 @@
+import std.alloc;
+import std.util.result;
+
+class Token {
+  value: *i32;
+  init(number: i32) {
+    value = std.alloc.allocate(4) as*i32;
+    if value as usize != 0 {
+      *value = number;
+    }
+  }
+  fn copy(other: *Token) {
+    value = std.alloc.allocate(4) as*i32;
+    if value as usize != 0 {
+      *value = *other.value;
+    }
+  }
+  fn move(other: *Token) {
+    value = other.value;
+    other.value = 0 as*i32;
+  }
+  deinit() {
+    std.alloc.release(value as*u8);
+  }
+}
+
+class Error {
+  code: i32;
+  init(number: i32) {
+    code = number;
+  }
+}
+
+@main
+fn run() -> i32 {
+  let present = std.util.result.success<Token, Error>(Token(42));
+  if !present.valid || !present.ok {
+    return 1;
+  }
+  let copied = present;
+  let result = copied.value();
+  let failed = std.util.result.failure<Token, Error>(Error(7));
+  if !failed.valid || failed.ok {
+    return 3;
+  }
+  let copied_error = failed;
+  let error = copied_error.error();
+  if error.code != 7 {
+    return 5;
+  }
+  if result.value as usize == 0 {
+    return 4;
+  }
+  return *result.value - 42;
+}

@@ -1,0 +1,211 @@
+module std.reflect;
+
+import std.util.result;
+import std.util.slice;
+import std.util.string;
+
+pub alias Id = usize;
+
+// Runtime descriptors borrow names from the compiler-emitted read-only blob.
+// A descriptor is available only when its type was exported with @reflect.
+fn __type_data<T>(probe: *T) -> *u8 {
+  return 0 as*u8;
+}
+
+fn u32_at(data: *u8) -> u32 {
+  let result: u32 = 0;
+  let place: u32 = 1;
+  let index: usize = 0;
+  while index < 4 {
+    let byte: u8 = *((data as usize + index) as*u8);
+    result = result + (byte as u32) * place;
+    if index < 3 {
+      place = place * 256;
+    }
+    index = index + 1;
+  }
+  return result;
+}
+
+fn u64_at(data: *u8) -> u64 {
+  let result: u64 = 0;
+  let place: u64 = 1;
+  let index: usize = 0;
+  while index < 8 {
+    let byte: u8 = *((data as usize + index) as*u8);
+    result = result + (byte as u64) * place;
+    index = index + 1;
+  }
+  return result;
+}
+
+pub class Type {
+  pub id: Id;
+  raw_name: *u8;
+  name_length: usize;
+  data: *u8;
+  pub fn name() -> std.util.string.StringSlice {
+    return std.util.slice.from_raw_parts_const<u8>(raw_name, name_length);
+  }
+  pub fn same_type(other: Type) -> bool {
+    return id == other.id && std.util.string.equal(name(), other.name());
+  }
+  pub fn field_count() -> u32 {
+    if data as usize == 0 {
+      return 0;
+    }
+    return u32_at((data as usize + 20) as*u8);
+  }
+  pub fn has_field(field_name: *c.char) -> bool {
+    return has_field_bytes(std.util.string.from_cstr(field_name));
+  }
+  pub fn has_field_bytes(field_name: std.util.string.StringSlice) -> bool {
+    if data as usize == 0 {
+      return false;
+    }
+    let cursor: usize = data as usize + 24 + u32_at((data as usize + 16) as*u8) as usize + 1;
+    let index: u32 = 0;
+    while index < field_count() {
+      let name_size: usize = u32_at((cursor + 16) as*u8) as usize;
+      let type_name_size: usize = u32_at((cursor + 20) as*u8) as usize;
+      let name = std.util.slice.from_raw_parts_const<u8>((cursor + 24) as*u8, name_size);
+      if std.util.string.equal(name, field_name) {
+        return true;
+      }
+      cursor = cursor + 24 + name_size + 1 + type_name_size + 1;
+      index = index + 1;
+    }
+    return false;
+  }
+  pub fn field(field_name: *c.char) -> std.util.result.Result<Field,
+  i32> {
+    return field_bytes(std.util.string.from_cstr(field_name));
+  }
+  pub fn field_bytes(field_name: std.util.string.StringSlice) -> std.util.result.Result<Field,
+  i32> {
+    if data as usize == 0 {
+      return std.util.result.failure<Field, i32>(0);
+    }
+    let cursor: usize = data as usize + 24 + u32_at((data as usize + 16) as*u8) as usize + 1;
+    let index: u32 = 0;
+    while index < field_count() {
+      let name_size: usize = u32_at((cursor + 16) as*u8) as usize;
+      let type_name_size: usize = u32_at((cursor + 20) as*u8) as usize;
+      let name = std.util.slice.from_raw_parts_const<u8>((cursor + 24) as*u8, name_size);
+      if std.util.string.equal(name, field_name) {
+        let result = Field();
+        result.owner.type = *this;
+        result.field_type.id = u64_at(cursor as*u8) as Id;
+        result.field_type.raw_name = (cursor + 25 + name_size) as*u8;
+        result.field_type.name_length = type_name_size;
+        result.byte_offset = u64_at((cursor + 8) as*u8) as usize;
+        result.raw_name = (cursor + 24) as*u8;
+        result.name_length = name_size;
+        return std.util.result.success<Field, i32>(result);
+      }
+      cursor = cursor + 24 + name_size + 1 + type_name_size + 1;
+      index = index + 1;
+    }
+    return std.util.result.failure<Field, i32>(0);
+  }
+}
+
+pub class Class {
+  pub type: Type;
+  pub fn name() -> std.util.string.StringSlice {
+    return type.name();
+  }
+  pub fn same_class(other: Class) -> bool {
+    return type.same_type(other.type);
+  }
+}
+
+pub class Field {
+  pub owner: Class;
+  pub field_type: Type;
+  pub byte_offset: usize;
+  raw_name: *u8;
+  name_length: usize;
+  pub fn name() -> std.util.string.StringSlice {
+    return std.util.slice.from_raw_parts_const<u8>(raw_name, name_length);
+  }
+  pub fn type() -> Type {
+    return field_type;
+  }
+}
+
+// Reserved runtime descriptor shapes. The current KLRF v1 blob exports only
+// types and selected instance fields, so these have no lookup API yet.
+pub class Function {
+  pub name: std.util.string.StringSlice;
+  pub return_type: Type;
+}
+
+pub class Parameter {
+  pub name: std.util.string.StringSlice;
+  pub owner: Function;
+  pub parameter_type: Type;
+  pub index: usize;
+}
+
+pub class Value {
+  object_type: Type;
+  address: *u8;
+}
+
+pub alias TypeInfo = Type;
+
+pub alias FieldInfo = Field;
+
+pub fn type_of<T>() -> Type {
+  let data: *u8 = __type_data<T>(0 as*T);
+  let result = Type();
+  if data as usize == 0 || u32_at(data) != 1179798603 || u32_at((data as usize + 4) as*u8) != 1 {
+    return result;
+  }
+  result.data = data;
+  result.id = u64_at((data as usize + 8) as*u8) as Id;
+  result.name_length = u32_at((data as usize + 16) as*u8) as usize;
+  result.raw_name = (data as usize + 24) as*u8;
+  return result;
+}
+
+pub fn value<T>(object: *T) -> Value {
+  let result = Value();
+  let info = type_of<T>();
+  result.object_type = info;
+  result.address = object as*u8;
+  return result;
+}
+
+// err 1: wrong owner, 2: wrong field type, 3: null object.
+pub fn read<T>(field: Field, object: Value) -> std.util.result.Result<T, i32> {
+  if !field.owner.type.same_type(object.object_type) {
+    return std.util.result.failure<T, i32>(1);
+  }
+  let field_type = type_of<T>();
+  if !field.field_type.same_type(field_type) {
+    return std.util.result.failure<T, i32>(2);
+  }
+  if object.address as usize == 0 {
+    return std.util.result.failure<T, i32>(3);
+  }
+  let pointer: *T = (object.address as usize + field.byte_offset) as*T;
+  return std.util.result.success<T, i32>(*pointer);
+}
+
+pub fn write<T>(field: Field, object: Value, incoming: T) -> std.util.result.Result<bool, i32> {
+  if !field.owner.type.same_type(object.object_type) {
+    return std.util.result.failure<bool, i32>(1);
+  }
+  let field_type = type_of<T>();
+  if !field.field_type.same_type(field_type) {
+    return std.util.result.failure<bool, i32>(2);
+  }
+  if object.address as usize == 0 {
+    return std.util.result.failure<bool, i32>(3);
+  }
+  let pointer: *T = (object.address as usize + field.byte_offset) as*T;
+  *pointer = incoming;
+  return std.util.result.success<bool, i32>(true);
+}

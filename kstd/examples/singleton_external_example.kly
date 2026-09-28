@@ -1,0 +1,14 @@
+import singleton_library;
+
+@main
+fn main() -> i32 {
+  let first = singleton_library.PrivateCounter.instance();
+  let again = singleton_library.PrivateCounter.instance();
+  if first as usize == 0 || first as usize != again as usize {
+    return 1;
+  }
+  if first.value != 12 {
+    return 2;
+  }
+  return 0;
+}

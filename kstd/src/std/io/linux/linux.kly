@@ -1,0 +1,46 @@
+@cfg(os="linux", arch="x86_64") module std.io.linux;
+
+pub fn read_stdin(output: *u8, capacity: usize) -> i64 {
+  let descriptor: i64 = 0;
+  let number: i64 = 0;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(descriptor, rdi)
+  .in(output, rsi)
+  .in(capacity, rdx)
+  .op(clobber(rcx, r11));
+  return number;
+}
+
+pub fn write_stdout(data: *u8, count: usize) -> i64 {
+  let descriptor: i64 = 1;
+  let number: i64 = 1;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(descriptor, rdi)
+  .in(data, rsi)
+  .in(count, rdx)
+  .op(clobber(rcx, r11));
+  return number;
+}
+
+pub fn write_stderr(data: *u8, count: usize) -> i64 {
+  let descriptor: i64 = 2;
+  let number: i64 = 1;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(descriptor, rdi)
+  .in(data, rsi)
+  .in(count, rdx)
+  .op(clobber(rcx, r11));
+  return number;
+}

@@ -1,0 +1,19 @@
+@cfg(os="windows", arch="x86_64") module std.win.guid;
+
+@layout(Layout.C)
+pub class Guid {
+  pub data1: u32;
+  pub data2: u16;
+  pub data3: u16;
+  pub data4: [8]u8;
+}
+
+// The final two words are the eight Data4 bytes in little-endian order.
+pub fn set(value: *Guid, data1: u32, data2: u16, data3: u16,
+           tail0: u32, tail1: u32) -> void {
+  (*value).data1 = data1;
+  (*value).data2 = data2;
+  (*value).data3 = data3;
+  *((&(*value).data4[0]) as *u32) = tail0;
+  *((&(*value).data4[4]) as *u32) = tail1;
+}

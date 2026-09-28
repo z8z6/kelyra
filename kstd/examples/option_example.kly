@@ -1,0 +1,29 @@
+import std.util.option;
+
+@main
+fn run() -> i32 {
+  let flag = std.util.option.Option("--verbose", "--verbose");
+  if !flag.matched || flag.has_value {
+    return 1;
+  }
+  let assigned = std.util.option.Option("--output", "--output=file.txt");
+  if !assigned.matched || !assigned.has_value {
+    return 2;
+  }
+  if *(assigned.value as*u8) != 102 {
+    return 3;
+  }
+  let empty = std.util.option.Option("--output", "--output=");
+  if !empty.matched || !empty.has_value || *(empty.value as*u8) != 0 {
+    return 4;
+  }
+  let absent = std.util.option.Option("--output", "--output-dir=tmp");
+  if absent.matched || absent.has_value {
+    return 5;
+  }
+  let short = std.util.option.Option("-o", "-o=tmp");
+  if !short.matched || !short.has_value {
+    return 6;
+  }
+  return 0;
+}

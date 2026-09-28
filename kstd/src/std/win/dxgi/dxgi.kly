@@ -1,0 +1,90 @@
+@cfg(os="windows", arch="x86_64") module std.win.dxgi;
+
+import std.win.com;
+import std.win.guid;
+
+pub alias Format = u32;
+pub alias Factory = *u8;
+pub alias SwapChain = *u8;
+
+pub fn format_rgba8_unorm() -> Format { return 28; }
+pub fn usage_render_target() -> u32 { return 32; }
+pub fn swap_effect_flip_discard() -> u32 { return 4; }
+
+@layout(Layout.C)
+pub class SampleDesc {
+  pub count: u32;
+  pub quality: u32;
+}
+
+@layout(Layout.C)
+pub class SwapChainDesc1 {
+  pub width: u32;
+  pub height: u32;
+  pub format: Format;
+  pub stereo: i32;
+  pub sample: SampleDesc;
+  pub usage: u32;
+  pub buffer_count: u32;
+  pub scaling: u32;
+  pub swap_effect: u32;
+  pub alpha_mode: u32;
+  pub flags: u32;
+}
+
+@extern("CreateDXGIFactory2", "dxgi")
+@callconv(CallingConvention.System)
+fn create_factory_raw(flags: u32, iid: *std.win.guid.Guid,
+                      factory: **u8) -> i32;
+
+pub fn create_factory(factory: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  std.win.guid.set(&iid, 466020866, 61238, 17999,
+                   3391163583, 2316756281);
+  return create_factory_raw(0, &iid, factory);
+}
+
+pub fn warp_adapter(factory: Factory, adapter: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  // IID_IDXGIAdapter1
+  std.win.guid.set(&iid, 688099169, 14393, 17958,
+                   1745419665, 85590393);
+  let call = std.win.com.method(factory, 27) as fn(*u8,
+      *std.win.guid.Guid, **u8) -> i32;
+  return call(factory, &iid, adapter);
+}
+
+pub fn create_swap_chain_for_window(factory: Factory, queue: *u8,
+                                    window: *u8, desc: *SwapChainDesc1,
+                                    swap_chain: **u8) -> i32 {
+  let call = std.win.com.method(factory, 15) as fn(*u8, *u8, *u8,
+      *SwapChainDesc1, *u8, *u8, **u8) -> i32;
+  return call(factory, queue, window, desc, 0 as *u8, 0 as *u8,
+              swap_chain);
+}
+
+pub fn query_swap_chain3(swap_chain1: SwapChain,
+                         swap_chain3: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  std.win.guid.set(&iid, 2497289179, 61944, 19120,
+                   2692560562, 2983857687);
+  return std.win.com.query_interface(swap_chain1, &iid, swap_chain3);
+}
+
+pub fn present(swap_chain: SwapChain, sync_interval: u32,
+               flags: u32) -> i32 {
+  let call = std.win.com.method(swap_chain, 8) as fn(*u8, u32, u32) -> i32;
+  return call(swap_chain, sync_interval, flags);
+}
+
+pub fn buffer(swap_chain: SwapChain, index: u32, iid: *std.win.guid.Guid,
+              result: **u8) -> i32 {
+  let call = std.win.com.method(swap_chain, 9) as fn(*u8, u32,
+      *std.win.guid.Guid, **u8) -> i32;
+  return call(swap_chain, index, iid, result);
+}
+
+pub fn current_buffer_index(swap_chain3: SwapChain) -> u32 {
+  let call = std.win.com.method(swap_chain3, 36) as fn(*u8) -> u32;
+  return call(swap_chain3);
+}

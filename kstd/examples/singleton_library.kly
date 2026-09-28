@@ -1,0 +1,11 @@
+module singleton_library;
+
+import std.sync.singleton;
+
+@singleton
+pub class PrivateCounter {
+  pub value: i32;
+  init() {
+    value = 12;
+  }
+}

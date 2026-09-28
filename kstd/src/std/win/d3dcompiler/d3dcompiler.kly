@@ -1,0 +1,19 @@
+@cfg(os="windows", arch="x86_64") module std.win.d3dcompiler;
+
+@extern("D3DCompile", "d3dcompiler")
+@callconv(CallingConvention.System)
+fn compile_raw(source: *u8, source_size: usize, source_name: *c.char,
+               defines: *u8, include: *u8, entry: *c.char,
+               target: *c.char, flags: u32, effect_flags: u32,
+               shader: **u8, errors: **u8) -> i32;
+
+pub fn compile(source: *c.char, entry: *c.char, target: *c.char,
+               shader: **u8, errors: **u8) -> i32 {
+  let length: usize = 0;
+  while *((source as usize + length) as *u8) != 0 {
+    length = length + 1;
+  }
+  return compile_raw(source as *u8, length, 0 as *c.char,
+                     0 as *u8, 0 as *u8, entry, target,
+                     0, 0, shader, errors);
+}

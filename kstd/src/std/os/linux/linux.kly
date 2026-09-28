@@ -1,0 +1,95 @@
+@cfg(os="linux", arch="x86_64") module std.os.linux;
+
+@extern("getenv")
+@callconv(CallingConvention.C)
+fn libc_getenv(name: *c.char) -> *c.char;
+
+// Linux x86-64 kernel timespec layout.
+@layout(Layout.C)
+class Timespec {
+  pub seconds: i64;
+  pub nanoseconds: i64;
+}
+
+pub fn process_id() -> i64 {
+  let number: i64 = 39;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .op(clobber(rcx, r11));
+  return number;
+}
+
+// CLOCK_MONOTONIC is clock ID 1 on Linux. Returns -1 on syscall failure.
+pub fn monotonic_millis() -> i64 {
+  let now = Timespec();
+  let pointer = &now;
+  let clock: i64 = 1;
+  let number: i64 = 228;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(clock, rdi)
+  .in(pointer, rsi)
+  .op(clobber(rcx, r11));
+  if number < 0 {
+    return -1;
+  }
+  return now.seconds * 1000 + now.nanoseconds / 1000000;
+}
+
+// Returns 0 on success or a positive Linux errno. Retries after EINTR.
+pub fn sleep_millis(milliseconds: i64) -> i64 {
+  if milliseconds < 0 {
+    return 22;
+  }
+  let requested = Timespec();
+  requested.seconds = milliseconds / 1000;
+  requested.nanoseconds = (milliseconds % 1000) * 1000000;
+  let remaining = Timespec();
+  let request_pointer = &requested;
+  let remaining_pointer = &remaining;
+  while true {
+    let number: i64 = 35;
+    asm {
+      syscall
+    }
+    .in(number, rax)
+    .out(number, rax)
+    .in(request_pointer, rdi)
+    .in(remaining_pointer, rsi)
+    .op(clobber(rcx, r11));
+    if number == 0 {
+      return 0;
+    }
+    if number != -4 {
+      return -number;
+    }
+    requested.seconds = remaining.seconds;
+    requested.nanoseconds = remaining.nanoseconds;
+  }
+  return 0;
+}
+
+// Returns bytes written including NUL, or a negative Linux errno.
+pub fn working_directory(output: *u8, capacity: usize) -> i64 {
+  let number: i64 = 79;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(output, rdi)
+  .in(capacity, rsi)
+  .op(clobber(rcx, r11));
+  return number;
+}
+
+// Borrowed libc pointer; null when absent. No allocation or ownership transfer.
+pub fn environment(name: *c.char) -> *c.char {
+  return libc_getenv(name);
+}

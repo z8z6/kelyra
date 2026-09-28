@@ -1,0 +1,59 @@
+module std.math.basic;
+
+pub fn abs_f32(value: f32) -> f32 {
+  if value < 0.0 {
+    return -value;
+  }
+  return value;
+}
+
+pub fn min_f32(left: f32, right: f32) -> f32 {
+  if left < right {
+    return left;
+  }
+  return right;
+}
+
+pub fn max_f32(left: f32, right: f32) -> f32 {
+  if left > right {
+    return left;
+  }
+  return right;
+}
+
+pub fn clamp_f32(value: f32, minimum: f32, maximum: f32) -> f32 {
+  return min_f32(max_f32(value, minimum), maximum);
+}
+
+pub fn lerp_f32(start: f32, end: f32, amount: f32) -> f32 {
+  return start + (end - start) * amount;
+}
+
+pub fn abs_f64(value: f64) -> f64 {
+  if value < 0.0 {
+    return -value;
+  }
+  return value;
+}
+
+pub fn min_f64(left: f64, right: f64) -> f64 {
+  if left < right {
+    return left;
+  }
+  return right;
+}
+
+pub fn max_f64(left: f64, right: f64) -> f64 {
+  if left > right {
+    return left;
+  }
+  return right;
+}
+
+pub fn clamp_f64(value: f64, minimum: f64, maximum: f64) -> f64 {
+  return min_f64(max_f64(value, minimum), maximum);
+}
+
+pub fn lerp_f64(start: f64, end: f64, amount: f64) -> f64 {
+  return start + (end - start) * amount;
+}

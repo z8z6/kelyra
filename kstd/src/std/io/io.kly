@@ -1,0 +1,181 @@
+module std.io;
+
+@cfg(os="linux", arch="x86_64")
+import std.io.linux;
+@cfg(os="windows", arch="x86_64")
+import std.win.io;
+
+// A single OS read/write. Success returns bytes transferred; failure returns
+// a negative native error code. A short transfer is possible.
+@cfg(os="linux", arch="x86_64")
+pub fn read_stdin(output: *u8, capacity: usize) -> i64 {
+  return std.io.linux.read_stdin(output, capacity);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn read_stdin(output: *u8, capacity: usize) -> i64 {
+  return std.win.io.read_stdin(output, capacity);
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn write_stdout(data: *u8, count: usize) -> i64 {
+  return std.io.linux.write_stdout(data, count);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn write_stdout(data: *u8, count: usize) -> i64 {
+  return std.win.io.write_stdout(data, count);
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn write_stderr(data: *u8, count: usize) -> i64 {
+  return std.io.linux.write_stderr(data, count);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn write_stderr(data: *u8, count: usize) -> i64 {
+  return std.win.io.write_stderr(data, count);
+}
+
+fn text_length(text: *c.char) -> usize {
+  let index: usize = 0;
+  while *((text as usize + index) as *u8) != 0 {
+    index = index + 1;
+  }
+  return index;
+}
+
+fn write_all(text: *c.char, error: bool) -> i32 {
+  let size: usize = text_length(text);
+  let offset: usize = 0;
+  while offset < size {
+    let pointer: *u8 = (text as usize + offset) as *u8;
+    let sent: i64 = 0;
+    if error {
+      sent = write_stderr(pointer, size - offset);
+    } else {
+      sent = write_stdout(pointer, size - offset);
+    }
+    if sent <= 0 {
+      return -1;
+    }
+    offset = offset + (sent as usize);
+  }
+  return 0;
+}
+
+pub fn print(text: *c.char) -> i32 {
+  return write_all(text, false);
+}
+
+pub fn println(text: *c.char) -> i32 {
+  if print(text) != 0 {
+    return -1;
+  }
+  return newline();
+}
+
+pub fn eprint(text: *c.char) -> i32 {
+  return write_all(text, true);
+}
+
+pub fn eprintln(text: *c.char) -> i32 {
+  if eprint(text) != 0 {
+    return -1;
+  }
+  if write_stderr("\n" as *u8, 1) == 1 {
+    return 0;
+  }
+  return -1;
+}
+
+pub fn newline() -> i32 {
+  if write_stdout("\n" as *u8, 1) == 1 {
+    return 0;
+  }
+  return -1;
+}
+
+pub fn print_int(value: i64) -> i32 {
+  let digits: [32]u8;
+  let index: usize = 31;
+  let magnitude: u64 = value as u64;
+  let negative: bool = value < 0;
+  if negative {
+    magnitude = 0 - magnitude;
+  }
+  if magnitude == 0 {
+    index = index - 1;
+    digits[index] = 48;
+  }
+  while magnitude > 0 {
+    index = index - 1;
+    digits[index] = 48 + (magnitude % 10) as u8;
+    magnitude = magnitude / 10;
+  }
+  if negative {
+    index = index - 1;
+    digits[index] = 45;
+  }
+  let pointer: *u8 = &digits[index];
+  let count: usize = 31 - index;
+  if write_stdout(pointer, count) == (count as i64) {
+    return 0;
+  }
+  return -1;
+}
+
+// Reads at most capacity - 1 bytes, removes CR/LF, and appends NUL.
+// Returns the number of non-NUL bytes, or a negative native error code.
+pub fn read_line(output: *u8, capacity: usize) -> i64 {
+  if capacity == 0 {
+    return -1;
+  }
+  let length: usize = 0;
+  while length + 1 < capacity {
+    let byte: *u8 = (output as usize + length) as *u8;
+    let got: i64 = read_stdin(byte, 1);
+    if got < 0 {
+      return got;
+    }
+    if got == 0 || *byte == 10 {
+      break;
+    }
+    if *byte != 13 {
+      length = length + 1;
+    }
+  }
+  *((output as usize + length) as *u8) = 0;
+  return length as i64;
+}
+
+pub fn read_int() -> i64 {
+  let text: [64]u8;
+  let length: i64 = read_line(&text[0], 64);
+  if length <= 0 {
+    return 0;
+  }
+  let index: usize = 0;
+  let negative: bool = text[0] == 45;
+  if negative {
+    index = 1;
+  }
+  let value: i64 = 0;
+  while index < length as usize {
+    let digit: u8 = text[index];
+    if digit < 48 || digit > 57 {
+      break;
+    }
+    value = value * 10 + (digit - 48) as i64;
+    index = index + 1;
+  }
+  if negative {
+    return -value;
+  }
+  return value;
+}
+
+// All writes are unbuffered, so flush has no pending data.
+pub fn flush() -> i32 {
+  return 0;
+}

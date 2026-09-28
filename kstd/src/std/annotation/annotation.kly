@@ -1,0 +1,120 @@
+@meta
+module std.annotation;
+
+import std.meta;
+import std.util.string;
+
+pub enum Target {
+  Module,
+  Function,
+  Class,
+  Field,
+  Method,
+  Constructor,
+  Destructor,
+  Parameter,
+  Annotation,
+}
+
+@target(Target.Module, Target.Class, Target.Function, Target.Method)
+pub annotation meta();
+
+// Compiler-recognized annotations. Their declarations are ordinary Kelyra
+// metadata; the compiler supplies the compile-time behavior.
+// Additional load-time rule: @cfg requires at least one of os or arch.
+pub annotation cfg(os: StringSlice = "", arch: StringSlice = "");
+
+@target(Target.Class)
+pub annotation interface();
+
+@target(Target.Class)
+pub annotation final();
+
+@target(Target.Field, Target.Method)
+pub annotation static();
+
+@target(Target.Parameter)
+pub annotation forward();
+
+@target(Target.Method)
+pub annotation virtual();
+
+@target(Target.Method)
+pub annotation override();
+
+// A class exposes its public instance fields plus explicitly marked fields.
+// A field annotation also works without an annotation on its class.
+@target(Target.Class, Target.Field)
+pub annotation reflect();
+
+// Field target F exposes its name and type to the injected methods.
+@target(Target.Field F)
+pub annotation accessors(get: bool = true, set: bool = true) {
+  when get {
+    pub fn get_${F.name}() -> F.type {
+      return F;
+    }
+  }
+  when set {
+    pub fn set_${F.name}(value: F.type) -> void {
+      F = value;
+    }
+  }
+}
+
+// Wrap a function or method with an ordinary aspect function.
+@target(Target.Function, Target.Method)
+@repeatable
+pub annotation aspect(handler: Function);
+
+pub enum Layout {
+  System,
+  C,
+}
+
+pub enum CallingConvention {
+  C,
+  System,
+}
+
+pub enum InlineMode {
+  Auto,
+  Always,
+}
+
+pub enum Retention {
+  Source,
+  Compile,
+}
+
+@target(Target.Class)
+pub annotation layout(kind: Layout);
+
+@target(Target.Function)
+pub annotation extern(symbol: StringSlice, library: StringSlice = "");
+
+// Identifies a compiler-provided operation or storage representation.
+@target(Target.Function, Target.Class)
+pub annotation intrinsic(operation: StringSlice = "");
+
+@target(Target.Function)
+pub annotation callconv(abi: CallingConvention);
+
+@target(Target.Function)
+pub annotation main();
+
+@target(Target.Function, Target.Method)
+pub annotation inline(mode: InlineMode = InlineMode.Auto);
+
+@target(Target.Function, Target.Method)
+pub annotation deprecated(message: StringSlice = "");
+
+@target(Target.Annotation)
+// The compiler also accepts multiple target kinds in one @target invocation.
+pub annotation target();
+
+@target(Target.Annotation)
+pub annotation repeatable();
+
+@target(Target.Annotation)
+pub annotation retention(kind: Retention);

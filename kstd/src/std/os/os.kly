@@ -1,0 +1,89 @@
+module std.os;
+
+@cfg(os="linux", arch="x86_64")
+import std.os.linux;
+@cfg(os="windows", arch="x86_64")
+import std.win.system;
+
+@cfg(os="linux", arch="x86_64")
+pub fn process_id() -> i64 {
+  return std.os.linux.process_id();
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn process_id() -> i64 {
+  return std.win.system.process_id() as i64;
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn monotonic_millis() -> i64 {
+  return std.os.linux.monotonic_millis();
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn monotonic_millis() -> i64 {
+  return std.win.system.monotonic_millis();
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn sleep_millis(milliseconds: i64) -> i64 {
+  return std.os.linux.sleep_millis(milliseconds);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn sleep_millis(milliseconds: i64) -> i64 {
+  if milliseconds < 0 || milliseconds > 4294967294 {
+    return 87;
+  }
+  std.win.system.sleep_millis(milliseconds as u32);
+  return 0;
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn environment(name: *c.char, output: *u8,
+                   capacity: usize) -> i64 {
+  let value = std.os.linux.environment(name);
+  if value as usize == 0 { return -1; }
+  let length: usize = 0;
+  while *((value as usize + length) as *u8) != 0 {
+    length = length + 1;
+  }
+  if capacity > length {
+    let index: usize = 0;
+    while index <= length {
+      *((output as usize + index) as *u8) =
+          *((value as usize + index) as *u8);
+      index = index + 1;
+    }
+  }
+  return (length + 1) as i64;
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn environment(name: *c.char, output: *u8,
+                   capacity: usize) -> i64 {
+  if capacity > 4294967295 { return -87; }
+  let length = std.win.system.environment(name, output, capacity as u32);
+  if length == 0 {
+    if std.win.system.last_error() == 203 { return -1; }
+    return 1;
+  }
+  if (length as usize) < capacity {
+    return (length as i64) + 1;
+  }
+  return length as i64;
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn working_directory(output: *u8, capacity: usize) -> i64 {
+  return std.os.linux.working_directory(output, capacity);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn working_directory(output: *u8, capacity: usize) -> i64 {
+  if capacity > 4294967295 { return -87; }
+  let length = std.win.system.working_directory(output, capacity as u32);
+  if length == 0 { return -(std.win.system.last_error() as i64); }
+  if (length as usize) >= capacity { return -122; }
+  return (length as i64) + 1;
+}

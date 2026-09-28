@@ -1,0 +1,59 @@
+import std.ui;
+
+fn on_button(context: *u8, event: *std.ui.Event) -> void {
+  if event.kind == std.ui.EventKind.Click {
+    let counter = context as *i32;
+    *counter = *counter + 1;
+  }
+}
+
+fn on_drag(context: *u8, event: *std.ui.Event) -> void {
+  if event.kind == std.ui.EventKind.DragMove {
+    let counter = context as *i32;
+    *counter = *counter + 1;
+  }
+}
+
+@main
+pub fn main() -> i32 {
+  let window = std.ui.Window(640, 480);
+  let panel = std.ui.Panel(10, 10, 620, 460);
+  panel.set_anchors(std.ui.Anchor.Stretch, std.ui.Anchor.Stretch,
+                           10, 10);
+  let button = std.ui.Button("Apply", 10, 10, 100, 30);
+  let drag = std.ui.Panel(10, 70, 100, 50);
+  drag.draggable = true;
+  let slider = std.ui.Slider(10, 140, 200, 20);
+  let clicks: i32 = 0;
+  let drags: i32 = 0;
+  button.set_handler(on_button, (&clicks) as *u8);
+  drag.set_handler(on_drag, (&drags) as *u8);
+  if !window.add(&panel) ||
+      !panel.add(&button) ||
+      !panel.add(&drag) ||
+      !panel.add(&slider) {
+    return 1;
+  }
+  window.resize(800, 600);
+  if panel.bounds.width != 780 ||
+      panel.bounds.height != 580 { return 2; }
+  window.pointer(std.ui.EventKind.PointerDown, 25, 25);
+  window.pointer(std.ui.EventKind.PointerUp, 25, 25);
+  if clicks != 1 { return 3; }
+  window.keyboard(std.ui.EventKind.KeyDown, 13, 0);
+  if clicks != 2 { return 6; }
+  window.pointer(std.ui.EventKind.PointerDown, 25, 85);
+  window.pointer(std.ui.EventKind.PointerMove, 30, 90);
+  window.pointer(std.ui.EventKind.PointerUp, 30, 90);
+  if drags != 1 { return 4; }
+  window.pointer(std.ui.EventKind.PointerDown, 120, 155);
+  window.pointer(std.ui.EventKind.PointerUp, 120, 155);
+  if slider.get_value() < 0.49 || slider.get_value() > 0.51 {
+    return 5;
+  }
+  window.pointer(std.ui.EventKind.PointerMove, 200, 155);
+  if slider.get_value() < 0.49 || slider.get_value() > 0.51 {
+    return 7;
+  }
+  return 0;
+}

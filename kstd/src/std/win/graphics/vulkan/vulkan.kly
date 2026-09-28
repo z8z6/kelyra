@@ -1,0 +1,73 @@
+@cfg(os="windows", arch="x86_64") module std.win.graphics.vulkan;
+
+import std.ui.win;
+import std.os;
+import std.win.library;
+
+// The adapter is loaded only when Vulkan is selected. Direct3D12 programs
+// can use the same public graphics module without linking the Vulkan SDK.
+pub fn run(title: *c.char, width: i32, height: i32,
+           vertex: *u8, vertex_size: usize,
+           fragment: *u8, fragment_size: usize,
+           vertex_count: u32) -> i32 {
+  let library = std.win.library.load("kstd_vulkan_window.dll");
+  if library as usize == 0 { return 1; }
+  let create_address = std.win.library.symbol(library, "kstd_vulkan_create");
+  let draw_address = std.win.library.symbol(library, "kstd_vulkan_draw");
+  let destroy_address = std.win.library.symbol(library, "kstd_vulkan_destroy");
+  if create_address as usize == 0 || draw_address as usize == 0 ||
+      destroy_address as usize == 0 {
+    std.win.library.close(library);
+    return 2;
+  }
+  let create = create_address as fn(*u8, *u8, usize, *u8, usize, u32) -> *u8;
+  let draw = draw_address as fn(*u8) -> i32;
+  let destroy = destroy_address as fn(*u8) -> void;
+  let window = std.ui.win.Window(title, width, height);
+  if !window.valid() {
+    std.win.library.close(library);
+    return 3;
+  }
+  let context = create(window.handle(), vertex, vertex_size,
+                       fragment, fragment_size, vertex_count);
+  if context as usize == 0 {
+    std.win.library.close(library);
+    return 4;
+  }
+  let result = 0;
+  let draw_width = window.client_width();
+  let draw_height = window.client_height();
+  while window.poll() {
+    let current_width = window.client_width();
+    let current_height = window.client_height();
+    if current_width <= 0 || current_height <= 0 {
+      std.os.sleep_millis(16);
+      continue;
+    }
+    if current_width != draw_width || current_height != draw_height {
+      destroy(context);
+      context = 0 as *u8;
+      draw_width = current_width;
+      draw_height = current_height;
+    }
+    if context as usize == 0 {
+      context = create(window.handle(), vertex, vertex_size,
+                       fragment, fragment_size, vertex_count);
+      if context as usize == 0 { result = 4; break; }
+    }
+    let status = draw(context);
+    if status == 2 {
+      destroy(context);
+      context = 0 as *u8;
+      continue;
+    }
+    if status == 0 {
+      result = 5;
+      break;
+    }
+    std.os.sleep_millis(16);
+  }
+  if context as usize != 0 { destroy(context); }
+  std.win.library.close(library);
+  return result;
+}

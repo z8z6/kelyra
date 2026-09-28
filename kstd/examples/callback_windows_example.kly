@@ -1,0 +1,33 @@
+@cfg(os="windows", arch="x86_64") module callback_windows_example;
+
+import std.win.signal;
+import std.win.thread;
+
+fn worker(context: *u8) -> u32 {
+  *context = 42;
+  return 7;
+}
+
+fn console_handler(event: u32) -> i32 { return 0; }
+
+@main
+pub fn main() -> i32 {
+  let value: u8 = 0;
+  let thread_id: u32 = 0;
+  let handle = std.win.thread.spawn(worker, &value, &thread_id);
+  if handle as usize == 0 {
+    return 1;
+  }
+  let exit_code: u32 = 0;
+  if std.win.thread.join(handle, &exit_code) != 0 ||
+      std.win.thread.close(handle) != 0 || value != 42 || exit_code != 7 {
+    return 2;
+  }
+  if std.win.signal.register_console_handler(console_handler) != 0 {
+    return 3;
+  }
+  if std.win.signal.unregister_console_handler(console_handler) != 0 {
+    return 4;
+  }
+  return 0;
+}

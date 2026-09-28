@@ -1,0 +1,48 @@
+module std.io.file;
+
+@cfg(os="linux", arch="x86_64")
+import std.io.file.linux;
+@cfg(os="windows", arch="x86_64")
+import std.win.file;
+
+// mode 0 opens an existing file for reading; mode 1 creates or truncates one
+// for writing. Returns a native opaque handle or a negative native error code.
+@cfg(os="linux", arch="x86_64")
+pub fn open(path: *c.char, mode: u32) -> i64 {
+  return std.io.file.linux.open(path, mode);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn open(path: *c.char, mode: u32) -> i64 {
+  return std.win.file.open(path, mode);
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn read(handle: i64, output: *u8, count: usize) -> i64 {
+  return std.io.file.linux.read(handle, output, count);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn read(handle: i64, output: *u8, count: usize) -> i64 {
+  return std.win.file.read(handle, output, count);
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn write(handle: i64, data: *u8, count: usize) -> i64 {
+  return std.io.file.linux.write(handle, data, count);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn write(handle: i64, data: *u8, count: usize) -> i64 {
+  return std.win.file.write(handle, data, count);
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn close(handle: i64) -> i64 {
+  return std.io.file.linux.close(handle);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn close(handle: i64) -> i64 {
+  return std.win.file.close(handle);
+}

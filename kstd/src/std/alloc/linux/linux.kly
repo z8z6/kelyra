@@ -1,0 +1,51 @@
+@cfg(os="linux", arch="x86_64") module std.alloc.linux;
+
+// One mmap per allocation. The first 16 bytes hold requested and mapped sizes.
+pub fn allocate(size: usize) -> *u8 {
+  if size > 18446744073709551599 {
+    return 0 as *u8;
+  }
+  let length: usize = size + 16;
+  let address: usize = 0;
+  let protection: i64 = 3;
+  let flags: i64 = 34;
+  let descriptor: i64 = -1;
+  let offset: usize = 0;
+  let number: i64 = 9;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(address, rdi)
+  .in(length, rsi)
+  .in(protection, rdx)
+  .in(flags, r10)
+  .in(descriptor, r8)
+  .in(offset, r9)
+  .op(clobber(rcx, r11));
+  if number < 0 {
+    return 0 as *u8;
+  }
+  let base: *u8 = number as *u8;
+  *(base as *usize) = size;
+  *((number as usize + 8) as *usize) = length;
+  return (number as usize + 16) as *u8;
+}
+
+pub fn release(pointer: *u8) -> void {
+  if pointer as usize == 0 {
+    return;
+  }
+  let base: usize = pointer as usize - 16;
+  let length: usize = *((base + 8) as *usize);
+  let number: i64 = 11;
+  asm {
+    syscall
+  }
+  .in(number, rax)
+  .out(number, rax)
+  .in(base, rdi)
+  .in(length, rsi)
+  .op(clobber(rcx, r11));
+}

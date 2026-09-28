@@ -1,0 +1,82 @@
+module std.alloc;
+
+@cfg(os="linux", arch="x86_64")
+import std.alloc.linux;
+@cfg(os="windows", arch="x86_64")
+import std.win.memory;
+
+// Allocates `size` bytes. The result is null when the request cannot be met.
+@cfg(os="linux", arch="x86_64")
+pub fn allocate(size: usize) -> *u8 {
+  return std.alloc.linux.allocate(size);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn allocate(size: usize) -> *u8 {
+  return std.win.memory.allocate(size);
+}
+
+// Resizes an earlier allocation, preserving its contents. On failure the old
+// allocation is left untouched and null is returned.
+pub fn reallocate(pointer: *u8, size: usize) -> *u8 {
+  if is_null(pointer) {
+    return allocate(size);
+  }
+  let replacement: *u8 = allocate(size);
+  if is_null(replacement) {
+    return replacement;
+  }
+  let previous: usize = *((pointer as usize - 16) as *usize);
+  let count: usize = previous;
+  if size < count {
+    count = size;
+  }
+  copy(replacement, pointer, count);
+  release(pointer);
+  return replacement;
+}
+
+// Releases memory returned by allocate or reallocate. Null is accepted.
+@cfg(os="linux", arch="x86_64")
+pub fn release(pointer: *u8) -> void {
+  std.alloc.linux.release(pointer);
+}
+
+@cfg(os="windows", arch="x86_64")
+pub fn release(pointer: *u8) -> void {
+  std.win.memory.release(pointer);
+}
+
+// Copies `count` bytes from source to destination. The ranges must not overlap.
+pub fn copy(destination: *u8, source: *u8, count: usize) -> void {
+  let index: usize = 0;
+  while index < count {
+    *((destination as usize + index) as *u8) = *((source as usize + index) as *u8);
+    index = index + 1;
+  }
+}
+
+// Writes `count` copies of `value`.
+pub fn fill(destination: *u8, value: u8, count: usize) -> void {
+  let index: usize = 0;
+  while index < count {
+    *((destination as usize + index) as *u8) = value;
+    index = index + 1;
+  }
+}
+
+// Reads the byte at `index`. The caller guarantees the index is in range.
+pub fn load(pointer: *u8, index: usize) -> u8 {
+  return *((pointer as usize + index) as *u8);
+}
+
+// Writes `value` at `index`. The caller guarantees the index is in range.
+pub fn store(pointer: *u8, index: usize, value: u8) -> void {
+  *((pointer as usize + index) as *u8) = value;
+}
+
+// Reports whether a pointer is null, which is how allocation failure is
+// observed without a null literal.
+pub fn is_null(pointer: *u8) -> bool {
+  return pointer as usize == 0;
+}

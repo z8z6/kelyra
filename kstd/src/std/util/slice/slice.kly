@@ -1,0 +1,13 @@
+module std.util.slice;
+
+// The caller must keep data valid for length elements while the slice is used.
+// The compiler emits the pointer-and-length value for these intrinsics.
+pub fn from_raw_parts<T>(data: *T, length: usize) -> []T {
+  let result: []T;
+  return result;
+}
+
+pub fn from_raw_parts_const<T>(data: *T, length: usize) -> []const T {
+  let result: []const T;
+  return result;
+}

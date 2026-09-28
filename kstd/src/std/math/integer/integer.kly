@@ -1,0 +1,51 @@
+module std.math.integer;
+
+pub fn abs_i64(value: i64) -> i64 {
+  if value < 0 {
+    return -value;
+  }
+  return value;
+}
+
+pub fn min_i64(left: i64, right: i64) -> i64 {
+  if left < right {
+    return left;
+  }
+  return right;
+}
+
+pub fn max_i64(left: i64, right: i64) -> i64 {
+  if left > right {
+    return left;
+  }
+  return right;
+}
+
+pub fn clamp_i64(value: i64, minimum: i64, maximum: i64) -> i64 {
+  return min_i64(max_i64(value, minimum), maximum);
+}
+
+pub fn gcd_i64(left: i64, right: i64) -> i64 {
+  let a = abs_i64(left);
+  let b = abs_i64(right);
+  while b != 0 {
+    let remainder = a % b;
+    a = b;
+    b = remainder;
+  }
+  return a;
+}
+
+pub fn pow_i64(base: i64, exponent: u32) -> i64 {
+  let result: i64 = 1;
+  let factor = base;
+  let remaining = exponent;
+  while remaining > 0 {
+    if remaining % 2 == 1 {
+      result = result * factor;
+    }
+    factor = factor * factor;
+    remaining = remaining / 2;
+  }
+  return result;
+}

@@ -1,0 +1,19 @@
+[project]
+name = "kstd"
+version = "0.1.0"
+entry = "src/kstd.kly"
+
+[build]
+compiler = "../kelyra/build/bin/kelyra"
+kind = "library"
+optimization = 0
+safe-level = 0
+c-sources = []
+c-args = []
+windows-import-libraries = ["Synchronization.lib"]
+
+[package]
+output = "kstd-0.1.0.tar.gz"
+
+[test]
+sources = ["examples/ascii_example.kly", "examples/io_example.kly", "examples/math_example.kly", "examples/string_example.kly"]

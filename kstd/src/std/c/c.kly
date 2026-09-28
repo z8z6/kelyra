@@ -1,0 +1,30 @@
+module c;
+
+// Public C ABI types. Their intrinsic targets are supplied by the compiler.
+pub alias char = __c_char;
+
+pub alias schar = __c_schar;
+
+pub alias uchar = __c_uchar;
+
+pub alias short = __c_short;
+
+pub alias int = __c_int;
+
+pub alias uint = __c_uint;
+
+pub alias long = __c_long;
+
+pub alias longlong = __c_longlong;
+
+pub alias size = __c_size;
+
+pub alias ptrdiff = __c_ptrdiff;
+
+pub alias bool = __c_bool;
+
+pub alias float = __c_float;
+
+pub alias double = __c_double;
+
+pub alias wchar = __c_wchar;

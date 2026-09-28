@@ -1,0 +1,12 @@
+import std.io;
+
+@main
+pub fn main() -> i32 {
+  std.io.print("answer = ");
+  std.io.print_int(42);
+  std.io.newline();
+  let line: [256]u8;
+  std.io.read_line(&line[0], 256);
+  std.io.println((&line[0]) as *c.char);
+  return 0;
+}

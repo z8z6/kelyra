@@ -1,0 +1,14 @@
+module std.sync.signal;
+
+@cfg(os="linux", arch="x86_64")
+import std.sync.signal.linux;
+
+@cfg(os="linux", arch="x86_64")
+pub fn send_process(process_id: i64, number: i32) -> i64 {
+  return std.sync.signal.linux.send_process(process_id, number);
+}
+
+@cfg(os="linux", arch="x86_64")
+pub fn send_thread(process_id: i64, thread_id: i64, number: i32) -> i64 {
+  return std.sync.signal.linux.send_thread(process_id, thread_id, number);
+}

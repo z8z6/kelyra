@@ -1,0 +1,56 @@
+module std.util.maybe;
+
+import std.memory;
+
+// An optional value. The value is owned by this object when present.
+pub class Maybe<T> {
+  has: bool;
+  storage: std.memory.Raw<T>;
+  pub init() {
+    has = false;
+    storage = std.memory.Raw<T>();
+  }
+  deinit() {
+    if has {
+      std.memory.drop_init<T>(&storage);
+    }
+  }
+  pub fn copy(other: *Maybe<T>) {
+    has = false;
+    storage = std.memory.Raw<T>();
+    if other.has {
+      std.memory.init_copy<T>(&storage,
+                              std.memory.assume_init<T>(&other.storage));
+      has = true;
+    }
+  }
+  pub fn move(other: *Maybe<T>) {
+    has = false;
+    storage = std.memory.Raw<T>();
+    if other.has {
+      std.memory.init_move<T>(&storage,
+                              std.memory.assume_init<T>(&other.storage));
+      std.memory.drop_init<T>(&other.storage);
+      has = true;
+      other.has = false;
+    }
+  }
+  pub fn has_value() -> bool {
+    return has;
+  }
+  // Precondition: has_value().
+  pub fn value() -> T {
+    return *std.memory.assume_init<T>(&storage);
+  }
+}
+
+pub fn none<T>() -> Maybe<T> {
+  return Maybe<T>();
+}
+
+pub fn some<T>(value: T) -> Maybe<T> {
+  let result = Maybe<T>();
+  std.memory.init_copy<T>(&result.storage, &value);
+  result.has = true;
+  return result;
+}
