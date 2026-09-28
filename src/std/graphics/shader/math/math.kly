@@ -1,0 +1,119 @@
+module std.graphics.shader.math;
+
+import std.graphics;
+
+// The GPU compiler lowers these to native shader operations. Their C symbols
+// allow the same declarations to be called by hosted code when available.
+@gpu_builtin("sqrt")
+@extern("sqrtf")
+pub fn sqrt_f32(value: f32) -> f32;
+
+@gpu_builtin("pow")
+@extern("powf")
+pub fn pow_f32(base: f32, exponent: f32) -> f32;
+
+pub fn min_f32(left: f32, right: f32) -> f32 {
+  if left < right {
+    return left;
+  }
+  return right;
+}
+
+pub fn max_f32(left: f32, right: f32) -> f32 {
+  if left > right {
+    return left;
+  }
+  return right;
+}
+
+pub fn clamp_f32(value: f32, minimum: f32, maximum: f32) -> f32 {
+  return min_f32(max_f32(value, minimum), maximum);
+}
+
+pub fn saturate_f32(value: f32) -> f32 {
+  return clamp_f32(value, 0.0, 1.0);
+}
+
+pub fn mix_f32(left: f32, right: f32, amount: f32) -> f32 {
+  return left + (right - left) * amount;
+}
+
+pub fn add_vec3(left: Vec3, right: Vec3) -> Vec3 {
+  return Vec3(left.x + right.x, left.y + right.y, left.z + right.z);
+}
+
+pub fn sub_vec3(left: Vec3, right: Vec3) -> Vec3 {
+  return Vec3(left.x - right.x, left.y - right.y, left.z - right.z);
+}
+
+pub fn scale_vec3(value: Vec3, factor: f32) -> Vec3 {
+  return Vec3(value.x * factor, value.y * factor, value.z * factor);
+}
+
+pub fn mul_vec3(left: Vec3, right: Vec3) -> Vec3 {
+  return Vec3(left.x * right.x, left.y * right.y, left.z * right.z);
+}
+
+pub fn dot_vec2(left: Vec2, right: Vec2) -> f32 {
+  return left.x * right.x + left.y * right.y;
+}
+
+pub fn dot_vec3(left: Vec3, right: Vec3) -> f32 {
+  return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+pub fn dot_vec4(left: Vec4, right: Vec4) -> f32 {
+  return left.x * right.x + left.y * right.y + left.z * right.z +
+         left.w * right.w;
+}
+
+pub fn cross_vec3(left: Vec3, right: Vec3) -> Vec3 {
+  return Vec3(left.y * right.z - left.z * right.y,
+              left.z * right.x - left.x * right.z,
+              left.x * right.y - left.y * right.x);
+}
+
+// A zero-length input stays zero instead of producing NaN components.
+pub fn normalize_vec2(value: Vec2) -> Vec2 {
+  let squared = dot_vec2(value, value);
+  if squared <= 0.0 {
+    return Vec2(0.0, 0.0);
+  }
+  let inverse: f32 = 1.0 / sqrt_f32(squared);
+  return Vec2(value.x * inverse, value.y * inverse);
+}
+
+pub fn normalize_vec3(value: Vec3) -> Vec3 {
+  let squared = dot_vec3(value, value);
+  if squared <= 0.0 {
+    return Vec3(0.0, 0.0, 0.0);
+  }
+  return scale_vec3(value, 1.0 / sqrt_f32(squared));
+}
+
+pub fn normalize_vec4(value: Vec4) -> Vec4 {
+  let squared = dot_vec4(value, value);
+  if squared <= 0.0 {
+    return Vec4(0.0, 0.0, 0.0, 0.0);
+  }
+  let inverse: f32 = 1.0 / sqrt_f32(squared);
+  return Vec4(value.x * inverse, value.y * inverse, value.z * inverse,
+              value.w * inverse);
+}
+
+// Incident points toward the surface. Normal points away from the surface.
+pub fn reflect_vec3(incident: Vec3, normal: Vec3) -> Vec3 {
+  return sub_vec3(incident,
+                  scale_vec3(normal, 2.0 * dot_vec3(incident, normal)));
+}
+
+pub fn mix_vec3(left: Vec3, right: Vec3, amount: f32) -> Vec3 {
+  return Vec3(mix_f32(left.x, right.x, amount),
+              mix_f32(left.y, right.y, amount),
+              mix_f32(left.z, right.z, amount));
+}
+
+pub fn saturate_vec3(value: Vec3) -> Vec3 {
+  return Vec3(saturate_f32(value.x), saturate_f32(value.y),
+              saturate_f32(value.z));
+}

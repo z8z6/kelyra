@@ -1,0 +1,542 @@
+@cfg(os="windows", arch="x86_64") module std.win.d3d12;
+
+import std.win.com;
+import std.win.dxgi;
+import std.win.guid;
+import std.win.window;
+
+pub alias Device = *u8;
+pub alias CommandQueue = *u8;
+pub alias CommandAllocator = *u8;
+pub alias GraphicsCommandList = *u8;
+pub alias DescriptorHeap = *u8;
+pub alias Resource = *u8;
+pub alias Fence = *u8;
+
+@layout(Layout.C)
+pub class CommandQueueDesc {
+  pub kind: u32;
+  pub priority: i32;
+  pub flags: u32;
+  pub node_mask: u32;
+}
+
+@layout(Layout.C)
+pub class DescriptorHeapDesc {
+  pub kind: u32;
+  pub count: u32;
+  pub flags: u32;
+  pub node_mask: u32;
+}
+
+@layout(Layout.C)
+pub class Viewport {
+  pub x: f32;
+  pub y: f32;
+  pub width: f32;
+  pub height: f32;
+  pub min_depth: f32;
+  pub max_depth: f32;
+}
+
+@layout(Layout.C)
+pub class ShaderBytecode {
+  pub data: *u8;
+  pub size: usize;
+}
+
+@layout(Layout.C)
+pub class StreamOutputDesc {
+  pub declarations: *u8;
+  pub declaration_count: u32;
+  pub strides: *u32;
+  pub stride_count: u32;
+  pub rasterized_stream: u32;
+}
+
+@layout(Layout.C)
+pub class RenderTargetBlendDesc {
+  pub blend_enable: i32;
+  pub logic_enable: i32;
+  pub source: u32;
+  pub destination: u32;
+  pub operation: u32;
+  pub source_alpha: u32;
+  pub destination_alpha: u32;
+  pub operation_alpha: u32;
+  pub logic_operation: u32;
+  pub write_mask: u8;
+}
+
+@layout(Layout.C)
+pub class BlendDesc {
+  pub alpha_to_coverage: i32;
+  pub independent_blend: i32;
+  pub target0: RenderTargetBlendDesc;
+  pub target1: RenderTargetBlendDesc;
+  pub target2: RenderTargetBlendDesc;
+  pub target3: RenderTargetBlendDesc;
+  pub target4: RenderTargetBlendDesc;
+  pub target5: RenderTargetBlendDesc;
+  pub target6: RenderTargetBlendDesc;
+  pub target7: RenderTargetBlendDesc;
+}
+
+@layout(Layout.C)
+pub class RasterizerDesc {
+  pub fill_mode: u32;
+  pub cull_mode: u32;
+  pub front_ccw: i32;
+  pub depth_bias: i32;
+  pub depth_bias_clamp: f32;
+  pub slope_scaled_depth_bias: f32;
+  pub depth_clip: i32;
+  pub multisample: i32;
+  pub antialiased_line: i32;
+  pub forced_sample_count: u32;
+  pub conservative_raster: u32;
+}
+
+@layout(Layout.C)
+pub class DepthStencilOpDesc {
+  pub stencil_fail: u32;
+  pub depth_fail: u32;
+  pub pass: u32;
+  pub comparison: u32;
+}
+
+@layout(Layout.C)
+pub class DepthStencilDesc {
+  pub depth_enable: i32;
+  pub depth_write_mask: u32;
+  pub depth_comparison: u32;
+  pub stencil_enable: i32;
+  pub stencil_read_mask: u8;
+  pub stencil_write_mask: u8;
+  pub front: DepthStencilOpDesc;
+  pub back: DepthStencilOpDesc;
+}
+
+@layout(Layout.C)
+pub class InputLayoutDesc {
+  pub elements: *u8;
+  pub count: u32;
+}
+
+@layout(Layout.C)
+pub class CachedPipelineState {
+  pub data: *u8;
+  pub size: usize;
+}
+
+@layout(Layout.C)
+pub class GraphicsPipelineDesc {
+  pub root_signature: *u8;
+  pub vertex_shader: ShaderBytecode;
+  pub pixel_shader: ShaderBytecode;
+  pub domain_shader: ShaderBytecode;
+  pub hull_shader: ShaderBytecode;
+  pub geometry_shader: ShaderBytecode;
+  pub stream_output: StreamOutputDesc;
+  pub blend: BlendDesc;
+  pub sample_mask: u32;
+  pub rasterizer: RasterizerDesc;
+  pub depth_stencil: DepthStencilDesc;
+  pub input_layout: InputLayoutDesc;
+  pub strip_cut: u32;
+  pub topology: u32;
+  pub render_target_count: u32;
+  pub render_target_formats: [8]u32;
+  pub depth_format: u32;
+  pub sample: std.win.dxgi.SampleDesc;
+  pub node_mask: u32;
+  pub cached: CachedPipelineState;
+  pub flags: u32;
+}
+
+@layout(Layout.C)
+pub class RootSignatureDesc {
+  pub parameter_count: u32;
+  pub parameters: *u8;
+  pub sampler_count: u32;
+  pub samplers: *u8;
+  pub flags: u32;
+}
+
+@layout(Layout.C)
+pub class HeapProperties {
+  pub kind: u32;
+  pub cpu_page: u32;
+  pub memory_pool: u32;
+  pub creation_nodes: u32;
+  pub visible_nodes: u32;
+}
+
+@layout(Layout.C)
+pub class ResourceDesc {
+  pub dimension: u32;
+  pub alignment: u64;
+  pub width: u64;
+  pub height: u32;
+  pub depth_or_array: u16;
+  pub mip_levels: u16;
+  pub format: u32;
+  pub sample: std.win.dxgi.SampleDesc;
+  pub layout: u32;
+  pub flags: u32;
+}
+
+@layout(Layout.C)
+pub class TextureCopyLocation {
+  pub resource: Resource;
+  pub kind: u32;
+  pub padding: u32;
+  pub offset: u64;
+  pub format: u32;
+  pub width: u32;
+  pub height: u32;
+  pub depth: u32;
+  pub row_pitch: u32;
+  pub padding2: u32;
+}
+
+@layout(Layout.C)
+pub class TransitionBarrier {
+  pub resource: Resource;
+  pub subresource: u32;
+  pub before: u32;
+  pub after: u32;
+}
+
+// This C-layout representation covers the full 24-byte union storage. The
+// helper functions choose the transition, aliasing, or UAV branch.
+@layout(Layout.C)
+pub class ResourceBarrier {
+  pub kind: u32;
+  pub flags: u32;
+  pub payload: TransitionBarrier;
+}
+
+pub fn transition_barrier(barrier: *ResourceBarrier, resource: Resource,
+                          before: u32, after: u32) -> void {
+  (*barrier).kind = 0;
+  (*barrier).flags = 0;
+  (*barrier).payload.resource = resource;
+  (*barrier).payload.subresource = 4294967295;
+  (*barrier).payload.before = before;
+  (*barrier).payload.after = after;
+}
+
+pub fn aliasing_barrier(barrier: *ResourceBarrier, before: Resource,
+                        after: Resource) -> void {
+  (*barrier).kind = 1;
+  (*barrier).flags = 0;
+  let data = (&(*barrier).payload) as **u8;
+  *data = before;
+  *((data as usize + 8) as **u8) = after;
+}
+
+pub fn uav_barrier(barrier: *ResourceBarrier, resource: Resource) -> void {
+  (*barrier).kind = 2;
+  (*barrier).flags = 0;
+  (*barrier).payload.resource = resource;
+}
+
+@layout(Layout.C)
+pub class VertexBufferView {
+  pub address: u64;
+  pub size: u32;
+  pub stride: u32;
+}
+
+pub fn iid_device(value: *std.win.guid.Guid) -> void {
+  std.win.guid.set(value, 412621297, 7606, 19287,
+                   555242686, 4152728371);
+}
+
+pub fn iid_command_queue(value: *std.win.guid.Guid) -> void {
+  std.win.guid.set(value, 248017062, 23934, 19490,
+                   2858155148, 3977672416);
+}
+
+pub fn iid_command_allocator(value: *std.win.guid.Guid) -> void {
+  std.win.guid.set(value, 1627578084, 44889, 19209,
+                   1303681465, 614199411);
+}
+
+pub fn iid_graphics_command_list(value: *std.win.guid.Guid) -> void {
+  std.win.guid.set(value, 1528171791, 44059, 16773,
+                   2931009675, 1436853570);
+}
+
+pub fn iid_descriptor_heap(value: *std.win.guid.Guid) -> void {
+  std.win.guid.set(value, 2398832413, 24940, 20297,
+                   2064840592, 1375364023);
+}
+
+pub fn iid_root_signature(value: *std.win.guid.Guid) -> void {
+  std.win.guid.set(value, 3309988710, 29407, 20200,
+                   1185539467, 345129633);
+}
+
+pub fn iid_pipeline_state(value: *std.win.guid.Guid) -> void {
+  std.win.guid.set(value, 1985622259, 63012, 19567,
+                   3920373928, 1160012360);
+}
+
+pub fn iid_resource(value: *std.win.guid.Guid) -> void {
+  std.win.guid.set(value, 1768178366, 42798, 16473,
+                   1549498812, 2903442584);
+}
+
+pub fn iid_fence(value: *std.win.guid.Guid) -> void {
+  std.win.guid.set(value, 175455695, 50392, 19345,
+                   1522464429, 1985665376);
+}
+
+@extern("D3D12CreateDevice", "d3d12")
+@callconv(CallingConvention.System)
+fn create_device_raw(adapter: *u8, feature_level: u32,
+                     iid: *std.win.guid.Guid, device: **u8) -> i32;
+
+pub fn create_device(adapter: *u8, device: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  iid_device(&iid);
+  return create_device_raw(adapter, 45056, &iid, device);
+}
+
+@extern("D3D12SerializeRootSignature", "d3d12")
+@callconv(CallingConvention.System)
+pub fn serialize_root_signature(desc: *RootSignatureDesc, version: u32,
+                                blob: **u8, errors: **u8) -> i32;
+
+pub fn create_command_queue(device: Device, desc: *CommandQueueDesc,
+                            queue: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  iid_command_queue(&iid);
+  let call = std.win.com.method(device, 8) as fn(*u8, *CommandQueueDesc,
+      *std.win.guid.Guid, **u8) -> i32;
+  return call(device, desc, &iid, queue);
+}
+
+pub fn create_command_allocator(device: Device, kind: u32,
+                                allocator: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  iid_command_allocator(&iid);
+  let call = std.win.com.method(device, 9) as fn(*u8, u32,
+      *std.win.guid.Guid, **u8) -> i32;
+  return call(device, kind, &iid, allocator);
+}
+
+pub fn create_graphics_pipeline(device: Device, desc: *GraphicsPipelineDesc,
+                                state: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  iid_pipeline_state(&iid);
+  let call = std.win.com.method(device, 10) as fn(*u8,
+      *GraphicsPipelineDesc, *std.win.guid.Guid, **u8) -> i32;
+  return call(device, desc, &iid, state);
+}
+
+pub fn create_command_list(device: Device, allocator: CommandAllocator,
+                           initial_state: *u8, list: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  iid_graphics_command_list(&iid);
+  let call = std.win.com.method(device, 12) as fn(*u8, u32, u32, *u8,
+      *u8, *std.win.guid.Guid, **u8) -> i32;
+  return call(device, 0, 0, allocator, initial_state, &iid, list);
+}
+
+pub fn create_descriptor_heap(device: Device, desc: *DescriptorHeapDesc,
+                              heap: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  iid_descriptor_heap(&iid);
+  let call = std.win.com.method(device, 14) as fn(*u8,
+      *DescriptorHeapDesc, *std.win.guid.Guid, **u8) -> i32;
+  return call(device, desc, &iid, heap);
+}
+
+pub fn descriptor_increment(device: Device, kind: u32) -> u32 {
+  let call = std.win.com.method(device, 15) as fn(*u8, u32) -> u32;
+  return call(device, kind);
+}
+
+pub fn create_root_signature(device: Device, data: *u8, size: usize,
+                             root: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  iid_root_signature(&iid);
+  let call = std.win.com.method(device, 16) as fn(*u8, u32, *u8,
+      usize, *std.win.guid.Guid, **u8) -> i32;
+  return call(device, 0, data, size, &iid, root);
+}
+
+// The descriptor handle is an 8-byte C struct passed by value on x64.
+pub fn create_render_target_view(device: Device, resource: Resource,
+                                 descriptor: usize) -> void {
+  let call = std.win.com.method(device, 20) as fn(*u8, *u8,
+      *u8, usize) -> void;
+  call(device, resource, 0 as *u8, descriptor);
+}
+
+pub fn create_committed_resource(device: Device, heap: *HeapProperties,
+                                 heap_flags: u32, desc: *ResourceDesc,
+                                 initial_state: u32, clear: *u8,
+                                 resource: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  iid_resource(&iid);
+  let call = std.win.com.method(device, 27) as fn(*u8, *HeapProperties,
+      u32, *ResourceDesc, u32, *u8, *std.win.guid.Guid, **u8) -> i32;
+  return call(device, heap, heap_flags, desc, initial_state, clear,
+              &iid, resource);
+}
+
+pub fn create_fence(device: Device, initial_value: u64, flags: u32,
+                    fence: **u8) -> i32 {
+  let iid = std.win.guid.Guid();
+  iid_fence(&iid);
+  let call = std.win.com.method(device, 36) as fn(*u8, u64, u32,
+      *std.win.guid.Guid, **u8) -> i32;
+  return call(device, initial_value, flags, &iid, fence);
+}
+
+pub fn descriptor_start(heap: DescriptorHeap) -> usize {
+  // Windows COM ABI returns this C struct through an explicit out pointer.
+  let handle: usize = 0;
+  let call = std.win.com.method(heap, 9) as fn(*u8, *usize) -> *usize;
+  call(heap, &handle);
+  return handle;
+}
+
+pub fn reset_allocator(allocator: CommandAllocator) -> i32 {
+  let call = std.win.com.method(allocator, 8) as fn(*u8) -> i32;
+  return call(allocator);
+}
+
+pub fn close_list(list: GraphicsCommandList) -> i32 {
+  let call = std.win.com.method(list, 9) as fn(*u8) -> i32;
+  return call(list);
+}
+
+pub fn reset_list(list: GraphicsCommandList,
+                  allocator: CommandAllocator, state: *u8) -> i32 {
+  let call = std.win.com.method(list, 10) as fn(*u8, *u8, *u8) -> i32;
+  return call(list, allocator, state);
+}
+
+pub fn set_root_signature(list: GraphicsCommandList, root: *u8) -> void {
+  let call = std.win.com.method(list, 30) as fn(*u8, *u8) -> void;
+  call(list, root);
+}
+
+pub fn set_viewport(list: GraphicsCommandList, viewport: *Viewport) -> void {
+  let call = std.win.com.method(list, 21) as fn(*u8, u32,
+      *Viewport) -> void;
+  call(list, 1, viewport);
+}
+
+pub fn set_scissor(list: GraphicsCommandList,
+                   rect: *std.win.window.Rect) -> void {
+  let call = std.win.com.method(list, 22) as fn(*u8, u32,
+      *std.win.window.Rect) -> void;
+  call(list, 1, rect);
+}
+
+pub fn resource_barrier(list: GraphicsCommandList,
+                        barrier: *ResourceBarrier) -> void {
+  let call = std.win.com.method(list, 26) as fn(*u8, u32,
+      *ResourceBarrier) -> void;
+  call(list, 1, barrier);
+}
+
+pub fn set_primitive_topology(list: GraphicsCommandList,
+                              topology: u32) -> void {
+  let call = std.win.com.method(list, 20) as fn(*u8, u32) -> void;
+  call(list, topology);
+}
+
+pub fn set_render_target(list: GraphicsCommandList,
+                         descriptor: *usize) -> void {
+  let call = std.win.com.method(list, 46) as fn(*u8, u32,
+      *usize, i32, *u8) -> void;
+  call(list, 1, descriptor, 0, 0 as *u8);
+}
+
+pub fn clear_render_target(list: GraphicsCommandList,
+                           descriptor: usize, color: *f32) -> void {
+  let call = std.win.com.method(list, 48) as fn(*u8, usize,
+      *f32, u32, *u8) -> void;
+  call(list, descriptor, color, 0, 0 as *u8);
+}
+
+pub fn draw(list: GraphicsCommandList, vertex_count: u32) -> void {
+  let call = std.win.com.method(list, 12) as fn(*u8, u32, u32,
+      u32, u32) -> void;
+  call(list, vertex_count, 1, 0, 0);
+}
+
+pub fn copy_texture_region(list: GraphicsCommandList,
+                           destination: *TextureCopyLocation,
+                           source: *TextureCopyLocation) -> void {
+  let call = std.win.com.method(list, 16) as fn(*u8,
+      *TextureCopyLocation, u32, u32, u32,
+      *TextureCopyLocation, *u8) -> void;
+  call(list, destination, 0, 0, 0, source, 0 as *u8);
+}
+
+pub fn set_vertex_buffers(list: GraphicsCommandList, slot: u32,
+                          count: u32, views: *VertexBufferView) -> void {
+  let call = std.win.com.method(list, 44) as fn(*u8, u32, u32,
+      *VertexBufferView) -> void;
+  call(list, slot, count, views);
+}
+
+pub fn execute_lists(queue: CommandQueue, count: u32,
+                     lists: **u8) -> void {
+  let call = std.win.com.method(queue, 10) as fn(*u8, u32,
+      **u8) -> void;
+  call(queue, count, lists);
+}
+
+pub fn signal(queue: CommandQueue, fence: Fence, value: u64) -> i32 {
+  let call = std.win.com.method(queue, 14) as fn(*u8, *u8,
+      u64) -> i32;
+  return call(queue, fence, value);
+}
+
+pub fn completed_value(fence: Fence) -> u64 {
+  let call = std.win.com.method(fence, 8) as fn(*u8) -> u64;
+  return call(fence);
+}
+
+pub fn set_event_on_completion(fence: Fence, value: u64,
+                               event: *u8) -> i32 {
+  let call = std.win.com.method(fence, 9) as fn(*u8, u64,
+      *u8) -> i32;
+  return call(fence, value, event);
+}
+
+pub fn map(resource: Resource, subresource: u32, data: **u8) -> i32 {
+  let call = std.win.com.method(resource, 8) as fn(*u8, u32,
+      *u8, **u8) -> i32;
+  return call(resource, subresource, 0 as *u8, data);
+}
+
+pub fn unmap(resource: Resource, subresource: u32) -> void {
+  let call = std.win.com.method(resource, 9) as fn(*u8, u32,
+      *u8) -> void;
+  call(resource, subresource, 0 as *u8);
+}
+
+pub fn gpu_address(resource: Resource) -> u64 {
+  let call = std.win.com.method(resource, 11) as fn(*u8) -> u64;
+  return call(resource);
+}
+
+pub fn blob_data(blob: *u8) -> *u8 {
+  let call = std.win.com.method(blob, 3) as fn(*u8) -> *u8;
+  return call(blob);
+}
+
+pub fn blob_size(blob: *u8) -> usize {
+  let call = std.win.com.method(blob, 4) as fn(*u8) -> usize;
+  return call(blob);
+}

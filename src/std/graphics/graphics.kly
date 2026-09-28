@@ -1,6 +1,7 @@
 module std.graphics;
 
 import std.annotation;
+import std.util.string;
 
 @target(Target.Function)
 pub annotation vertex();
@@ -16,6 +17,10 @@ pub annotation vertex_index();
 
 @target(Target.Field, Target.Parameter)
 pub annotation location(index: usize);
+
+// Maps a declared shader-only function to a target's standard GPU intrinsic.
+@target(Target.Function)
+pub annotation gpu_builtin(name: StringSlice);
 
 pub class Vec2 {
   pub x: f32;

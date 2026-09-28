@@ -1,0 +1,67 @@
+@cfg(os="windows", arch="x86_64") module std.win.file;
+
+import std.win.error;
+import std.win.handle;
+
+@extern("CreateFileA", "kernel32")
+@callconv(CallingConvention.System)
+fn create_file(path: *c.char, access: u32, share: u32, security: *u8,
+               disposition: u32, flags: u32, template: *u8) -> *u8;
+
+@extern("ReadFile", "kernel32")
+@callconv(CallingConvention.System)
+fn read_file(handle: *u8, output: *u8, count: u32, transferred: *u32,
+             overlapped: *u8) -> i32;
+
+@extern("WriteFile", "kernel32")
+@callconv(CallingConvention.System)
+fn write_file(handle: *u8, data: *u8, count: u32, transferred: *u32,
+              overlapped: *u8) -> i32;
+
+pub fn open(path: *c.char, mode: u32) -> i64 {
+  let access: u32 = 2147483648;
+  let disposition: u32 = 3;
+  if mode == 1 {
+    access = 1073741824;
+    disposition = 2;
+  } else if mode != 0 {
+    return -87;
+  }
+  let handle: *u8 = create_file(path, access, 3, 0 as *u8,
+                                 disposition, 128, 0 as *u8);
+  if handle as i64 == -1 {
+    return -(std.win.error.last_error() as i64);
+  }
+  return handle as i64;
+}
+
+pub fn read(handle: i64, output: *u8, count: usize) -> i64 {
+  let limit: u32 = 4294967295;
+  if count < 4294967295 {
+    limit = count as u32;
+  }
+  let transferred: u32 = 0;
+  if read_file(handle as *u8, output, limit, &transferred, 0 as *u8) == 0 {
+    return -(std.win.error.last_error() as i64);
+  }
+  return transferred as i64;
+}
+
+pub fn write(handle: i64, data: *u8, count: usize) -> i64 {
+  let limit: u32 = 4294967295;
+  if count < 4294967295 {
+    limit = count as u32;
+  }
+  let transferred: u32 = 0;
+  if write_file(handle as *u8, data, limit, &transferred, 0 as *u8) == 0 {
+    return -(std.win.error.last_error() as i64);
+  }
+  return transferred as i64;
+}
+
+pub fn close(handle: i64) -> i64 {
+  if std.win.handle.close(handle as *u8) == 0 {
+    return -(std.win.error.last_error() as i64);
+  }
+  return 0;
+}

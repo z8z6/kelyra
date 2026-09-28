@@ -1,0 +1,431 @@
+@cfg(os="windows", arch="x86_64") module std.win.graphics.window;
+
+import std.io;
+import std.win.com;
+import std.win.d3d12;
+import std.win.dxgi;
+import std.win.event;
+import std.win.error;
+import std.win.guid;
+import std.win.handle;
+import std.win.wait;
+import std.win.window;
+import std.win.text;
+
+fn window_procedure(window: *u8, message: u32, w_param: usize,
+                    l_param: isize) -> isize {
+  if message == 2 {
+    std.win.window.post_quit_message(0);
+    return 0;
+  }
+  return std.win.window.default_procedure(window, message, w_param,
+                                          l_param);
+}
+
+fn release_if(object: *u8) -> void {
+  if object as usize != 0 {
+    std.win.com.release(object);
+  }
+}
+
+fn report_shader_error(blob: *u8) -> void {
+  if blob as usize != 0 {
+    std.io.write_stderr(std.win.d3d12.blob_data(blob),
+                         std.win.d3d12.blob_size(blob));
+  }
+}
+
+fn render(window: *u8, width: i32, height: i32,
+          vertex: *u8, vertex_size: usize,
+          fragment: *u8, fragment_size: usize,
+          vertex_count: u32, verify_pixels: bool) -> i32 {
+  let factory: *u8 = 0 as *u8;
+  let adapter: *u8 = 0 as *u8;
+  let device: *u8 = 0 as *u8;
+  let queue: *u8 = 0 as *u8;
+  let swap_chain1: *u8 = 0 as *u8;
+  let swap_chain: *u8 = 0 as *u8;
+  let heap: *u8 = 0 as *u8;
+  let buffers: [2]*u8;
+  buffers[0] = 0 as *u8;
+  buffers[1] = 0 as *u8;
+  let root_blob: *u8 = 0 as *u8;
+  let error_blob: *u8 = 0 as *u8;
+  let root: *u8 = 0 as *u8;
+  let state: *u8 = 0 as *u8;
+  let allocator: *u8 = 0 as *u8;
+  let list: *u8 = 0 as *u8;
+  let fence: *u8 = 0 as *u8;
+  let event: *u8 = 0 as *u8;
+  let readback: *u8 = 0 as *u8;
+  let result: i32 = 0;
+
+  while true {
+    if std.win.dxgi.create_factory(&factory) < 0 {
+      result = 10;
+      break;
+    }
+    if std.win.d3d12.create_device(0 as *u8, &device) < 0 {
+      if std.win.dxgi.warp_adapter(factory, &adapter) < 0 ||
+          std.win.d3d12.create_device(adapter, &device) < 0 {
+        result = 11;
+        break;
+      }
+    }
+
+    let queue_desc = std.win.d3d12.CommandQueueDesc();
+    if std.win.d3d12.create_command_queue(device, &queue_desc, &queue) < 0 {
+      result = 12;
+      break;
+    }
+
+    let swap_desc = std.win.dxgi.SwapChainDesc1();
+    swap_desc.width = width as u32;
+    swap_desc.height = height as u32;
+    swap_desc.format = std.win.dxgi.format_rgba8_unorm();
+    swap_desc.sample.count = 1;
+    swap_desc.usage = std.win.dxgi.usage_render_target();
+    swap_desc.buffer_count = 2;
+    swap_desc.swap_effect = std.win.dxgi.swap_effect_flip_discard();
+    if std.win.dxgi.create_swap_chain_for_window(factory, queue, window,
+                                                 &swap_desc, &swap_chain1) < 0 {
+      result = 13;
+      break;
+    }
+    if std.win.dxgi.query_swap_chain3(swap_chain1, &swap_chain) < 0 {
+      result = 14;
+      break;
+    }
+    std.win.com.release(swap_chain1);
+    swap_chain1 = 0 as *u8;
+
+    let heap_desc = std.win.d3d12.DescriptorHeapDesc();
+    heap_desc.kind = 2; // RTV
+    heap_desc.count = 2;
+    if std.win.d3d12.create_descriptor_heap(device, &heap_desc, &heap) < 0 {
+      result = 15;
+      break;
+    }
+    let descriptor_start = std.win.d3d12.descriptor_start(heap);
+    let descriptor_step = std.win.d3d12.descriptor_increment(device, 2);
+    let resource_iid = std.win.guid.Guid();
+    std.win.d3d12.iid_resource(&resource_iid);
+    let index: u32 = 0;
+    while index < 2 {
+      if std.win.dxgi.buffer(swap_chain, index, &resource_iid,
+                             &buffers[index]) < 0 {
+        result = 16;
+        break;
+      }
+      std.win.d3d12.create_render_target_view(
+          device, buffers[index], descriptor_start +
+          (index as usize) * (descriptor_step as usize));
+      index = index + 1;
+    }
+    if result != 0 { break; }
+
+    let root_desc = std.win.d3d12.RootSignatureDesc();
+    root_desc.flags = 1; // Allow input assembler input layout.
+    if std.win.d3d12.serialize_root_signature(
+        &root_desc, 1, &root_blob, &error_blob) < 0 {
+      report_shader_error(error_blob);
+      result = 17;
+      break;
+    }
+    if std.win.d3d12.create_root_signature(
+        device, std.win.d3d12.blob_data(root_blob),
+        std.win.d3d12.blob_size(root_blob), &root) < 0 {
+      result = 18;
+      break;
+    }
+
+    let pipeline = std.win.d3d12.GraphicsPipelineDesc();
+    pipeline.root_signature = root;
+    pipeline.vertex_shader.data = vertex;
+    pipeline.vertex_shader.size = vertex_size;
+    pipeline.pixel_shader.data = fragment;
+    pipeline.pixel_shader.size = fragment_size;
+    pipeline.blend.target0.source = 2;
+    pipeline.blend.target0.destination = 1;
+    pipeline.blend.target0.operation = 1;
+    pipeline.blend.target0.source_alpha = 2;
+    pipeline.blend.target0.destination_alpha = 1;
+    pipeline.blend.target0.operation_alpha = 1;
+    pipeline.blend.target0.logic_operation = 5;
+    pipeline.blend.target0.write_mask = 15;
+    pipeline.sample_mask = 4294967295;
+    pipeline.rasterizer.fill_mode = 3;
+    pipeline.rasterizer.cull_mode = 1;
+    pipeline.rasterizer.depth_clip = 1;
+    pipeline.depth_stencil.depth_write_mask = 1;
+    pipeline.depth_stencil.depth_comparison = 2;
+    pipeline.depth_stencil.front.stencil_fail = 1;
+    pipeline.depth_stencil.front.depth_fail = 1;
+    pipeline.depth_stencil.front.pass = 1;
+    pipeline.depth_stencil.front.comparison = 8;
+    pipeline.depth_stencil.back.stencil_fail = 1;
+    pipeline.depth_stencil.back.depth_fail = 1;
+    pipeline.depth_stencil.back.pass = 1;
+    pipeline.depth_stencil.back.comparison = 8;
+    pipeline.topology = 3;
+    pipeline.render_target_count = 1;
+    pipeline.render_target_formats[0] = std.win.dxgi.format_rgba8_unorm();
+    pipeline.sample.count = 1;
+    let pipeline_status =
+        std.win.d3d12.create_graphics_pipeline(device, &pipeline, &state);
+    if pipeline_status < 0 {
+      std.io.print("CreateGraphicsPipelineState failed: ");
+      std.io.print_int(pipeline_status as i64);
+      std.io.println("");
+      result = 21;
+      break;
+    }
+    if std.win.d3d12.create_command_allocator(device, 0, &allocator) < 0 {
+      result = 22;
+      break;
+    }
+    if std.win.d3d12.create_command_list(device, allocator, state,
+                                         &list) < 0 ||
+        std.win.d3d12.close_list(list) < 0 {
+      result = 23;
+      break;
+    }
+    if std.win.d3d12.create_fence(device, 0, 0, &fence) < 0 {
+      result = 24;
+      break;
+    }
+    event = std.win.event.create(0 as *u8, 0, 0, 0 as *u16);
+    if event as usize == 0 {
+      result = 25;
+      break;
+    }
+
+    let row_pitch = (((width as u32) * 4 + 255) / 256) * 256;
+    if verify_pixels {
+      let properties = std.win.d3d12.HeapProperties();
+      properties.kind = 3; // D3D12_HEAP_TYPE_READBACK.
+      properties.creation_nodes = 1;
+      properties.visible_nodes = 1;
+      let description = std.win.d3d12.ResourceDesc();
+      description.dimension = 1; // D3D12_RESOURCE_DIMENSION_BUFFER.
+      description.width = (row_pitch as u64) * (height as u64);
+      description.height = 1;
+      description.depth_or_array = 1;
+      description.mip_levels = 1;
+      description.sample.count = 1;
+      description.layout = 1; // D3D12_TEXTURE_LAYOUT_ROW_MAJOR.
+      if std.win.d3d12.create_committed_resource(
+          device, &properties, 0, &description, 1024,
+          0 as *u8, &readback) < 0 { // D3D12_RESOURCE_STATE_COPY_DEST.
+        result = 31;
+        break;
+      }
+    }
+
+    let viewport = std.win.d3d12.Viewport();
+    viewport.width = width as f32;
+    viewport.height = height as f32;
+    viewport.max_depth = 1.0;
+    let scissor = std.win.window.Rect();
+    scissor.right = width;
+    scissor.bottom = height;
+    let clear: [4]f32;
+    clear[0] = 0.08;
+    clear[1] = 0.10;
+    clear[2] = 0.18;
+    clear[3] = 1.0;
+    let message = std.win.window.Message();
+    let fence_value: u64 = 0;
+    let running = true;
+    while running {
+      while std.win.window.peek_message(&message, 0 as *u8, 0, 0, 1) != 0 {
+        if message.message == 18 { // WM_QUIT
+          running = false;
+          break;
+        }
+        std.win.window.translate_message(&message);
+        std.win.window.dispatch_message(&message);
+      }
+      if !running { break; }
+      let frame = std.win.dxgi.current_buffer_index(swap_chain);
+      if std.win.d3d12.reset_allocator(allocator) < 0 ||
+          std.win.d3d12.reset_list(list, allocator, state) < 0 {
+        result = 26;
+        break;
+      }
+      std.win.d3d12.set_root_signature(list, root);
+      std.win.d3d12.set_viewport(list, &viewport);
+      std.win.d3d12.set_scissor(list, &scissor);
+      let barrier = std.win.d3d12.ResourceBarrier();
+      std.win.d3d12.transition_barrier(&barrier, buffers[frame], 0, 4);
+      std.win.d3d12.resource_barrier(list, &barrier);
+      let target = descriptor_start +
+          (frame as usize) * (descriptor_step as usize);
+      std.win.d3d12.set_render_target(list, &target);
+      std.win.d3d12.clear_render_target(list, target, &clear[0]);
+      std.win.d3d12.set_primitive_topology(list, 4); // Triangle list.
+      std.win.d3d12.draw(list, vertex_count);
+      if verify_pixels {
+        std.win.d3d12.transition_barrier(&barrier, buffers[frame], 4, 2048);
+        std.win.d3d12.resource_barrier(list, &barrier);
+        let source = std.win.d3d12.TextureCopyLocation();
+        source.resource = buffers[frame];
+        let destination = std.win.d3d12.TextureCopyLocation();
+        destination.resource = readback;
+        destination.kind = 1; // D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT.
+        destination.format = std.win.dxgi.format_rgba8_unorm();
+        destination.width = width as u32;
+        destination.height = height as u32;
+        destination.depth = 1;
+        destination.row_pitch = row_pitch;
+        std.win.d3d12.copy_texture_region(list, &destination, &source);
+        std.win.d3d12.transition_barrier(&barrier, buffers[frame], 2048, 0);
+      } else {
+        std.win.d3d12.transition_barrier(&barrier, buffers[frame], 4, 0);
+      }
+      std.win.d3d12.resource_barrier(list, &barrier);
+      if std.win.d3d12.close_list(list) < 0 {
+        result = 27;
+        break;
+      }
+      let lists: [1]*u8;
+      lists[0] = list;
+      std.win.d3d12.execute_lists(queue, 1, &lists[0]);
+      if std.win.dxgi.present(swap_chain, 1, 0) < 0 {
+        result = 28;
+        break;
+      }
+      fence_value = fence_value + 1;
+      if std.win.d3d12.signal(queue, fence, fence_value) < 0 {
+        result = 29;
+        break;
+      }
+      if std.win.d3d12.completed_value(fence) < fence_value {
+        if std.win.d3d12.set_event_on_completion(
+            fence, fence_value, event) < 0 ||
+            std.win.wait.one(event, 4294967295) != 0 {
+          result = 30;
+          break;
+        }
+      }
+      if verify_pixels {
+        let pixels: *u8 = 0 as *u8;
+        if std.win.d3d12.map(readback, 0, &pixels) < 0 {
+          result = 32;
+          break;
+        }
+        let sample = (pixels as usize +
+            ((height as usize) / 2) * (row_pitch as usize) +
+            ((width as usize) / 2) * 4) as *u8;
+        let red = *sample;
+        let green = *((sample as usize + 1) as *u8);
+        let blue = *((sample as usize + 2) as *u8);
+        std.io.print("DX12 GPU triangle center RGB: ");
+        std.io.print_int(red as i64);
+        std.io.print(" ");
+        std.io.print_int(green as i64);
+        std.io.print(" ");
+        std.io.print_int(blue as i64);
+        std.io.println("");
+        if red < 100 || red <= green * 2 || red <= blue * 2 {
+          result = 33;
+        }
+        std.win.d3d12.unmap(readback, 0);
+        break;
+      }
+    }
+    break;
+  }
+
+  if event as usize != 0 { std.win.handle.close(event); }
+  release_if(readback);
+  release_if(fence);
+  release_if(list);
+  release_if(allocator);
+  release_if(state);
+  release_if(root);
+  release_if(error_blob);
+  release_if(root_blob);
+  release_if(buffers[1]);
+  release_if(buffers[0]);
+  release_if(heap);
+  release_if(swap_chain);
+  release_if(swap_chain1);
+  release_if(queue);
+  release_if(device);
+  release_if(adapter);
+  release_if(factory);
+  return result;
+}
+
+// Runs a procedural graphics pipeline until the window is closed.
+// Shader byte ranges are borrowed for the duration of this call.
+fn run_internal(title_utf8: *c.char, width: i32, height: i32,
+           vertex: *u8, vertex_size: usize,
+           fragment: *u8, fragment_size: usize,
+           vertex_count: u32, verify_pixels: bool) -> i32 {
+  let class_name: [15]u16;
+  class_name[0] = 75;
+  class_name[1] = 101;
+  class_name[2] = 108;
+  class_name[3] = 121;
+  class_name[4] = 114;
+  class_name[5] = 97;
+  class_name[6] = 84;
+  class_name[7] = 114;
+  class_name[8] = 105;
+  class_name[9] = 97;
+  class_name[10] = 110;
+  class_name[11] = 103;
+  class_name[12] = 108;
+  class_name[13] = 101;
+  class_name[14] = 0;
+  let title: [256]u16;
+  if std.win.text.utf8_to_wide(65001, 0, title_utf8, -1, &title[0], 256) == 0 {
+    return 3;
+  }
+  let instance = std.win.window.module_handle(0 as *u16);
+  let kind = std.win.window.WindowClassExW();
+  kind.size = std.win.window.class_size();
+  kind.procedure = window_procedure;
+  kind.instance = instance;
+  kind.class_name = &class_name[0];
+  if std.win.window.register_class(&kind) == 0 {
+    std.io.print("RegisterClassExW failed: ");
+    std.io.print_int(std.win.error.last_error() as i64);
+    std.io.println("");
+    return 1;
+  }
+  let window = std.win.window.create_window(
+      0, &class_name[0], &title[0], 13238272,
+      100, 100, width, height, 0 as *u8, 0 as *u8,
+      instance, 0 as *u8);
+  if window as usize == 0 {
+    std.win.window.unregister_class(&class_name[0], instance);
+    return 2;
+  }
+  std.win.window.show_window(window, 5);
+  let result = render(window, width, height, vertex, vertex_size,
+                      fragment, fragment_size, vertex_count, verify_pixels);
+  // WM_DESTROY invalidates the HWND; DestroyWindow is only needed on failure.
+  if result != 0 { std.win.window.destroy_window(window); }
+  std.win.window.unregister_class(&class_name[0], instance);
+  return result;
+}
+
+pub fn run(title_utf8: *c.char, width: i32, height: i32,
+           vertex: *u8, vertex_size: usize,
+           fragment: *u8, fragment_size: usize,
+           vertex_count: u32) -> i32 {
+  return run_internal(title_utf8, width, height, vertex, vertex_size,
+                      fragment, fragment_size, vertex_count, false);
+}
+
+// Draws one frame and checks its center pixel through a GPU readback buffer.
+pub fn run_verify(title_utf8: *c.char, width: i32, height: i32,
+                  vertex: *u8, vertex_size: usize,
+                  fragment: *u8, fragment_size: usize,
+                  vertex_count: u32) -> i32 {
+  return run_internal(title_utf8, width, height, vertex, vertex_size,
+                      fragment, fragment_size, vertex_count, true);
+}

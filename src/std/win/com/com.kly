@@ -1,0 +1,76 @@
+@cfg(os="windows", arch="x86_64") module std.win.com;
+
+import std.win.guid;
+
+pub alias HResult = i32;
+
+@layout(Layout.C)
+pub class IUnknownVTable {
+  pub query_interface: fn(*u8, *std.win.guid.Guid, **u8) -> HResult;
+  pub add_ref: fn(*u8) -> u32;
+  pub release: fn(*u8) -> u32;
+}
+
+@layout(Layout.C)
+pub class IUnknown {
+  pub vtable: *IUnknownVTable;
+}
+
+// An output interface pointer owns one reference. Copies must call add_ref;
+// each owned reference must eventually be passed to release.
+pub fn query_interface(object: *u8, iid: *std.win.guid.Guid,
+                       result: **u8) -> HResult {
+  let unknown: *IUnknown = object as *IUnknown;
+  return (*(*unknown).vtable).query_interface(object, iid, result);
+}
+
+pub fn add_ref(object: *u8) -> u32 {
+  let unknown: *IUnknown = object as *IUnknown;
+  return (*(*unknown).vtable).add_ref(object);
+}
+
+pub fn release(object: *u8) -> u32 {
+  let unknown: *IUnknown = object as *IUnknown;
+  return (*(*unknown).vtable).release(object);
+}
+
+// Derived COM interfaces append slots after their inherited vtable prefix.
+pub fn method(object: *u8, slot: usize) -> usize {
+  let table: *usize = (*(object as *usize)) as *usize;
+  return *((table as usize + slot * 8) as *usize);
+}
+
+pub fn succeeded(result: HResult) -> bool { return result >= 0; }
+
+// COINIT_MULTITHREADED = 0, COINIT_APARTMENTTHREADED = 2.
+// Every successful initialize call, including S_FALSE, needs uninitialize.
+@extern("CoInitializeEx", "ole32")
+@callconv(CallingConvention.System)
+pub fn initialize(reserved: *u8, apartment: u32) -> HResult;
+
+@extern("CoUninitialize", "ole32")
+@callconv(CallingConvention.System)
+pub fn uninitialize() -> void;
+
+@extern("CoCreateInstance", "ole32")
+@callconv(CallingConvention.System)
+pub fn create_instance(class_id: *std.win.guid.Guid, outer: *u8,
+                       context: u32, interface_id: *std.win.guid.Guid,
+                       result: **u8) -> HResult;
+
+@extern("CoTaskMemAlloc", "ole32")
+@callconv(CallingConvention.System)
+pub fn allocate(size: usize) -> *u8;
+
+@extern("CoTaskMemFree", "ole32")
+@callconv(CallingConvention.System)
+pub fn free(pointer: *u8) -> void;
+
+@extern("CLSIDFromString", "ole32")
+@callconv(CallingConvention.System)
+pub fn guid_from_string(text: *u16, result: *std.win.guid.Guid) -> HResult;
+
+@extern("StringFromGUID2", "ole32")
+@callconv(CallingConvention.System)
+pub fn guid_to_string(value: *std.win.guid.Guid, output: *u16,
+                      capacity: i32) -> i32;

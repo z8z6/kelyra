@@ -1,0 +1,124 @@
+@cfg(os="windows", arch="x86_64") module std.win.window;
+
+import std.memory;
+
+pub alias HWnd = *u8;
+pub alias HInstance = *u8;
+pub alias WndProc = fn(HWnd, u32, usize, isize) -> isize;
+
+@layout(Layout.C)
+pub class Point {
+  pub x: i32;
+  pub y: i32;
+}
+
+@layout(Layout.C)
+pub class Rect {
+  pub left: i32;
+  pub top: i32;
+  pub right: i32;
+  pub bottom: i32;
+}
+
+@layout(Layout.C)
+pub class Message {
+  pub window: HWnd;
+  pub message: u32;
+  pub w_param: usize;
+  pub l_param: isize;
+  pub time: u32;
+  pub point: Point;
+  pub private_data: u32;
+}
+
+@layout(Layout.C)
+pub class WindowClassExW {
+  pub size: u32;
+  pub style: u32;
+  pub procedure: WndProc;
+  pub class_extra: i32;
+  pub window_extra: i32;
+  pub instance: HInstance;
+  pub icon: *u8;
+  pub cursor: *u8;
+  pub background: *u8;
+  pub menu_name: *u16;
+  pub class_name: *u16;
+  pub small_icon: *u8;
+}
+
+pub fn class_size() -> u32 {
+  return std.memory.size_of<WindowClassExW>(0 as *WindowClassExW) as u32;
+}
+
+@extern("GetModuleHandleW", "kernel32")
+@callconv(CallingConvention.System)
+pub fn module_handle(name: *u16) -> HInstance;
+
+@extern("RegisterClassExW", "user32")
+@callconv(CallingConvention.System)
+pub fn register_class(value: *WindowClassExW) -> u16;
+
+@extern("UnregisterClassW", "user32")
+@callconv(CallingConvention.System)
+pub fn unregister_class(name: *u16, instance: HInstance) -> i32;
+
+@extern("CreateWindowExW", "user32")
+@callconv(CallingConvention.System)
+pub fn create_window(ex_style: u32, class_name: *u16, title: *u16,
+                     style: u32, x: i32, y: i32, width: i32, height: i32,
+                     parent: HWnd, menu: *u8, instance: HInstance,
+                     parameter: *u8) -> HWnd;
+
+@extern("DestroyWindow", "user32")
+@callconv(CallingConvention.System)
+pub fn destroy_window(window: HWnd) -> i32;
+
+@extern("DefWindowProcW", "user32")
+@callconv(CallingConvention.System)
+pub fn default_procedure(window: HWnd, message: u32,
+                         w_param: usize, l_param: isize) -> isize;
+
+@extern("ShowWindow", "user32")
+@callconv(CallingConvention.System)
+pub fn show_window(window: HWnd, command: i32) -> i32;
+
+@extern("UpdateWindow", "user32")
+@callconv(CallingConvention.System)
+pub fn update_window(window: HWnd) -> i32;
+
+@extern("PeekMessageW", "user32")
+@callconv(CallingConvention.System)
+pub fn peek_message(message: *Message, window: HWnd, first: u32,
+                    last: u32, remove: u32) -> i32;
+
+@extern("GetMessageW", "user32")
+@callconv(CallingConvention.System)
+pub fn get_message(message: *Message, window: HWnd,
+                   first: u32, last: u32) -> i32;
+
+@extern("TranslateMessage", "user32")
+@callconv(CallingConvention.System)
+pub fn translate_message(message: *Message) -> i32;
+
+@extern("DispatchMessageW", "user32")
+@callconv(CallingConvention.System)
+pub fn dispatch_message(message: *Message) -> isize;
+
+@extern("PostQuitMessage", "user32")
+@callconv(CallingConvention.System)
+pub fn post_quit_message(exit_code: i32) -> void;
+
+@extern("PostMessageW", "user32")
+@callconv(CallingConvention.System)
+pub fn post_message(window: HWnd, message: u32, w_param: usize,
+                    l_param: isize) -> i32;
+
+@extern("GetClientRect", "user32")
+@callconv(CallingConvention.System)
+pub fn client_rect(window: HWnd, rect: *Rect) -> i32;
+
+@extern("AdjustWindowRectEx", "user32")
+@callconv(CallingConvention.System)
+pub fn adjust_window_rect(rect: *Rect, style: u32, menu: i32,
+                          ex_style: u32) -> i32;

@@ -18,14 +18,16 @@ functions to SPIR-V is supported through `kelyra --emit-spirv --shader-entry`.
 Shader interface annotations (`@vertex_index`, `@position`, and `@location`)
 are declared in `std.graphics`; their stage and type rules and planned HLSL
 mapping are documented in `kelyra/doc/shader.md`.
-`std.graphics.vulkan.window` uses SDL3 to create a window and submit graphics
-commands through its Vulkan backend. Its first pipeline mode supports procedural
-triangle-list geometry without vertex buffers or shader resources.
+On Windows, `std.graphics.window.run_backend(Backend.Vulkan, ...)` creates a
+Kelyra `std.ui.win.Window`, then uses the small native Vulkan adapter in
+`native/vulkan_window.cpp` for the surface, swapchain, and draw commands. The
+window and UI event loop remain in ordinary Kelyra code. Run
+`examples/vulkan_triangle.ps1` to compile the Kelyra shaders to SPIR-V, build
+the Vulkan adapter, and open a procedural triangle window. The script requires
+the Vulkan SDK, `glslangValidator`, `spirv-val`, and a Vulkan driver.
+`tests/vulkan_triangle.ps1` builds and runs the example, reads back one Vulkan
+frame, and checks that the center contains the red triangle while the corner
+contains the dark background.
 
-Run `sh examples/vulkan_triangle.sh` from the `kstd` repository to compile the
-Kelyra vertex and fragment functions, build the native host program, and open
-the triangle window. The fragment shader imports `vulkan_triangle_palette` and
-calls its public `triangle_color` function without a module prefix. This
-requires SDL3 headers and library, `glslangValidator`, `spirv-val`, and a Vulkan
-driver. `sh tests/vulkan_triangle.sh` compiles and
-checks the shader modules and host executable without opening a window.
+The Linux Vulkan host API remains available as `std.graphics.vulkan`; the
+window and presentation implementation for Linux is future work.

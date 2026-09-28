@@ -91,7 +91,7 @@ pub enum Retention {
 pub annotation layout(kind: Layout);
 
 @target(Target.Function)
-pub annotation extern(symbol: StringSlice);
+pub annotation extern(symbol: StringSlice, library: StringSlice = "");
 
 // Identifies a compiler-provided operation or storage representation.
 @target(Target.Function, Target.Class)

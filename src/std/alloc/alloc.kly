@@ -3,7 +3,7 @@ module std.alloc;
 @cfg(os="linux", arch="x86_64")
 import std.alloc.linux;
 @cfg(os="windows", arch="x86_64")
-import std.alloc.windows;
+import std.win.memory;
 
 // Allocates `size` bytes. The result is null when the request cannot be met.
 @cfg(os="linux", arch="x86_64")
@@ -13,7 +13,7 @@ pub fn allocate(size: usize) -> *u8 {
 
 @cfg(os="windows", arch="x86_64")
 pub fn allocate(size: usize) -> *u8 {
-  return std.alloc.windows.allocate(size);
+  return std.win.memory.allocate(size);
 }
 
 // Resizes an earlier allocation, preserving its contents. On failure the old
@@ -44,7 +44,7 @@ pub fn release(pointer: *u8) -> void {
 
 @cfg(os="windows", arch="x86_64")
 pub fn release(pointer: *u8) -> void {
-  std.alloc.windows.release(pointer);
+  std.win.memory.release(pointer);
 }
 
 // Copies `count` bytes from source to destination. The ranges must not overlap.

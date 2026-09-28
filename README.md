@@ -84,12 +84,16 @@ writing. Handles and negative error values are native to the target OS; see
 time via `@cfg(os=..., arch=...)`. Both backends are written in Kelyra; see
 [`doc/os.md`](doc/os.md) for APIs, platform selection and FFI limitations.
 
-`std.sync.thread` exposes native thread IDs, scheduler yield, 32-bit wait/wake
-primitives and Windows callback-based thread creation. `std.sync.signal` exposes
-Linux signal sending or Windows console control events and handlers. The
-low-level operations are freestanding safe; Linux callback APIs live in
+`std.sync.thread` exposes native thread IDs, scheduler yield and 32-bit wait/wake
+primitives. `std.sync.signal` exposes Linux signal sending. Windows-specific
+APIs, including thread handles, console handlers, windows, COM and DX12, live
+under `std.win`; see [`doc/windows.md`](doc/windows.md). Linux callback APIs live in
 `std.sync.thread.hosted` and `std.sync.signal.hosted` and require libc and pthreads.
 See [`doc/thread-signal.md`](doc/thread-signal.md).
+
+`std.graphics.window.run` provides one procedural rendering call on Windows
+DX12 and a Linux Vulkan interface. Both use the same Kelyra shader source;
+the target bytecode format is selected during shader compilation.
 
 Kstd's alloc, io, file and string implementations are Kelyra sources; the
 build has no C sources. Kelp uses the checked-in `kelp.toml` to build a library

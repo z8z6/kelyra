@@ -1,0 +1,44 @@
+@cfg(os="windows", arch="x86_64")
+import std.ui.win;
+@cfg(os="windows", arch="x86_64")
+import std.ui.win.gdi;
+@cfg(os="windows", arch="x86_64")
+import std.ui;
+@cfg(os="windows", arch="x86_64")
+import std.win.window;
+
+@cfg(os="windows", arch="x86_64")
+@main
+pub fn main() -> i32 {
+  let window = std.ui.win.Window("Kelyra UI", 320, 240);
+  if !window.valid() { return 1; }
+  if window.handle() as usize == 0 { return 2; }
+  let panel = std.ui.Panel(10, 10, 200, 180);
+  let label = std.ui.Label("Label", 10, 55, 100, 25);
+  let button = std.ui.Button("Button", 10, 10, 100, 30);
+  let slider = std.ui.Slider(10, 95, 100, 20);
+  slider.set_value(0.5);
+  if !window.ui.add(&panel) { return 8; }
+  if !panel.add(&label) ||
+      !panel.add(&button) ||
+      !panel.add(&slider) { return 9; }
+  window.set_ui_paint(true);
+  if !window.poll() { return 3; }
+  let pixel = std.ui.win.gdi.pixel(window.handle(), 15, 15);
+  if pixel != 2958110 { return 10; }
+  if std.ui.win.gdi.pixel(window.handle(), 30, 110) != 16777215 {
+    return 11;
+  }
+  if std.ui.win.gdi.pixel(window.handle(), 90, 110) != 4013373 {
+    return 12;
+  }
+  if std.win.window.post_message(window.handle(), 5, 0,
+                                 350 * 65536 + 400) == 0 { return 4; }
+  if !window.poll() || window.client_width() != 400 ||
+      window.client_height() != 350 { return 5; }
+  if std.win.window.post_message(window.handle(), 16, 0, 0) == 0 {
+    return 6;
+  }
+  if window.poll() { return 7; }
+  return 0;
+}

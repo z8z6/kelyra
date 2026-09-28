@@ -1,0 +1,27 @@
+module std.graphics.shader.lighting;
+
+import std.graphics;
+import std.graphics.shader.math;
+
+// All directions point away from the shaded surface. Color terms are linear
+// RGB; diffuse and specular are already multiplied by their light color.
+// The return value remains in linear HDR space, so callers choose tonemapping.
+pub fn phong_color(normal: Vec3, to_light: Vec3, to_view: Vec3,
+                   ambient: Vec3, diffuse: Vec3, specular: Vec3,
+                   shininess: f32) -> Vec3 {
+  let n = normalize_vec3(normal);
+  let l = normalize_vec3(to_light);
+  let v = normalize_vec3(to_view);
+  let incidence = max_f32(dot_vec3(n, l), 0.0);
+  let reflected = reflect_vec3(scale_vec3(l, -1.0), n);
+  let highlight: f32 = 0.0;
+  if incidence > 0.0 {
+    let alignment = max_f32(dot_vec3(reflected, v), 0.0);
+    if alignment > 0.0 {
+      highlight = pow_f32(alignment, max_f32(shininess, 1.0));
+    }
+  }
+  return add_vec3(ambient,
+                  add_vec3(scale_vec3(diffuse, incidence),
+                           scale_vec3(specular, highlight)));
+}

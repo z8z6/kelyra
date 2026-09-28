@@ -3,23 +3,7 @@ module std.sync.thread;
 @cfg(os="linux", arch="x86_64")
 import std.sync.thread.linux;
 @cfg(os="windows", arch="x86_64")
-import std.sync.thread.windows;
-
-@cfg(os="windows", arch="x86_64")
-pub fn spawn(callback: fn(*u8) -> u32, context: *u8,
-             thread_id: *u32) -> *u8 {
-  return std.sync.thread.windows.spawn(callback, context, thread_id);
-}
-
-@cfg(os="windows", arch="x86_64")
-pub fn join(handle: *u8, exit_code: *u32) -> i64 {
-  return std.sync.thread.windows.join(handle, exit_code);
-}
-
-@cfg(os="windows", arch="x86_64")
-pub fn close(handle: *u8) -> i64 {
-  return std.sync.thread.windows.close(handle);
-}
+import std.win.thread;
 
 @cfg(os="linux", arch="x86_64")
 pub fn current_id() -> i64 {
@@ -28,7 +12,7 @@ pub fn current_id() -> i64 {
 
 @cfg(os="windows", arch="x86_64")
 pub fn current_id() -> i64 {
-  return std.sync.thread.windows.current_id() as i64;
+  return std.win.thread.current_id() as i64;
 }
 
 @cfg(os="linux", arch="x86_64")
@@ -38,7 +22,7 @@ pub fn yield_now() -> i64 {
 
 @cfg(os="windows", arch="x86_64")
 pub fn yield_now() -> i64 {
-  std.sync.thread.windows.yield_now();
+  std.win.thread.yield_now();
   return 0;
 }
 
@@ -49,7 +33,7 @@ pub fn wait_word(address: *u32, expected: u32) -> i64 {
 
 @cfg(os="windows", arch="x86_64")
 pub fn wait_word(address: *u32, expected: u32) -> i64 {
-  return std.sync.thread.windows.wait_word(address, expected);
+  return std.win.thread.wait_word(address, expected);
 }
 
 @cfg(os="linux", arch="x86_64")
@@ -59,7 +43,7 @@ pub fn wake_one(address: *u32) -> i64 {
 
 @cfg(os="windows", arch="x86_64")
 pub fn wake_one(address: *u32) -> i64 {
-  std.sync.thread.windows.wake_one(address);
+  std.win.thread.wake_one(address);
   return 0;
 }
 
@@ -70,6 +54,6 @@ pub fn wake_all(address: *u32) -> i64 {
 
 @cfg(os="windows", arch="x86_64")
 pub fn wake_all(address: *u32) -> i64 {
-  std.sync.thread.windows.wake_all(address);
+  std.win.thread.wake_all(address);
   return 0;
 }

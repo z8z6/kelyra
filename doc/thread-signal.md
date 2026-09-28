@@ -1,64 +1,40 @@
-# Thread and signal system APIs
+# Threads and signals
 
-`std.sync.thread` and `std.sync.signal` provide low-level OS calls on Linux x86-64 and
-Windows x64. Their original wait, wake, ID, and event APIs remain freestanding
-safe. Linux callback APIs use libc/pthreads and require a hosted executable.
-Platform selection uses `@cfg(os="...", arch="x86_64")`.
+`std.sync.thread` provides common thread IDs, scheduler yield, and aligned
+32-bit wait/wake operations on Linux x86-64 and Windows x64. Its signatures
+use `i64` results on both platforms. The platform implementations are
+`std.sync.thread.linux` and `std.win.thread`.
 
-| Module | Linux x86-64 | Windows x64 |
+| Operation | Linux | Windows |
 | --- | --- | --- |
-| `std.sync.thread.current_id` | `gettid`, `i64` | `GetCurrentThreadId`, widened to `i64` |
-| `std.sync.thread.yield_now` | `sched_yield`, zero or `-errno` | `SwitchToThread`, returns zero even if no peer was scheduled |
-| `std.sync.thread.wait_word` | private futex wait, zero or `-errno` | `WaitOnAddress`, zero or negative `GetLastError` |
-| `std.sync.thread.wake_one` / `wake_all` | private futex wake, count or `-errno` | `WakeByAddressSingle` / `WakeByAddressAll`, returns zero |
-| `std.sync.signal` | `send_process` (`kill`) and `send_thread` (`tgkill`), zero or `-errno` | `send_console_event` (`GenerateConsoleCtrlEvent`) and `ignore_control_c` (`SetConsoleCtrlHandler(NULL, ...)`) |
+| `current_id` | `gettid` | `GetCurrentThreadId` |
+| `yield_now` | `sched_yield` | `SwitchToThread` |
+| `wait_word` | private futex wait | `WaitOnAddress` |
+| `wake_one`, `wake_all` | private futex wake, returns count | `WakeByAddressSingle`, `WakeByAddressAll`, returns 0 |
 
-`wait_word` compares one aligned 32-bit word and waits while it has the
-expected value. Callers must change the word with an atomic operation *before*
-waking other threads, and must recheck it in a loop after waking: spurious
-wakeups and races are allowed. This module does not yet provide atomic writes
-or a mutex, so it is a building block rather than a safe concurrency
-abstraction. Linux `wait_word` returns `-11` (`EAGAIN`) if
-the value already differs. Windows `wait_word` currently waits indefinitely.
-The public `std.sync.thread` signatures use `i64` on both platforms; Linux `wake_*`
-reports a nonnegative wake count whereas Windows returns zero because its API
-does not report the count. The platform-specific modules retain their native
-return signatures.
+Change the word with an atomic operation before waking a waiter. Recheck it
+in a loop after waking because races and spurious wakeups are possible.
+`wait_word` on Windows waits indefinitely. This module does not provide an
+atomic write or mutex abstraction.
 
-Linux signal numbers are kernel signal numbers; signal zero probes process or
-thread existence/permission without delivery. Windows console control events
-are **not** POSIX signals. `send_console_event` only accepts event 0 (`CTRL_C`)
-or 1 (`CTRL_BREAK`), and requires a suitable shared console/process group.
-`ignore_control_c` toggles a process-wide, inheritable state; use with care.
+`std.sync.signal` exposes Linux `send_process` (`kill`) and `send_thread`
+(`tgkill`). Windows console control is a different facility, exposed as
+`std.win.signal.send_console_event`, `ignore_control_c`,
+`register_console_handler`, and `unregister_console_handler`. The Windows
+handler signature is `fn(u32) -> i32` and must match the native ABI.
 
-Callback APIs use Kelyra `fn(...) -> ...` values. On Linux, import
-`std.sync.thread.hosted` for `spawn` and `join`, which wrap `pthread_create` and
-`pthread_join`; the callback has type `fn(*u8) -> *u8`. Import
-`std.sync.signal.hosted` for `install_handler`, which wraps libc `signal`, accepting
-`fn(i32) -> void` and returning the previous handler. `SIG_ERR` is represented
-by `(result as usize) == ((-1) as usize)`; check before using the result. Signal
-handlers run asynchronously: use only operations that are safe in that context.
-On Windows, `std.sync.thread.spawn`, `join`, and `close`
-wrap `CreateThread`, `WaitForSingleObject`, `GetExitCodeThread`, and `CloseHandle`.
-Its callback type is `fn(*u8) -> u32`; `spawn` returns a handle owned by the
-caller, and `join` does not close it. `std.sync.signal.register_console_handler`
-and `unregister_console_handler` wrap `SetConsoleCtrlHandler` with a
-`fn(u32) -> i32` handler. Keep callback code and its context alive until the
-thread exits or the handler is removed. Callback signatures must match the
-native ABI exactly; these APIs do not support capturing closures.
+On Linux, hosted callbacks are in `std.sync.thread.hosted` (`spawn`, `join`
+using pthreads) and `std.sync.signal.hosted` (`install_handler` using libc).
+On Windows, `std.win.thread.spawn`, `join`, and `close` wrap `CreateThread`,
+`WaitForSingleObject`, `GetExitCodeThread`, and `CloseHandle`. `spawn` returns
+an owned handle; `join` does not close it. Keep callbacks and their context
+alive until the thread exits or the handler is removed. Capturing closures
+are not supported by these native callback signatures.
 
-`sh tests/callback.sh` exercises the hosted Linux thread and signal callbacks.
-`examples/callback_windows_example.kly` provides a Windows x64 compilation example.
+Other Windows synchronization primitives are grouped under `std.win.wait`,
+`std.win.event`, and `std.win.handle`. `WaitOnAddress` and its wake functions
+use the `Synchronization` import library, selected by `@extern`.
 
-`sh tests/thread_signal.sh` runs a freestanding Linux smoke test. A Windows
-cross build can use `--target=x86_64-pc-windows-msvc` and link both
-`Kernel32.lib` and `Synchronization.lib`. The address-wait functions are
-imported from the Windows synchronization API set, not Kernel32's import
-library. The Windows smoke test was linked and run from WSL on Windows x64
-with both import libraries and returned zero; `tests/thread_signal.sh` remains
-Linux-only because its executable format and launcher are native to Linux.
-
-The main kstd library imports `std.sync.thread`. Its Kelp manifest declares
-`windows-import-libraries = ["Synchronization.lib"]`, which Kelp propagates
-to Windows consumers of the library. Direct compiler users must still pass
-the import library explicitly when linking a program that includes kstd.
+`sh tests/thread_signal.sh` and `sh tests/callback.sh` exercise the Linux
+paths. `examples/thread_signal_example.kly` and
+`examples/callback_windows_example.kly` exercise the Windows paths.

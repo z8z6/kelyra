@@ -1,5 +1,7 @@
 import std.sync.signal;
 import std.sync.thread;
+@cfg(os="windows", arch="x86_64")
+import std.win.signal;
 
 @cfg(os="linux", arch="x86_64")
 @main
@@ -41,13 +43,13 @@ pub fn main() -> i32 {
   if std.sync.thread.wake_one(&word) != 0 || std.sync.thread.wake_all(&word) != 0 {
     return 3;
   }
-  if std.sync.signal.send_console_event(2, 0) != -87 {
+  if std.win.signal.send_console_event(2, 0) != -87 {
     return 4;
   }
-  if std.sync.signal.ignore_control_c(true) != 0 {
+  if std.win.signal.ignore_control_c(true) != 0 {
     return 5;
   }
-  if std.sync.signal.ignore_control_c(false) != 0 {
+  if std.win.signal.ignore_control_c(false) != 0 {
     return 6;
   }
   return 0;

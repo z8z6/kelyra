@@ -47,4 +47,5 @@ Negative errors are Linux errno values or Win32 `GetLastError` values. This
 low-level API does not normalize them. Windows paths use the ANSI `A` API and
 are not lossless for all Unicode filenames. A future UTF-16 path API is needed
 for that case. In freestanding mode, the Linux backend needs no libc; the
-Windows backend needs Kernel32 as its OS import library.
+Windows backend uses the Kernel32 import library named by its `@extern`
+declarations.

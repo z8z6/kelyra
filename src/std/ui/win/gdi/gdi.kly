@@ -1,0 +1,150 @@
+@cfg(os="windows", arch="x86_64") module std.ui.win.gdi;
+
+import std.ui;
+import std.win.text;
+import std.win.window;
+
+@extern("GetDC", "user32")
+@callconv(CallingConvention.System)
+fn get_dc(window: *u8) -> *u8;
+
+@extern("ReleaseDC", "user32")
+@callconv(CallingConvention.System)
+fn release_dc(window: *u8, context: *u8) -> i32;
+
+@extern("InvalidateRect", "user32")
+@callconv(CallingConvention.System)
+pub fn invalidate(window: *u8, rect: *std.win.window.Rect,
+                  erase: i32) -> i32;
+
+@extern("ValidateRect", "user32")
+@callconv(CallingConvention.System)
+pub fn validate(window: *u8, rect: *std.win.window.Rect) -> i32;
+
+@extern("FillRect", "user32")
+@callconv(CallingConvention.System)
+fn fill_rect(context: *u8, rect: *std.win.window.Rect,
+             brush: *u8) -> i32;
+
+@extern("FrameRect", "user32")
+@callconv(CallingConvention.System)
+fn frame_rect(context: *u8, rect: *std.win.window.Rect,
+              brush: *u8) -> i32;
+
+@extern("DrawTextW", "user32")
+@callconv(CallingConvention.System)
+fn draw_text(context: *u8, text: *u16, length: i32,
+             rect: *std.win.window.Rect, format: u32) -> i32;
+
+@extern("CreateSolidBrush", "gdi32")
+@callconv(CallingConvention.System)
+fn create_brush(color: u32) -> *u8;
+
+@extern("DeleteObject", "gdi32")
+@callconv(CallingConvention.System)
+fn delete_object(object: *u8) -> i32;
+
+@extern("SetBkMode", "gdi32")
+@callconv(CallingConvention.System)
+fn set_background_mode(context: *u8, mode: i32) -> i32;
+
+@extern("SetTextColor", "gdi32")
+@callconv(CallingConvention.System)
+fn set_text_color(context: *u8, color: u32) -> u32;
+
+@extern("GetPixel", "gdi32")
+@callconv(CallingConvention.System)
+fn get_pixel(context: *u8, x: i32, y: i32) -> u32;
+
+fn channel(value: f32) -> u32 {
+  if value <= 0.0 { return 0; }
+  if value >= 1.0 { return 255; }
+  return (value * 255.0) as u32;
+}
+
+fn color_ref(color: *std.ui.Color) -> u32 {
+  return channel(color.red) + channel(color.green) * 256 +
+         channel(color.blue) * 65536;
+}
+
+fn native_rect(rect: *std.ui.Rect) -> std.win.window.Rect {
+  let result = std.win.window.Rect();
+  result.left = rect.x;
+  result.top = rect.y;
+  result.right = rect.x + rect.width;
+  result.bottom = rect.y + rect.height;
+  return result;
+}
+
+fn fill_color(context: *u8, rect: *std.ui.Rect,
+              color: *std.ui.Color) -> void {
+  let native = native_rect(rect);
+  let brush = create_brush(color_ref(color));
+  if brush as usize != 0 {
+    fill_rect(context, &native, brush);
+    delete_object(brush);
+  }
+  // A one-pixel outline gives panels, buttons, and slider tracks a visible
+  // edge without requiring a target-specific property in std.ui.
+  let edge = create_brush(5263440);
+  if edge as usize != 0 {
+    frame_rect(context, &native, edge);
+    delete_object(edge);
+  }
+}
+
+fn draw_text_color(context: *u8, rect: *std.ui.Rect,
+                   content: *c.char, color: *std.ui.Color) -> void {
+  let wide: [512]u16;
+  if std.win.text.utf8_to_wide(65001, 0, content, -1,
+                                &wide[0], 512) == 0 {
+    return;
+  }
+  let native = native_rect(rect);
+  set_background_mode(context, 1); // TRANSPARENT
+  set_text_color(context, color_ref(color));
+  draw_text(context, &wide[0], -1, &native,
+            1 + 4 + 32 + 32768); // center, middle, single-line, ellipsis
+}
+
+pub class GdiPainter: std.ui.Painter {
+  context: *u8;
+  pub init(device_context: *u8) { context = device_context; }
+  pub fn fill(bounds: *std.ui.Rect, color: *std.ui.Color) -> void {
+    fill_color(context, bounds, color);
+  }
+  pub fn text(bounds: *std.ui.Rect, content: *c.char,
+              color: *std.ui.Color) -> void {
+    draw_text_color(context, bounds, content, color);
+  }
+}
+
+// Paints the retained std.ui tree into a Win32 client area. This path is
+// intended for ordinary UI windows; GPU swapchain hosts may leave it disabled.
+pub fn paint(window: *u8, ui: *std.ui.Window) -> bool {
+  if window as usize == 0 || ui as usize == 0 { return false; }
+  let context = get_dc(window);
+  if context as usize == 0 { return false; }
+  let client = std.win.window.Rect();
+  if std.win.window.client_rect(window, &client) != 0 {
+    let background = create_brush(2104345);
+    if background as usize != 0 {
+      fill_rect(context, &client, background);
+      delete_object(background);
+    }
+  }
+  let painter = GdiPainter(context);
+  ui.paint(&painter);
+  release_dc(window, context);
+  return true;
+}
+
+// Reads a displayed client-area pixel. Returns 0xffffffff if unavailable.
+pub fn pixel(window: *u8, x: i32, y: i32) -> u32 {
+  if window as usize == 0 { return 4294967295; }
+  let context = get_dc(window);
+  if context as usize == 0 { return 4294967295; }
+  let color = get_pixel(context, x, y);
+  release_dc(window, context);
+  return color;
+}

@@ -1,0 +1,14 @@
+@cfg(os="windows", arch="x86_64") module std.win.event;
+
+@extern("CreateEventW", "kernel32")
+@callconv(CallingConvention.System)
+pub fn create(attributes: *u8, manual_reset: i32,
+              initially_signaled: i32, name: *u16) -> *u8;
+
+@extern("SetEvent", "kernel32")
+@callconv(CallingConvention.System)
+pub fn signal(handle: *u8) -> i32;
+
+@extern("ResetEvent", "kernel32")
+@callconv(CallingConvention.System)
+pub fn reset(handle: *u8) -> i32;

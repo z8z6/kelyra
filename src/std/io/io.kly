@@ -3,7 +3,7 @@ module std.io;
 @cfg(os="linux", arch="x86_64")
 import std.io.linux;
 @cfg(os="windows", arch="x86_64")
-import std.io.windows;
+import std.win.io;
 
 // A single OS read/write. Success returns bytes transferred; failure returns
 // a negative native error code. A short transfer is possible.
@@ -14,7 +14,7 @@ pub fn read_stdin(output: *u8, capacity: usize) -> i64 {
 
 @cfg(os="windows", arch="x86_64")
 pub fn read_stdin(output: *u8, capacity: usize) -> i64 {
-  return std.io.windows.read_stdin(output, capacity);
+  return std.win.io.read_stdin(output, capacity);
 }
 
 @cfg(os="linux", arch="x86_64")
@@ -24,7 +24,7 @@ pub fn write_stdout(data: *u8, count: usize) -> i64 {
 
 @cfg(os="windows", arch="x86_64")
 pub fn write_stdout(data: *u8, count: usize) -> i64 {
-  return std.io.windows.write_stdout(data, count);
+  return std.win.io.write_stdout(data, count);
 }
 
 @cfg(os="linux", arch="x86_64")
@@ -34,7 +34,7 @@ pub fn write_stderr(data: *u8, count: usize) -> i64 {
 
 @cfg(os="windows", arch="x86_64")
 pub fn write_stderr(data: *u8, count: usize) -> i64 {
-  return std.io.windows.write_stderr(data, count);
+  return std.win.io.write_stderr(data, count);
 }
 
 fn text_length(text: *c.char) -> usize {

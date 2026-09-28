@@ -32,6 +32,11 @@ pub fn main() -> i32 {
     return 10;
   }
   std.alloc.release(buffer);
-  std.io.println(std.os.environment("KSTD_OS_TEST"));
+  let environment: [128]u8;
+  let size = std.os.environment("KSTD_OS_TEST", &environment[0], 128);
+  if size < 1 || size > 128 {
+    return 11;
+  }
+  std.io.println((&environment[0]) as *c.char);
   return 0;
 }
