@@ -1,34 +1,63 @@
-name: Deploy language introduction
+name: Build and deploy language documentation
 
 on:
   push:
     branches: [main]
     paths:
-      - 'compiler/doc/**'
+      - 'doc/**'
+      - 'kide/syntaxes/kelyra.tmLanguage.json'
+      - 'compiler/tests/cli/**'
+      - 'kstd/examples/**'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    paths:
+      - 'doc/**'
+      - 'kide/syntaxes/kelyra.tmLanguage.json'
+      - 'compiler/tests/cli/**'
+      - 'kstd/examples/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: doc/package-lock.json
+      - run: npm ci --prefix doc
+      - run: npm run build --prefix doc
+        env:
+          DOCS_BASE: /kelyra/
+      - name: Check exported Markdown
+        run: test -s doc/.vitepress/dist/markdown/guide/getting-started.md
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: doc/.vitepress/dist
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v6
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: compiler/doc
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

@@ -6,7 +6,12 @@
 /kide/build/
 /kide/node_modules/
 /kide/.npm-cache/
+/doc/node_modules/
+/doc/.npm-cache/
+/doc/.vitepress/dist/
+/doc/.vitepress/cache/
 *.vsix
 .idea/
 .vscode/
 idea-build/
+doc/.npm-cache

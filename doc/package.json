@@ -1,0 +1,13 @@
+{
+  "name": "kelyra-doc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev .",
+    "build": "vitepress build . && node scripts/sync-markdown.mjs",
+    "preview": "vitepress preview ."
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

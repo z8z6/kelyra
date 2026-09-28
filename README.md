@@ -10,6 +10,7 @@ a source submodule under `kelyra-llvm/`.
 | `kstd/` | Standard library and platform graphics examples |
 | `kelp/` | Package manager |
 | `kide/` | Editor extensions and language grammar |
+| `doc/` | Kelyra language website and exportable documentation |
 | `kelyra-llvm/` | Pinned [Kelyra LLVM fork](https://github.com/z8z6/kelyra-llvm) |
 
 Clone with submodules, configure from the repository root, then build the
@@ -31,3 +32,9 @@ find the MSVC and Windows SDK libraries. Generated files belong in `build/`,
 
 Shader architecture and current HLSL compatibility limits are documented in
 [`compiler/doc/shader-ir.md`](compiler/doc/shader-ir.md).
+
+The public language site lives in `doc/`. Run `npm ci --prefix doc` and
+`npm run dev --prefix doc` to preview it locally; `npm run build --prefix doc`
+creates the static site and downloadable Markdown pages in
+`doc/.vitepress/dist/`. The GitHub Pages workflow builds it with the
+`/kelyra/` base path. Article PDF export uses the browser's print-to-PDF flow.
