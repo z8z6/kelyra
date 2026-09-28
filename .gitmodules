@@ -1,5 +1,5 @@
-[submodule "toolchain/llvm-project"]
-	path = toolchain/llvm-project
+[submodule "kelyra-llvm"]
+	path = kelyra-llvm
 	url = git@github.com:z8z6/kelyra-llvm.git
 	branch = kelyra-dxil
 	shallow = true

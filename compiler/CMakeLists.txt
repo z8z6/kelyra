@@ -9,7 +9,7 @@ set(KELYRA_STDLIB_SOURCE_DIR "${PROJECT_SOURCE_DIR}/../kstd/src" CACHE PATH
 
 if(NOT DEFINED KELYRA_LLVM_SOURCE_DIR)
   get_filename_component(KELYRA_LLVM_SOURCE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../toolchain/llvm-project" ABSOLUTE)
+    "${CMAKE_CURRENT_SOURCE_DIR}/../kelyra-llvm" ABSOLUTE)
 endif()
 if(NOT DEFINED KELYRA_LLVM_BINARY_DIR)
   set(KELYRA_LLVM_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/llvm")
@@ -22,7 +22,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 添加 llvm 和 mlir 依赖
 if(NOT EXISTS "${KELYRA_LLVM_SOURCE_DIR}/llvm/CMakeLists.txt")
-  message(FATAL_ERROR "Kelyra LLVM fork is missing. Initialize toolchain/llvm-project.")
+  message(FATAL_ERROR "Kelyra LLVM fork is missing. Initialize kelyra-llvm.")
 endif()
 
 set(LLVM_ENABLE_PROJECTS "mlir;clang" CACHE STRING "LLVM projects to build")

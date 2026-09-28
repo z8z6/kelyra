@@ -22,7 +22,7 @@ interface metadata:
   The validator does not compile HLSL source.
 
 The pinned Kelyra LLVM fork includes the graphics signature fixes needed by
-this backend. Its source is checked out under `toolchain/llvm-project/` and
+this backend. Its source is checked out under `kelyra-llvm/` and
 built with the compiler. On Windows, the DXIL validator requires
 `dxcompiler.dll` or `dxil.dll` available to the compiler at runtime.
 

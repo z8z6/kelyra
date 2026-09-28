@@ -2,7 +2,7 @@
 
 This repository contains the Kelyra compiler, standard library, Kelp package
 manager, and Kide editor tooling. The project-maintained LLVM fork is pinned as
-a source submodule under `toolchain/llvm-project/`.
+a source submodule under `kelyra-llvm/`.
 
 | Directory | Purpose |
 | --- | --- |
@@ -10,7 +10,7 @@ a source submodule under `toolchain/llvm-project/`.
 | `kstd/` | Standard library and platform graphics examples |
 | `kelp/` | Package manager |
 | `kide/` | Editor extensions and language grammar |
-| `toolchain/llvm-project/` | Pinned [Kelyra LLVM fork](https://github.com/z8z6/kelyra-llvm) |
+| `kelyra-llvm/` | Pinned [Kelyra LLVM fork](https://github.com/z8z6/kelyra-llvm) |
 
 Clone with submodules, configure from the repository root, then build the
 compiler and package manager:

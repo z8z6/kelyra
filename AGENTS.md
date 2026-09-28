@@ -2,7 +2,7 @@
 
 - `compiler/`, `kstd/`, `kelp/`, and `kide/` belong to this repository.
   Commit their changes from the monorepo root.
-- `toolchain/llvm-project/` is a submodule of the Kelyra LLVM fork. Commit LLVM
+- `kelyra-llvm/` is a submodule of the Kelyra LLVM fork. Commit LLVM
   changes in that fork, then update the submodule pointer in this repository.
 - Format C++ using the LLVM style and name class member variables in
   PascalCase.
