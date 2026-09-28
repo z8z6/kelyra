@@ -37,8 +37,6 @@ jobs:
           cache-dependency-path: doc/package-lock.json
       - run: npm ci --prefix doc
       - run: npm run build --prefix doc
-        env:
-          DOCS_BASE: /kelyra/
       - name: Check exported Markdown
         run: test -s doc/.vitepress/dist/markdown/guide/getting-started.md
       - if: github.event_name != 'pull_request'

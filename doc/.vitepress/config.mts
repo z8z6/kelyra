@@ -16,7 +16,7 @@ export default defineConfig({
   cleanUrls: true,
   markdown: { languages: [kelyraGrammar], codeCopyButtonTitle: '复制代码' },
   head: [
-    ['meta', { name: 'theme-color', content: '#f6f8f5' }],
+    ['meta', { name: 'theme-color', content: '#ffffff' }],
     ['link', { rel: 'icon', href: `${base}favicon.svg`, type: 'image/svg+xml' }]
   ],
   themeConfig: {

@@ -36,5 +36,6 @@ Shader architecture and current HLSL compatibility limits are documented in
 The public language site lives in `doc/`. Run `npm ci --prefix doc` and
 `npm run dev --prefix doc` to preview it locally; `npm run build --prefix doc`
 creates the static site and downloadable Markdown pages in
-`doc/.vitepress/dist/`. The GitHub Pages workflow builds it with the
-`/kelyra/` base path. Article PDF export uses the browser's print-to-PDF flow.
+`doc/.vitepress/dist/`. The GitHub Pages workflow builds it at the root of
+the `kelyra.io` custom domain. Article PDF export uses the browser's
+print-to-PDF flow.
