@@ -324,7 +324,10 @@ assert.ok(
   formatterCandidates(
     { uri: { scheme: "file", fsPath: "/workspace/project/src/main.kly" } },
     "kelyra-format",
-  ).includes(path.join("/workspace/project", "kelyra/build/bin/kelyra-format")),
+  ).includes(path.join(
+    "/workspace/project", "kelyra/build/bin",
+    process.platform === "win32" ? "kelyra-format.exe" : "kelyra-format",
+  )),
 );
 assert.ok(manifest.contributes.commands.some(({ command }) => command === "kelp.members"));
 assert.ok(manifest.contributes.commands.some(({ command }) => command === "kelp.output"));
