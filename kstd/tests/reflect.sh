@@ -2,8 +2,8 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-kelp=${KELP:-$root/../kelp/build/kelp}
-compiler=${KELYRA:-$root/../kelyra/build/bin/kelyra}
+kelp=${KELP:-$root/../build/bin/kelp}
+compiler=${KELYRA:-$root/../build/bin/kelyra}
 temporary=$(mktemp -d)
 trap 'rm -f "$temporary/option" "$temporary/result" "$temporary/reflect"; rmdir "$temporary"' EXIT HUP INT TERM
 

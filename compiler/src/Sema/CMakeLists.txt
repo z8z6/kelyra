@@ -20,7 +20,7 @@ configure_file(BuiltinCTypes.h.in
   "${PROJECT_BINARY_DIR}/generated/BuiltinCTypes.h" @ONLY)
 target_include_directories(kelyra_sema PRIVATE "${PROJECT_BINARY_DIR}/generated")
 target_include_directories(kelyra_sema SYSTEM PRIVATE
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm/include"
-  "${PROJECT_BINARY_DIR}/llvm/include")
+  "${KELYRA_LLVM_SOURCE_DIR}/llvm/include"
+  "${KELYRA_LLVM_BINARY_DIR}/include")
 target_include_directories(kelyra_sema PUBLIC "${PROJECT_SOURCE_DIR}/include")
 target_link_libraries(kelyra_sema PUBLIC kelyra_frontend PRIVATE LLVMSupport)

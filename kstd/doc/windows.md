@@ -51,7 +51,7 @@ pwsh -NoProfile -File kstd/examples/d3d12_triangle.ps1
 ```
 
 Pass `-BuildOnly` to compile without opening a window. The script uses
-`kelyra/build/bin/kelyra.exe`, the project's bundled Clang, and Kelyra sources
+`build/bin/kelyra.exe`, the project's bundled Clang, and Kelyra sources
 from `kstd/src`. It compiles `examples/triangle_shaders.kly` to DXIL with DXC,
 then writes the executable and bytecode under the ignored `kstd/build/`
 directory. The application imports only `std.graphics.window` for window and

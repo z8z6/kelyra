@@ -1,17 +1,17 @@
 add_library(kelyra_codegen Class.cpp Debug.cpp Expression.cpp IRGen.cpp
   Option.cpp RuntimeReflection.cpp Statement.cpp)
 get_directory_property(KELYRA_LLVM_NATIVE_ARCH
-  DIRECTORY "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm"
+  DIRECTORY "${KELYRA_LLVM_SOURCE_DIR}/llvm"
   DEFINITION LLVM_NATIVE_ARCH
 )
 target_include_directories(kelyra_codegen PUBLIC "${PROJECT_SOURCE_DIR}/include")
 target_compile_definitions(kelyra_codegen PRIVATE
   KELYRA_RUNTIME_DIR="${PROJECT_SOURCE_DIR}/runtime")
 target_include_directories(kelyra_codegen SYSTEM PUBLIC
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm/include"
-  "${PROJECT_BINARY_DIR}/llvm/include"
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/mlir/include"
-  "${PROJECT_BINARY_DIR}/llvm/tools/mlir/include"
+  "${KELYRA_LLVM_SOURCE_DIR}/llvm/include"
+  "${KELYRA_LLVM_BINARY_DIR}/include"
+  "${KELYRA_LLVM_SOURCE_DIR}/mlir/include"
+  "${KELYRA_LLVM_BINARY_DIR}/tools/mlir/include"
 )
 target_link_libraries(kelyra_codegen PUBLIC
   LLVM${KELYRA_LLVM_NATIVE_ARCH}AsmParser

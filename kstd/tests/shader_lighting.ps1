@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Workspace = (Resolve-Path (Join-Path $Root '..')).Path
-$Compiler = Join-Path $Workspace 'kelyra/build/bin/kelyra.exe'
+$Compiler = Join-Path $Workspace 'build/bin/kelyra.exe'
 $Source = Join-Path $Root 'examples/shader_lighting_example.kly'
 $OutputDirectory = Join-Path $Root 'build/shader_lighting'
 

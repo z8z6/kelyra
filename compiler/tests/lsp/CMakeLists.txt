@@ -8,5 +8,5 @@ add_test(
 if(WIN32)
   set_tests_properties(kelyra.lsp PROPERTIES
     ENVIRONMENT_MODIFICATION
-      "PATH=path_list_prepend:${PROJECT_BINARY_DIR}/llvm/bin")
+      "PATH=path_list_prepend:${KELYRA_LLVM_BINARY_DIR}/bin")
 endif()

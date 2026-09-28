@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/z8z6/kide.git"
+    "url": "https://github.com/z8z6/kelyra.git"
   },
   "engines": {
     "vscode": "^1.91.0"

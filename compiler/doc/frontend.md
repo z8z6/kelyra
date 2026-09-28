@@ -12,14 +12,14 @@ Kelyra 源文件默认使用 `.kly` 后缀。
 
 ```sh
 cmake -S . -B build -DCMAKE_CXX_STANDARD=20
-cmake --build build --target kelyra_frontend_tests kelyra_sema_tests kelyra_codegen_tests --parallel 4
+cmake --build build --parallel 4
 ctest --test-dir build --output-on-failure
-./build/bin/kelyra --check examples/basic.kly
-./build/bin/kelyra --dump-ast examples/basic.kly
-./build/bin/kelyra --dump-class-layout tests/cli/inheritance.kly
-./build/bin/kelyra --emit-mlir tests/cli/add.kly
-./build/bin/kelyra --emit-obj -o add.o tests/cli/add.kly
-./build/bin/kelyra --emit-exe -o main tests/cli/main.kly
+./build/bin/kelyra --check compiler/examples/basic.kly
+./build/bin/kelyra --dump-ast compiler/examples/basic.kly
+./build/bin/kelyra --dump-class-layout compiler/tests/cli/inheritance.kly
+./build/bin/kelyra --emit-mlir compiler/tests/cli/add.kly
+./build/bin/kelyra --emit-obj -o add.o compiler/tests/cli/add.kly
+./build/bin/kelyra --emit-exe -o main compiler/tests/cli/main.kly
 ```
 
 构建时会读取标准库的 `std/annotation/annotation.kly`、`std/meta/meta.kly`

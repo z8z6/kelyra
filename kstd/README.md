@@ -108,7 +108,7 @@ code, platform code, and C compatibility is documented in
 native system ABI plan is documented in
 [`doc/platform-allocator.md`](doc/platform-allocator.md).
 
-From the repository root:
+From the `kstd/` directory:
 
 ```sh
 . ./env.sh
@@ -122,7 +122,7 @@ instead of recompiling the standard modules. The library uses `safe-level = 0`
 so that its object has no host `abort`/`puts` dependencies in freestanding
 programs.
 
-`env.sh` aliases the sibling Kelp and Kelyra build paths for the current shell.
+`env.sh` aliases the monorepo Kelp and Kelyra build paths for the current shell.
 
 A consumer depends on the library and links its object. With Kelp, point a
 dependency at this repository and let Kelp pass `--external-path` and

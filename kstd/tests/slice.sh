@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-compiler=${KELYRA:-$root/../kelyra/build/bin/kelyra}
+compiler=${KELYRA:-$root/../build/bin/kelyra}
 output=${TMPDIR:-/tmp}/kstd-slice-$$
 trap 'rm -f "$output"' EXIT HUP INT TERM
 

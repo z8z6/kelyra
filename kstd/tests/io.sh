@@ -2,8 +2,8 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-kelp=${KELP:-$root/../kelp/build/kelp}
-compiler=${KELYRA:-$root/../kelyra/build/bin/kelyra}
+kelp=${KELP:-$root/../build/bin/kelp}
+compiler=${KELYRA:-$root/../build/bin/kelyra}
 output=$root/build/kstd-io
 stdout=${TMPDIR:-/tmp}/kstd-io-$$.stdout
 stderr=${TMPDIR:-/tmp}/kstd-io-$$.stderr

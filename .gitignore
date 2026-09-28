@@ -1,5 +1,12 @@
-build/
+/build/
+/compiler/build/
+/kstd/build/
+/kstd/.kelp/
+/kelp/build/
+/kide/build/
+/kide/node_modules/
+/kide/.npm-cache/
+*.vsix
 .idea/
 .vscode/
 idea-build/
-third_party/

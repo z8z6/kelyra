@@ -1,8 +1,19 @@
 cmake_minimum_required(VERSION 3.20)
 project(Kelyra LANGUAGES C CXX)
 
+get_filename_component(KELYRA_WORKSPACE_ROOT
+  "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+
 set(KELYRA_STDLIB_SOURCE_DIR "${PROJECT_SOURCE_DIR}/../kstd/src" CACHE PATH
   "Kelyra standard library source directory")
+
+if(NOT DEFINED KELYRA_LLVM_SOURCE_DIR)
+  get_filename_component(KELYRA_LLVM_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../toolchain/llvm-project" ABSOLUTE)
+endif()
+if(NOT DEFINED KELYRA_LLVM_BINARY_DIR)
+  set(KELYRA_LLVM_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/llvm")
+endif()
 
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,8 +21,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 添加 llvm 和 mlir 依赖
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/llvm-project/llvm/CMakeLists.txt")
-  message(FATAL_ERROR "LLVM submodule is missing. Run: git submodule update --init --recursive")
+if(NOT EXISTS "${KELYRA_LLVM_SOURCE_DIR}/llvm/CMakeLists.txt")
+  message(FATAL_ERROR "Kelyra LLVM fork is missing. Initialize toolchain/llvm-project.")
 endif()
 
 set(LLVM_ENABLE_PROJECTS "mlir;clang" CACHE STRING "LLVM projects to build")
@@ -24,7 +35,10 @@ set(LLVM_INCLUDE_BENCHMARKS OFF CACHE BOOL "Build LLVM benchmarks")
 set(MLIR_INCLUDE_TESTS OFF CACHE BOOL "Build MLIR tests")
 
 # Only build the LLVM/MLIR dependencies needed by Kelyra by default.
-add_subdirectory(third_party/llvm-project/llvm llvm EXCLUDE_FROM_ALL)
+if(NOT TARGET LLVMCore)
+  add_subdirectory("${KELYRA_LLVM_SOURCE_DIR}/llvm"
+    "${KELYRA_LLVM_BINARY_DIR}" EXCLUDE_FROM_ALL)
+endif()
 
 add_subdirectory(src/IR)
 
@@ -73,11 +87,14 @@ target_link_libraries(kelyra PRIVATE
   LLVMDirectXInfo
   LLVMDirectXIRPasses
 )
+if(TARGET clang)
+  add_dependencies(kelyra clang)
+endif()
 if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(kelyra PRIVATE -fno-rtti)
 endif()
 set_target_properties(kelyra PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
 add_subdirectory(tools/format)

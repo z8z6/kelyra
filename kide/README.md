@@ -141,7 +141,7 @@ vsce package --out "build/kelyra-$(node -p 'require("./package.json").version').
 ```
 
 Build `kelyra-ls` and `kelyra-format` and install the generated VSIX. The
-extension discovers `kelyra/build/bin/kelyra-ls` in a workspace ancestor; set
+extension discovers `build/bin/kelyra-ls` in a workspace ancestor; set
 `kelyra.languageServer.path` if it is installed elsewhere. Set
 `kelyra.formatter.path` if the formatter is not on `PATH` or in a workspace
 build directory.

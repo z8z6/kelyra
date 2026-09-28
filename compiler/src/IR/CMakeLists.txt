@@ -1,13 +1,13 @@
 list(APPEND CMAKE_MODULE_PATH
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm/cmake/modules"
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/mlir/cmake/modules"
+  "${KELYRA_LLVM_SOURCE_DIR}/llvm/cmake/modules"
+  "${KELYRA_LLVM_SOURCE_DIR}/mlir/cmake/modules"
 )
 include(AddMLIR)
 
 set(LLVM_TARGET_DEFINITIONS Kelyra.td)
 set(KELYRA_TABLEGEN_INCLUDES
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/mlir/include"
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm/include"
+  "${KELYRA_LLVM_SOURCE_DIR}/mlir/include"
+  "${KELYRA_LLVM_SOURCE_DIR}/llvm/include"
 )
 mlir_tablegen(KelyraDialect.h.inc -gen-dialect-decls -dialect=kelyra
   EXTRA_INCLUDES ${KELYRA_TABLEGEN_INCLUDES})
@@ -37,10 +37,10 @@ target_include_directories(kelyra_ir PUBLIC
   "${CMAKE_CURRENT_BINARY_DIR}"
 )
 target_include_directories(kelyra_ir SYSTEM PUBLIC
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm/include"
-  "${PROJECT_BINARY_DIR}/llvm/include"
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/mlir/include"
-  "${PROJECT_BINARY_DIR}/llvm/tools/mlir/include"
+  "${KELYRA_LLVM_SOURCE_DIR}/llvm/include"
+  "${KELYRA_LLVM_BINARY_DIR}/include"
+  "${KELYRA_LLVM_SOURCE_DIR}/mlir/include"
+  "${KELYRA_LLVM_BINARY_DIR}/tools/mlir/include"
 )
 target_link_libraries(kelyra_ir PUBLIC
   MLIRIR

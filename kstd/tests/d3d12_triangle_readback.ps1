@@ -1,8 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Workspace = (Resolve-Path (Join-Path $Root '..')).Path
-$Compiler = Join-Path $Workspace 'kelyra/build/bin/kelyra.exe'
-$ClangDirectory = Join-Path $Workspace 'kelyra/build/llvm/bin'
+$Compiler = Join-Path $Workspace 'build/bin/kelyra.exe'
+$ClangDirectory = Join-Path $Workspace 'build/llvm/bin'
 $ShaderSource = Join-Path $Root 'examples/triangle_shaders.kly'
 $TestSource = Join-Path $PSScriptRoot 'd3d12_triangle_readback.kly'
 $OutputDirectory = Join-Path $Root 'build'

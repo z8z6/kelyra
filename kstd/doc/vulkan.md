@@ -17,7 +17,7 @@ This module exposes host operations only. Compiling Kelyra vertex and fragment
 functions to SPIR-V is supported through `kelyra --emit-spirv --shader-entry`.
 Shader interface annotations (`@vertex_index`, `@position`, and `@location`)
 are declared in `std.graphics`; their stage and type rules and planned HLSL
-mapping are documented in `kelyra/doc/shader.md`.
+mapping are documented in `compiler/doc/shader.md`.
 On Windows, `std.graphics.window.run_backend(Backend.Vulkan, ...)` creates a
 Kelyra `std.ui.win.Window`, then uses the small native Vulkan adapter in
 `native/vulkan_window.cpp` for the surface, swapchain, and draw commands. The

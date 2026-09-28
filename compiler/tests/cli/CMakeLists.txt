@@ -1,7 +1,7 @@
 add_executable(kelyra_cli_tests cli_test.cpp)
 target_include_directories(kelyra_cli_tests SYSTEM PRIVATE
-  "${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm/include"
-  "${PROJECT_BINARY_DIR}/llvm/include"
+  "${KELYRA_LLVM_SOURCE_DIR}/llvm/include"
+  "${KELYRA_LLVM_BINARY_DIR}/include"
 )
 target_link_libraries(kelyra_cli_tests PRIVATE
   LLVMSupport
@@ -16,7 +16,7 @@ add_dependencies(kelyra_cli_tests kelyra)
 if(WIN32)
   gtest_discover_tests(kelyra_cli_tests PROPERTIES
     ENVIRONMENT_MODIFICATION
-      "PATH=path_list_prepend:${PROJECT_BINARY_DIR}/llvm/bin")
+      "PATH=path_list_prepend:${KELYRA_LLVM_BINARY_DIR}/bin")
 else()
   gtest_discover_tests(kelyra_cli_tests)
 endif()

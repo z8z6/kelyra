@@ -73,4 +73,4 @@ library checks the magic and version before reading a descriptor. Rebuild a
 library after an incompatible compiler ABI change.
 
 The separation between compile-time metadata and runtime reflection is
-recorded in [the reflection architecture](../../kelyra/doc/reflection-architecture.md).
+recorded in [the reflection architecture](../../compiler/doc/reflection-architecture.md).

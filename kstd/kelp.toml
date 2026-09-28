@@ -4,7 +4,7 @@ version = "0.1.0"
 entry = "src/kstd.kly"
 
 [build]
-compiler = "../kelyra/build/bin/kelyra"
+compiler = "../build/bin/kelyra"
 kind = "library"
 optimization = 0
 safe-level = 0

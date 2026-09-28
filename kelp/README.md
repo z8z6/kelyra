@@ -7,7 +7,7 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ctest --test-dir build --output-on-failure
 
-./build/kelp new hello
+./build/bin/kelp new hello
 cd hello
 kelp build
 kelp run
@@ -41,8 +41,7 @@ output = "hello-0.1.0.tar.gz"
 sources = []
 
 [dependencies.kstd]
-repository = "git@github.com:z8z6/kstd.git"
-revision = "main"
+path = "../kstd"
 ```
 
 Supported commands are `new`, `init`, `members`, `check`, `build`, `output`,

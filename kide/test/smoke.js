@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert");
+const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const Module = require("node:module");
@@ -164,6 +165,16 @@ fs.writeFileSync(
   '#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.argv[3], "fn main() {\\n  return;\\n}\\n");\n',
 );
 fs.chmodSync(formatterPath, 0o755);
+if (process.platform === "win32") {
+  const originalExecFile = childProcess.execFile;
+  childProcess.execFile = (file, args, options, callback) =>
+    originalExecFile(
+      file === formatterPath ? process.execPath : file,
+      file === formatterPath ? [formatterPath, ...args] : args,
+      options,
+      callback,
+    );
+}
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
   if (request === "vscode") {

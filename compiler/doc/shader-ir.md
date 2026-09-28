@@ -21,10 +21,10 @@ interface metadata:
   container, then uses the DXIL validator to validate and sign that container.
   The validator does not compile HLSL source.
 
-The pinned LLVM revision needs the graphics signature fixes in
-`patches/llvm-directx-graphics.patch` before building this backend. See
-`patches/README.md` for the apply command. On Windows, the DXIL validator
-requires `dxcompiler.dll` or `dxil.dll` available to the compiler at runtime.
+The pinned Kelyra LLVM fork includes the graphics signature fixes needed by
+this backend. Its source is checked out under `toolchain/llvm-project/` and
+built with the compiler. On Windows, the DXIL validator requires
+`dxcompiler.dll` or `dxil.dll` available to the compiler at runtime.
 
 Kelyra clip space uses positive Y upward; the Vulkan vertex wrapper flips Y
 to match the Direct3D12 image orientation.

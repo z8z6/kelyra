@@ -6,8 +6,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(kelp src/main.cpp)
+set_target_properties(kelp PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 if(MSVC)
-  target_compile_options(kelp PRIVATE /W4)
+  target_compile_options(kelp PRIVATE /W4 /EHsc)
 else()
   target_compile_options(kelp PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -16,6 +18,12 @@ install(TARGETS kelp RUNTIME DESTINATION bin)
 
 include(CTest)
 if(BUILD_TESTING)
-  add_test(NAME kelp.basic
-    COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/tests/basic.sh" $<TARGET_FILE:kelp>)
+  if(WIN32)
+    add_test(NAME kelp.basic
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/basic.ps1" $<TARGET_FILE:kelp>)
+  else()
+    add_test(NAME kelp.basic
+      COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/tests/basic.sh" $<TARGET_FILE:kelp>)
+  endif()
 endif()

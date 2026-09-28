@@ -2,13 +2,15 @@
 
 const assert = require("node:assert/strict");
 const Module = require("node:module");
+const path = require("node:path");
 const { promisify } = require("node:util");
 const manifest = require("../package.json");
-const folder = { uri: { fsPath: "/workspace/project" } };
+const projectRoot = path.resolve("/workspace/project");
+const folder = { uri: { fsPath: projectRoot } };
 let listener, disposed = 0, exitCode = 0, taskError = false, adapter = true;
 let saved = true, started = true, gdbError = false;
 const tasks = [], launches = [], commands = [], processes = [];
-const document = { languageId: "kelyra", uri: { scheme: "file", fsPath: "/workspace/project/src/main.kly" } };
+const document = { languageId: "kelyra", uri: { scheme: "file", fsPath: path.join(projectRoot, "src/main.kly") } };
 const vscode = {
   workspace: {
     isTrusted: true,
@@ -41,14 +43,14 @@ const execFile = () => { throw new Error("unexpected callback process"); };
 execFile[promisify.custom] = async (executable, args, options) => {
   processes.push({ executable, args, options });
   if (args[0] === "--version" && gdbError) throw new Error("not found");
-  return { stdout: args[0] === "output" ? "/workspace/project/custom build/app\n" : "GNU gdb", stderr: "" };
+  return { stdout: args[0] === "output" ? path.join(projectRoot, "custom build/app") + "\n" : "GNU gdb", stderr: "" };
 };
 const load = Module._load;
 Module._load = function (request, parent, main) {
   if (request === "vscode") return vscode;
   if (request === "node:child_process") return { execFile };
   if (request === "node:fs/promises") return { access: async (file) => {
-    if (file !== "/workspace/project/kelp.toml") throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    if (file !== path.join(projectRoot, "kelp.toml")) throw Object.assign(new Error("missing"), { code: "ENOENT" });
   } };
   return load(request, parent, main);
 };
@@ -74,7 +76,7 @@ async function test() {
   assert.equal(config.type, "cppdbg");
   assert.equal(config.MIMode, "gdb");
   assert.equal(config.miDebuggerPath, undefined); // cppdbg searches PATH for GDB.
-  assert.equal(config.program, "/workspace/project/custom build/app");
+  assert.equal(config.program, path.join(projectRoot, "custom build/app"));
   assert.deepEqual(config.args, ["two words"]);
   assert.equal(config.stopAtEntry, true);
   assert.equal(config.sourceFileMap, undefined); // Kelp compiles in place.

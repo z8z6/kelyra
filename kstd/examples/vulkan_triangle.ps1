@@ -3,8 +3,8 @@ param([switch]$BuildOnly)
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Workspace = (Resolve-Path (Join-Path $Root '..')).Path
-$Compiler = Join-Path $Workspace 'kelyra/build/bin/kelyra.exe'
-$ClangDirectory = Join-Path $Workspace 'kelyra/build/llvm/bin'
+$Compiler = Join-Path $Workspace 'build/bin/kelyra.exe'
+$ClangDirectory = Join-Path $Workspace 'build/llvm/bin'
 $OutputDirectory = Join-Path $Root 'build'
 $ShaderSource = Join-Path $PSScriptRoot 'triangle_shaders.kly'
 $Source = Join-Path $PSScriptRoot 'vulkan_triangle_example.kly'

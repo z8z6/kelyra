@@ -16,8 +16,12 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 #include <variant>
 #include <vector>
 
@@ -671,6 +675,21 @@ SelectTargets(const std::vector<ProjectNode> &Nodes,
 int Execute(const fs::path &Root, const std::vector<std::string> &Arguments) {
   if (Arguments.empty())
     throw std::runtime_error("empty command");
+#ifdef _WIN32
+  std::vector<const char *> Argv;
+  for (const auto &Argument : Arguments)
+    Argv.push_back(Argument.c_str());
+  Argv.push_back(nullptr);
+  const fs::path PreviousDirectory = fs::current_path();
+  fs::current_path(Root);
+  const intptr_t Status = _spawnvp(_P_WAIT, Argv.front(), Argv.data());
+  const int SpawnError = errno;
+  fs::current_path(PreviousDirectory);
+  if (Status < 0)
+    throw std::runtime_error("cannot execute " + Arguments.front() + ": " +
+                             std::strerror(SpawnError));
+  return static_cast<int>(Status);
+#else
   const pid_t Child = fork();
   if (Child < 0)
     throw std::runtime_error("cannot create process");
@@ -697,6 +716,7 @@ int Execute(const fs::path &Root, const std::vector<std::string> &Arguments) {
   if (WIFEXITED(Status))
     return WEXITSTATUS(Status);
   return 128 + WTERMSIG(Status);
+#endif
 }
 
 struct ResolvedDependency {
@@ -1081,8 +1101,7 @@ void CreateProject(const fs::path &Root, std::string Name) {
           "[test]\n"
           "sources = []\n\n"
           "# [dependencies.kstd]\n"
-          "# repository = \"git@github.com:z8z6/kstd.git\"\n"
-          "# revision = \"main\"\n";
+          "# path = \"../kstd\"\n";
   std::ofstream Main(Root / "src/main.kly");
   if (!Main)
     throw std::runtime_error("cannot create src/main.kly");

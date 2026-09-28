@@ -316,7 +316,8 @@ async function test() {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(stops.length, 0);
   vscode.workspace.textDocuments.push({ languageId: "kelyra" });
-  const builtServer = path.join(projectRoot, "kelyra/build/bin/kelyra-ls");
+  const builtServer = path.join(projectRoot, "build/bin",
+    process.platform === "win32" ? "kelyra-ls.exe" : "kelyra-ls");
   fs.mkdirSync(path.dirname(builtServer), { recursive: true });
   fs.writeFileSync(builtServer, "");
   configurationListener({ affectsConfiguration: (section) => section === "kelyra.languageServer.path" });
