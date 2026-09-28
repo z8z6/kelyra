@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <set>
+#include <unordered_set>
 #include <gtest/gtest.h>
 
 using namespace kelyra;
@@ -33,6 +35,134 @@ fn use() -> i32 { let callback: fn(i32) -> i32 = choose(); return callback(4) + 
     ASSERT_TRUE(Invalid.ok());
     EXPECT_FALSE(Analysis.Check(*Invalid.root));
   }
+}
+
+TEST(Sema, OverloadedFunctionsAndFunctionValues) {
+  auto Parsed = lex::Lexer().parse(R"(
+fn select(value: i32) -> i32 { return value; }
+fn select(value: f32) -> f32 { return value; }
+fn use_integer(value: i32) -> i32 { return select(value); }
+fn use_float(value: f32) -> f32 { return select(value); }
+fn callback() -> fn(i32) -> i32 { return select; }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.Check(*Parsed.root));
+  for (const auto Source : {
+           "fn f(value: i32) {} fn f(value: i32) {}",
+           "fn f(value: i32) -> i32 { return value; } "
+           "fn f(value: i32) -> f32 { return 0.0; }",
+           "fn f(value: i32) {} fn f(value: i64) {} fn use() { f(1); }",
+           "fn f(value: i32) {} fn f(value: f32) {} "
+           "fn use() { let value = f; }",
+           "@extern(\"same\") fn f(value: i32); "
+           "@extern(\"same\") fn f(value: f32);",
+       }) {
+    SCOPED_TRACE(Source);
+    auto Invalid = lex::Lexer().parse(Source);
+    ASSERT_TRUE(Invalid.ok());
+    EXPECT_FALSE(Analysis.Check(*Invalid.root));
+  }
+}
+
+TEST(Sema, OverloadedMethodsAndInterfaceMethods) {
+  auto Parsed = lex::Lexer().parse(R"(
+@interface class Reader {
+  pub fn read(value: i32) -> i32;
+  pub fn read(value: f32) -> f32;
+}
+
+class Base: Reader {
+  @virtual pub fn read(value: i32) -> i32 { return value; }
+  pub fn read(value: f32) -> f32 { return value; }
+}
+class Child: Base {
+  @override pub fn read(value: i32) -> i32 { return value + 1; }
+}
+fn use(reader: *Reader, child: *Child, number: i32, fraction: f32) -> i32 {
+  let a = reader.read(number);
+  let b = reader.read(fraction);
+  return child.read(a);
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.Check(*Parsed.root));
+}
+
+TEST(Sema, OverloadedFunctionsAcrossImports) {
+  auto Alpha = lex::Lexer().parse(
+      "module alpha; pub fn choose(value: i32) -> i32 { return value; }");
+  auto Beta = lex::Lexer().parse(
+      "module beta; pub fn choose(value: f32) -> f32 { return value; }");
+  auto App = lex::Lexer().parse(R"(
+module app;
+import alpha;
+import beta;
+fn use(integer: i32, floating: f32) -> i32 {
+  let a = choose(integer);
+  let b = choose(floating);
+  return a;
+}
+fn callback() -> fn(i32) -> i32 { return choose; }
+)");
+  ASSERT_TRUE(Alpha.ok());
+  ASSERT_TRUE(Beta.ok());
+  ASSERT_TRUE(App.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.CheckModules({{App.root.get(), true},
+                                     {Alpha.root.get(), false},
+                                     {Beta.root.get(), false}}));
+}
+
+TEST(Sema, AmbiguousOverloadListsCandidateSignatures) {
+  auto Parsed = lex::Lexer().parse(R"(
+fn choose(value: i32) {}
+fn choose(value: i64) {}
+fn use() { choose(1); }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_FALSE(Analysis.Check(*Parsed.root));
+  const auto &Diagnostics = Analysis.GetDiagnostics();
+  const auto It = std::find_if(Diagnostics.begin(), Diagnostics.end(),
+                               [](const auto &Diagnostic) {
+                                 return Diagnostic.Kind ==
+                                        lex::DiagnosticKind::AmbiguousOverload;
+                               });
+  ASSERT_NE(It, Diagnostics.end());
+  EXPECT_NE(It->Detail.find("choose(i32)"), std::string::npos);
+  EXPECT_NE(It->Detail.find("choose(i64)"), std::string::npos);
+}
+
+TEST(Sema, OverloadSymbolsDoNotDependOnDeclarationOrder) {
+  auto Single = lex::Lexer().parse(
+      "fn select(value: i32) -> i32 { return value; }");
+  auto First = lex::Lexer().parse(R"(
+fn select(value: i32) -> i32 { return value; }
+fn select(value: f32) -> f32 { return value; }
+)");
+  auto Reversed = lex::Lexer().parse(R"(
+fn select(value: f32) -> f32 { return value; }
+fn select(value: i32) -> i32 { return value; }
+)");
+  ASSERT_TRUE(Single.ok());
+  ASSERT_TRUE(First.ok());
+  ASSERT_TRUE(Reversed.ok());
+  sema::Sema Before;
+  sema::Sema Left;
+  sema::Sema Right;
+  ASSERT_TRUE(Before.Check(*Single.root));
+  ASSERT_TRUE(Left.Check(*First.root));
+  ASSERT_TRUE(Right.Check(*Reversed.root));
+  EXPECT_EQ(Left.GetSymbol(*First.root->children[0]),
+            Right.GetSymbol(*Reversed.root->children[1]));
+  EXPECT_EQ(Left.GetSymbol(*First.root->children[1]),
+            Right.GetSymbol(*Reversed.root->children[0]));
+  EXPECT_NE(Left.GetSymbol(*First.root->children[0]),
+            Left.GetSymbol(*First.root->children[1]));
+  EXPECT_EQ(Before.GetSymbol(*Single.root->children[0]),
+            Left.GetSymbol(*First.root->children[0]));
 }
 
 TEST(Sema, FunctionValuesRespectImports) {
@@ -263,6 +393,48 @@ class Pair {
     ASSERT_TRUE(Invalid.ok()) << Source;
     EXPECT_FALSE(Analysis.Check(*Invalid.root)) << Source;
   }
+}
+
+TEST(Sema, CLayoutFunctionPointerField) {
+  struct CCallbacks {
+    char tag;
+    int (*callback)(void *, int);
+  };
+  auto Parsed = lex::Lexer().parse(R"(
+@layout(Layout.C)
+class Callbacks {
+  pub tag: c.char;
+  pub callback: fn(*u8, i32) -> i32;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  const auto *Class = Analysis.GetClass("Callbacks");
+  ASSERT_NE(Class, nullptr);
+  EXPECT_EQ(Class->Fields[1].Offset, offsetof(CCallbacks, callback));
+  EXPECT_EQ(Class->Size, sizeof(CCallbacks));
+  EXPECT_EQ(Class->Alignment, alignof(CCallbacks));
+}
+
+TEST(Sema, ExternLinkLibrary) {
+  auto Parsed = lex::Lexer().parse(R"(
+@extern("CreateWindowExW", "user32")
+@callconv(CallingConvention.System)
+fn create_window() -> *u8;
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  const std::unordered_set<std::string> Modules{""};
+  EXPECT_EQ(Analysis.GetLinkLibraries(Modules),
+            std::set<std::string>{"user32"});
+  auto Invalid = lex::Lexer().parse(R"(
+@extern("CreateWindowExW", "user32", "extra")
+fn create_window() -> *u8;
+)");
+  ASSERT_TRUE(Invalid.ok());
+  EXPECT_FALSE(Analysis.Check(*Invalid.root));
 }
 
 TEST(Sema, EnumAnnotationsAndMatchValidation) {
@@ -643,7 +815,7 @@ fn main() -> i32 { return answer(); }
                                       {Second.root.get(), false}}));
   ASSERT_FALSE(Analysis.GetDiagnostics().empty());
   EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
-            lex::DiagnosticKind::AmbiguousName);
+            lex::DiagnosticKind::AmbiguousOverload);
 }
 
 TEST(Sema, PlainImportExposesPublicTypesAndFunctions) {

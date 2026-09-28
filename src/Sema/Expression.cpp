@@ -860,6 +860,7 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
   }
 
   auto Function = Functions.find(Key);
+  std::vector<std::string> ImportedOverloads;
   if (Function == Functions.end() && Name && !ValueRoot &&
       Name->find('.') != std::string::npos && !LookupModule.empty()) {
     Key = LookupModule + "." + *Name;
@@ -898,11 +899,14 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
           if (Candidate == Functions.end() || !Candidate->second.Public ||
               !Candidate->second.OwnerClass.empty())
             continue;
-          if (Function != Functions.end()) {
-            Error(Expression, lex::DiagnosticKind::AmbiguousName);
-            return std::nullopt;
-          }
-          Function = Candidate;
+          if (Function == Functions.end())
+            Function = Candidate;
+          if (const auto Group =
+                  FunctionGroups.find(Candidate->second.QualifiedName);
+              Group != FunctionGroups.end())
+            for (const auto &CandidateKey : Group->second)
+              if (Functions.at(CandidateKey).Public)
+                ImportedOverloads.push_back(CandidateKey);
         }
     }
     if (!CurrentClass.empty()) {
@@ -940,7 +944,162 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
     Error(Expression, lex::DiagnosticKind::UnknownName);
     return std::nullopt;
   }
+  std::vector<std::string> OverloadKeys;
+  if (InterfaceReceiver) {
+    for (const auto &Method : InterfaceReceiver->InterfaceMethods)
+      if (Functions.at(Method).Node->text == Callee.text)
+        OverloadKeys.push_back(Method);
+  } else if (!ImportedOverloads.empty()) {
+    OverloadKeys = ImportedOverloads;
+  } else if (const auto Group =
+                 FunctionGroups.find(Function->second.QualifiedName);
+             Group != FunctionGroups.end()) {
+    OverloadKeys = Group->second;
+  }
+  const auto OverloadDetails = [&](const std::vector<std::string> &Keys) {
+    std::string Details = "candidate signatures:";
+    for (const auto &CandidateKey : Keys)
+      Details += "\n  " + FormatFunctionSignature(Functions.at(CandidateKey));
+    return Details;
+  };
+  if (OverloadKeys.size() > 1) {
+    struct Candidate {
+      std::string Key;
+      std::vector<unsigned> Ranks;
+    };
+    std::vector<Candidate> Candidates;
+    const auto ArgumentCount = Expression.children.size() - 1;
+    const auto ParameterOffset = MethodCall ? 1u : 0u;
+    std::vector<std::optional<Type>> ArgumentTypes(ArgumentCount);
+    for (std::size_t I = 0; I < ArgumentCount; ++I) {
+      const auto &Argument = *Expression.children[I + 1];
+      if (Argument.kind != K::ast_literal)
+        ArgumentTypes[I] = CheckExpression(Argument);
+    }
+    if (!Diagnostics.empty())
+      return std::nullopt;
+    const auto RankArgument = [&](const lex::Node &Argument,
+                                  const std::optional<Type> &Actual,
+                                  const Type &Parameter) -> std::optional<unsigned> {
+      if (Argument.kind == K::ast_literal) {
+        if (Argument.text == "true" || Argument.text == "false")
+          return Parameter.Element == BuiltinType::Bool &&
+                         !Parameter.IsPointer()
+                     ? std::optional<unsigned>(0)
+                     : std::nullopt;
+        if (!Argument.text.empty() && Argument.text.front() == '"')
+          return Parameter.IsPointer() &&
+                         Parameter.Element == BuiltinType::CChar
+                     ? std::optional<unsigned>(1)
+                     : std::nullopt;
+        const bool Floating =
+            Argument.text.find_first_of(".eE") != std::string::npos;
+        if (Floating)
+          return IsFloat(Parameter.Element) && !Parameter.IsPointer() &&
+                         !Parameter.IsArray() && !Parameter.IsSlice()
+                     ? std::optional<unsigned>(1)
+                     : std::nullopt;
+        return (IsInteger(Parameter.Element) ||
+                Parameter.Element == BuiltinType::Char) &&
+                       !Parameter.IsPointer() && !Parameter.IsArray() &&
+                       !Parameter.IsSlice() &&
+                       detail::FitsInteger(Argument.text, Parameter, false)
+                   ? std::optional<unsigned>(1)
+                   : std::nullopt;
+      }
+      if (!Actual)
+        return std::nullopt;
+      if (*Actual == Parameter)
+        return 0;
+      if (Parameter.IsReadOnlySlice() && Actual->IsSlice() &&
+          Parameter.Indexed() == Actual->Indexed())
+        return 1;
+      if (IsCInteropCompatible(Parameter, *Actual))
+        return 1;
+      if (Parameter.IsPointer() && Actual->IsPointer() &&
+          Parameter.PointerDepth == 1 && Actual->PointerDepth == 1 &&
+          Parameter.Element == BuiltinType::Class &&
+          Actual->Element == BuiltinType::Class) {
+        for (const auto *Owner = GetClass(Actual->ClassName); Owner;
+             Owner = Owner->BaseName.empty() ? nullptr
+                                               : GetClass(Owner->BaseName)) {
+          if (Owner->QualifiedName == Parameter.ClassName)
+            return 1;
+          if (std::find(Owner->Interfaces.begin(), Owner->Interfaces.end(),
+                        Parameter.ClassName) != Owner->Interfaces.end())
+            return 1;
+        }
+      }
+      return std::nullopt;
+    };
+    for (const auto &CandidateKey : OverloadKeys) {
+      const auto &CandidateInfo = Functions.at(CandidateKey);
+      if (CandidateInfo.Parameters.size() !=
+          ArgumentCount + ParameterOffset)
+        continue;
+      Candidate CandidateValue{CandidateKey, {}};
+      bool Viable = true;
+      for (std::size_t I = 0; I < ArgumentCount; ++I) {
+        auto Rank = RankArgument(*Expression.children[I + 1],
+                                 ArgumentTypes[I],
+                                 CandidateInfo.Parameters[I + ParameterOffset]);
+        if (!Rank) {
+          Viable = false;
+          break;
+        }
+        CandidateValue.Ranks.push_back(*Rank);
+      }
+      if (Viable)
+        Candidates.push_back(std::move(CandidateValue));
+    }
+    if (Candidates.empty()) {
+      Error(Expression, lex::DiagnosticKind::TypeMismatch,
+            OverloadDetails(OverloadKeys));
+      return std::nullopt;
+    }
+    const auto Dominates = [](const Candidate &Left, const Candidate &Right) {
+      bool Better = false;
+      for (std::size_t I = 0; I < Left.Ranks.size(); ++I) {
+        if (Left.Ranks[I] > Right.Ranks[I])
+          return false;
+        Better |= Left.Ranks[I] < Right.Ranks[I];
+      }
+      return Better;
+    };
+    const Candidate *Best = nullptr;
+    for (const auto &CandidateValue : Candidates) {
+      bool Wins = true;
+      for (const auto &Other : Candidates)
+        if (&CandidateValue != &Other &&
+            !Dominates(CandidateValue, Other)) {
+          Wins = false;
+          break;
+        }
+      if (Wins) {
+        Best = &CandidateValue;
+        break;
+      }
+    }
+    if (!Best) {
+      Error(Expression, lex::DiagnosticKind::AmbiguousOverload,
+            OverloadDetails(OverloadKeys));
+      return std::nullopt;
+    }
+    Function = Functions.find(Best->Key);
+  }
   const auto &Info = Function->second;
+  if (InterfaceReceiver) {
+    const auto Method = std::find_if(
+        InterfaceReceiver->InterfaceMethods.begin(),
+        InterfaceReceiver->InterfaceMethods.end(), [&](const auto &Key) {
+          return Functions.at(Key).Signature == Info.Signature;
+        });
+    if (Method == InterfaceReceiver->InterfaceMethods.end()) {
+      Error(Expression, lex::DiagnosticKind::UnknownName);
+      return std::nullopt;
+    }
+    InterfaceMethodIndex = Method - InterfaceReceiver->InterfaceMethods.begin();
+  }
   if ((MetaModules.contains(Info.Module) ||
        (Info.Node && MetaDeclarations.contains(Info.Node)) ||
        (!Info.OwnerClass.empty() &&
@@ -1101,7 +1260,7 @@ sema::Sema::CheckCallExpression(const lex::Node &Expression,
         Callee.children.front()->text == "super")) {
     for (auto OwnerName = Info.OwnerClass; !OwnerName.empty();) {
       const auto *Owner = GetClass(OwnerName);
-      if (const auto Slot = Owner->VirtualSlots.find(Callee.text);
+      if (const auto Slot = Owner->VirtualSlots.find(Info.Signature);
           Slot != Owner->VirtualSlots.end()) {
         VirtualCalls[&Expression] = {OwnerName, Slot->second};
         break;

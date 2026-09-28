@@ -18,10 +18,12 @@ bool driver::ValidateOptions() {
     kerr() << "--runtime=freestanding requires --emit-exe or --emit-obj\n";
     return false;
   }
-  if (Option::EmitSpirv &&
+  if ((Option::EmitSpirv || Option::EmitDxil || Option::EmitShaderIr) &&
       (Option::EmitMlir || Option::EmitObject || Option::EmitExecutable ||
+       (int(Option::EmitSpirv) + int(Option::EmitDxil) +
+            int(Option::EmitShaderIr) != 1) ||
        Option::ShaderEntry.empty())) {
-    kerr() << "--emit-spirv requires --shader-entry and cannot be combined "
+    kerr() << "shader output requires --shader-entry and cannot be combined "
               "with other emit modes\n";
     return false;
   }
@@ -49,7 +51,7 @@ int driver::Run() {
     return 1;
   if (Option::DumpClassLayout)
     DumpClassLayouts(Analysis);
-  if (Option::EmitSpirv)
+  if (Option::EmitSpirv || Option::EmitDxil || Option::EmitShaderIr)
     return EmitShader(*Loader, Analysis);
   if (!Option::EmitMlir && !Option::EmitObject && !Option::EmitExecutable)
     return 0;

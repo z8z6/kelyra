@@ -1,0 +1,25 @@
+fn mark(counter: *i32, result: bool) -> bool {
+  *counter = *counter + 1;
+  return result;
+}
+
+@main
+pub fn main() -> i32 {
+  let calls: i32 = 0;
+  if false && mark(&calls, true) { return 1; }
+  if calls != 0 { return 2; }
+  if true || mark(&calls, false) { }
+  else { return 3; }
+  if calls != 0 { return 4; }
+  if !true && mark(&calls, true) { return 5; }
+  if calls != 0 { return 6; }
+  if !false || mark(&calls, false) { }
+  else { return 7; }
+  if calls != 0 { return 8; }
+  if !mark(&calls, true) { return 9; }
+  if mark(&calls, false) { return 10; }
+  if calls != 2 { return 11; }
+  let missing = 0 as *i32;
+  if missing as usize != 0 && *missing == 1 { return 12; }
+  return 0;
+}

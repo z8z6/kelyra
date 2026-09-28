@@ -59,6 +59,7 @@ constexpr std::array DiagnosticInfos = {
     DiagnosticInfo{"K0004", "expression is not supported by IR generation"},
     DiagnosticInfo{"K0004", "unknown name"},
     DiagnosticInfo{"K0004", "ambiguous name from imported modules"},
+    DiagnosticInfo{"K0004", "ambiguous function overload"},
     DiagnosticInfo{"K0004", "integer literal does not fit its type"},
     DiagnosticInfo{"K0004", "function must return a value"},
     DiagnosticInfo{"K0004", "type mismatch"},
@@ -111,6 +112,9 @@ const DiagnosticInfo &kelyra::lex::GetDiagnosticInfo(DiagnosticKind Kind) {
 std::ostream &kelyra::lex::operator<<(std::ostream &OS,
                                       const Diagnostic &Diagnostic) {
   const auto &Info = GetDiagnosticInfo(Diagnostic.Kind);
-  return OS << Diagnostic.Loc.File << ':' << Diagnostic.Loc.Line << ':'
-            << Diagnostic.Loc.Column << ": error: " << Info.Msg;
+  OS << Diagnostic.Loc.File << ':' << Diagnostic.Loc.Line << ':'
+     << Diagnostic.Loc.Column << ": error: " << Info.Msg;
+  if (!Diagnostic.Detail.empty())
+    OS << '\n' << Diagnostic.Detail;
+  return OS;
 }

@@ -3,11 +3,13 @@ import pathlib
 import shutil
 import subprocess
 import sys
-import tempfile
+import uuid
 
 # A workspace whose modules reach outside the opened folder: a local path
 # dependency next to the workspace and a cached dependency clone under .kelp.
-fixture = pathlib.Path(tempfile.mkdtemp(prefix="kelyra-lsp-"))
+fixture = (pathlib.Path(__file__).resolve().parents[2] / "build/tests/lsp" /
+           f"kelyra-lsp-{uuid.uuid4().hex}")
+fixture.mkdir()
 workspace = fixture / "ws"
 demo = fixture / "libs/demo"
 cached = workspace / ".kelp/dependencies/cached"
@@ -341,12 +343,13 @@ std_uri = (workspace / "app/src/std_use.kly").as_uri()
 send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
     "textDocument": {"uri": std_uri, "languageId": "kelyra", "version": 1,
                      "text": std_source}}})
-annotation_uri = (pathlib.Path(__file__).resolve().parents[3] /
-                  "kstd/src/std/annotation/annotation.kly").as_uri()
+annotation_path = (pathlib.Path(__file__).resolve().parents[3] /
+                   "kstd/src/std/annotation/annotation.kly")
+annotation_uri = annotation_path.as_uri()
 send({"jsonrpc": "2.0", "id": 31, "method": "textDocument/documentSymbol", "params": {
     "textDocument": {"uri": annotation_uri}}})
 assert "cfg" in {symbol["name"] for symbol in receive(31)}
-annotation_source = pathlib.Path(annotation_uri.removeprefix("file://")).read_text()
+annotation_source = annotation_path.read_text()
 send({"jsonrpc": "2.0", "id": 32, "method": "textDocument/hover", "params": {
     "textDocument": {"uri": annotation_uri},
     "position": position_in(annotation_source, "cfg(", 1)}})

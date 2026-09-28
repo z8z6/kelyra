@@ -31,7 +31,9 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IRReader/IRReader.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Linker/Linker.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -42,6 +44,7 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
@@ -803,12 +806,63 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
     return llvm::createStringError("failed to create target machine");
   LLVMModule->setDataLayout(TargetMachine->createDataLayout());
   LLVMModule->setTargetTriple(Triple);
+  if (Triple.isOSWindows() &&
+      (!CWrapperSource.empty() || !CSources.empty())) {
+    auto Clang = llvm::sys::findProgramByName("clang");
+    if (!Clang)
+      return llvm::createStringError(Clang.getError(), "cannot find Clang");
+    llvm::SmallString<128> WrapperSource;
+    std::unique_ptr<llvm::FileRemover> RemoveWrapperSource;
+    std::error_code ErrorCode;
+    if (!CWrapperSource.empty()) {
+      if (auto Code = llvm::sys::fs::createTemporaryFile("kelyra-wrapper", "c",
+                                                         WrapperSource))
+        return llvm::createStringError(Code, "cannot create C wrapper");
+      RemoveWrapperSource =
+          std::make_unique<llvm::FileRemover>(WrapperSource);
+      llvm::raw_fd_ostream Source(WrapperSource, ErrorCode);
+      if (ErrorCode)
+        return llvm::createStringError(ErrorCode, "cannot write C wrapper");
+      Source << CWrapperSource;
+      Source.close();
+    }
+    std::vector<std::string> Sources(CSources.begin(), CSources.end());
+    if (!CWrapperSource.empty())
+      Sources.push_back(WrapperSource.str().str());
+    const std::string TargetArgument = "--target=" + Triple.str();
+    for (const auto &CSource : Sources) {
+      llvm::SmallString<128> BitcodePath;
+      if (auto Code = llvm::sys::fs::createTemporaryFile("kelyra-c", "bc",
+                                                         BitcodePath))
+        return llvm::createStringError(Code, "cannot create C bitcode");
+      llvm::FileRemover RemoveBitcode(BitcodePath);
+      llvm::SmallVector<llvm::StringRef> Compile{
+          *Clang, "-emit-llvm", "-c", CSource, TargetArgument};
+      for (const auto &Argument : CArguments)
+        Compile.push_back(Argument);
+      Compile.append({"-o", BitcodePath});
+      std::string Message;
+      if (llvm::sys::ExecuteAndWait(*Clang, Compile, std::nullopt, {}, 0, 0,
+                                    &Message) != 0)
+        return llvm::createStringError("Clang failed to compile %s: %s",
+                                       CSource.c_str(), Message.c_str());
+      llvm::SMDiagnostic Diagnostic;
+      auto CModule = llvm::parseIRFile(BitcodePath, Diagnostic, Context);
+      if (!CModule)
+        return llvm::createStringError("cannot read C bitcode from %s",
+                                       CSource.c_str());
+      if (llvm::Linker::linkModules(*LLVMModule, std::move(CModule)))
+        return llvm::createStringError("cannot merge C bitcode from %s",
+                                       CSource.c_str());
+    }
+  }
   const auto OptimizationLevel = GetOptimizationLevel(OptLevel);
   Optimize(*LLVMModule, *TargetMachine, OptimizationLevel);
 
   llvm::SmallString<128> NativeObject;
   llvm::StringRef NativeOutput = OutputPath;
-  if (!CWrapperSource.empty() || !CSources.empty()) {
+  if (!Triple.isOSWindows() &&
+      (!CWrapperSource.empty() || !CSources.empty())) {
     if (auto ErrorCode = llvm::sys::fs::createTemporaryFile("kelyra-native",
                                                             "o", NativeObject))
       return llvm::createStringError(ErrorCode,
@@ -833,7 +887,7 @@ llvm::Error codegen::EmitObject(mlir::ModuleOp Module,
     return llvm::createStringError(Output.os().error(),
                                    "cannot write output file");
   Output.keep();
-  if (CWrapperSource.empty() && CSources.empty())
+  if (Triple.isOSWindows() || (CWrapperSource.empty() && CSources.empty()))
     return llvm::Error::success();
 
   auto Clang = llvm::sys::findProgramByName("clang");
@@ -903,7 +957,8 @@ llvm::Error codegen::EmitExecutable(
     mlir::ModuleOp Module, llvm::StringRef OutputPath,
     llvm::CodeGenOptLevel OptLevel, llvm::ArrayRef<std::string> CSources,
     llvm::ArrayRef<std::string> CArguments, llvm::StringRef CWrapperSource,
-    RuntimeMode Runtime, llvm::StringRef TargetTriple) {
+    RuntimeMode Runtime, llvm::StringRef TargetTriple,
+    llvm::ArrayRef<std::string> Libraries) {
   const llvm::Triple Triple(TargetTriple.empty()
                                 ? llvm::sys::getDefaultTargetTriple()
                                 : TargetTriple.str());
@@ -927,8 +982,9 @@ llvm::Error codegen::EmitExecutable(
     return Error;
 
   auto Linker = llvm::sys::findProgramByName(
-      Runtime == RuntimeMode::Freestanding || !CSources.empty() ? "clang"
-                                                                : "cc");
+      Windows || Runtime == RuntimeMode::Freestanding || !CSources.empty()
+          ? "clang"
+          : "cc");
   if (!Linker)
     return llvm::createStringError(Linker.getError(), "cannot find C compiler");
   const std::string TargetArgument =
@@ -972,12 +1028,22 @@ llvm::Error codegen::EmitExecutable(
     if (Linux)
       Arguments.append({"-static", "-Wl,-e,_start"});
     else if (Triple.isWindowsMSVCEnvironment())
-      Arguments.append({"-Wl,/entry:mainCRTStartup", "kernel32.lib"});
+      Arguments.append({"-Wl,/entry:mainCRTStartup", "-lkernel32"});
     else
       Arguments.append({"-Wl,-e,mainCRTStartup", "-lkernel32"});
   }
   for (const auto &Source : CSources)
     Arguments.push_back(Source);
+  std::vector<std::string> LibraryArguments;
+  for (const auto &Library : Libraries) {
+    const auto Name = llvm::StringRef(Library);
+    if (Name.ends_with(".lib") || Name.ends_with(".dll"))
+      LibraryArguments.push_back("-l" + Name.drop_back(4).str());
+    else
+      LibraryArguments.push_back("-l" + Library);
+  }
+  for (const auto &Library : LibraryArguments)
+    Arguments.push_back(Library);
   for (const auto &Argument : CArguments)
     Arguments.push_back(Argument);
   Arguments.append({"-o", TemporaryOutput});

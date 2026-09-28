@@ -84,6 +84,12 @@ public:
   inline static llvm::cl::opt<bool> EmitSpirv{
       "emit-spirv", llvm::cl::desc("Compile a shader entry to Vulkan SPIR-V"),
       llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<bool> EmitDxil{
+      "emit-dxil", llvm::cl::desc("Compile a shader entry to Direct3D 12 DXIL"),
+      llvm::cl::cat(KelyraCategory)};
+  inline static llvm::cl::opt<bool> EmitShaderIr{
+      "emit-shader-ir", llvm::cl::desc("Print backend-neutral Shader MLIR"),
+      llvm::cl::cat(KelyraCategory)};
   inline static llvm::cl::opt<std::string> ShaderEntry{
       "shader-entry", llvm::cl::desc("Kelyra shader entry function name"),
       llvm::cl::cat(KelyraCategory)};

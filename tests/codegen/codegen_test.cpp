@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 #include <string>
+#include <string_view>
 
 using namespace kelyra;
 
@@ -55,7 +56,8 @@ fn use() { let (value, ok) = factory()(); done(); }
   std::string Output;
   llvm::raw_string_ostream OS(Output);
   Module->print(OS);
-  const auto Pair = Output.find("func.func private @pair");
+  const auto Pair = Output.find(
+      "func.func private @" + Analysis.GetSymbol(*Parsed.root->children[2]));
   ASSERT_NE(Pair, std::string::npos);
   const auto Construction = Output.find("llvm.insertvalue", Pair);
   const auto Cleanup = Output.find(
@@ -82,11 +84,41 @@ TEST(IRGen, IntegerFunction) {
   std::string Output;
   llvm::raw_string_ostream OS(Output);
   Module->print(OS);
-  EXPECT_NE(Output.find("func.func private @calculate"), std::string::npos);
+  EXPECT_NE(Output.find("func.func private @" +
+                        Analysis.GetSymbol(*Parsed.root->children[0])),
+            std::string::npos);
   EXPECT_NE(Output.find("arith.constant 2"), std::string::npos);
   EXPECT_NE(Output.find("arith.muli"), std::string::npos);
   EXPECT_NE(Output.find("arith.addi"), std::string::npos);
   EXPECT_EQ(Output.find("kelyra."), std::string::npos);
+}
+
+TEST(IRGen, OverloadedFunctionsHaveDistinctSymbols) {
+  auto Parsed = lex::Lexer().parse(R"(
+fn choose(value: i32) -> i32 { return value; }
+fn choose(value: f32) -> f32 { return value; }
+fn integer(value: i32) -> i32 { return choose(value); }
+fn floating(value: f32) -> f32 { return choose(value); }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  ASSERT_TRUE(Analysis.Check(*Parsed.root));
+  mlir::MLIRContext Context;
+  codegen::IRGen Generator(Context, Analysis);
+  auto Module = Generator.Generate(*Parsed.root);
+  ASSERT_TRUE(mlir::succeeded(mlir::verify(*Module)));
+  std::string Output;
+  llvm::raw_string_ostream OS(Output);
+  Module->print(OS);
+  const auto &IntegerSymbol = Analysis.GetSymbol(*Parsed.root->children[0]);
+  const auto &FloatSymbol = Analysis.GetSymbol(*Parsed.root->children[1]);
+  EXPECT_NE(IntegerSymbol, FloatSymbol);
+  EXPECT_NE(Output.find("func.func private @" + IntegerSymbol),
+            std::string::npos);
+  EXPECT_NE(Output.find("func.func private @" + FloatSymbol),
+            std::string::npos);
+  EXPECT_NE(Output.find("call @" + IntegerSymbol), std::string::npos);
+  EXPECT_NE(Output.find("call @" + FloatSymbol), std::string::npos);
 }
 
 TEST(IRGen, UserAnnotationMetadataDoesNotChangeLowering) {
@@ -109,7 +141,9 @@ fn handler() -> i32 { return 0; }
   std::string Output;
   llvm::raw_string_ostream OS(Output);
   Module->print(OS);
-  EXPECT_NE(Output.find("func.func private @handler"), std::string::npos);
+  EXPECT_NE(Output.find("func.func private @" +
+                        Analysis.GetSymbol(*Parsed.root->children.back())),
+            std::string::npos);
 }
 
 TEST(IRGen, WhenEmitsOnlySelectedBranch) {
@@ -183,18 +217,26 @@ fn id_char(x: char) -> char { return x; }
   std::string Output;
   llvm::raw_string_ostream OS(Output);
   Module->print(OS);
-  EXPECT_NE(Output.find("@id_i8(%arg0: i8) -> i8"), std::string::npos);
-  EXPECT_NE(Output.find("@id_i128(%arg0: i128) -> i128"), std::string::npos);
-  EXPECT_NE(Output.find("@id_isize(%arg0: i64) -> i64"), std::string::npos);
-  EXPECT_NE(Output.find("@id_u128(%arg0: i128) -> i128"), std::string::npos);
-  EXPECT_NE(Output.find("@id_usize(%arg0: i64) -> i64"), std::string::npos);
-  EXPECT_NE(Output.find("@id_f128(%arg0: f128) -> f128"), std::string::npos);
-  EXPECT_NE(Output.find("@id_f256(%arg0: !kelyra.f256) -> !kelyra.f256"),
-            std::string::npos);
-  EXPECT_NE(Output.find("@id_f512(%arg0: !kelyra.f512) -> !kelyra.f512"),
-            std::string::npos);
-  EXPECT_NE(Output.find("@id_bool(%arg0: i1) -> i1"), std::string::npos);
-  EXPECT_NE(Output.find("@id_char(%arg0: i32) -> i32"), std::string::npos);
+  const auto HasSignature = [&](std::string_view Name,
+                                std::string_view Signature) {
+    for (const auto &Declaration : Parsed.root->children)
+      if (Declaration->text == Name)
+        return Output.find("@" + Analysis.GetSymbol(*Declaration) +
+                           std::string(Signature)) != std::string::npos;
+    return false;
+  };
+  EXPECT_TRUE(HasSignature("id_i8", "(%arg0: i8) -> i8"));
+  EXPECT_TRUE(HasSignature("id_i128", "(%arg0: i128) -> i128"));
+  EXPECT_TRUE(HasSignature("id_isize", "(%arg0: i64) -> i64"));
+  EXPECT_TRUE(HasSignature("id_u128", "(%arg0: i128) -> i128"));
+  EXPECT_TRUE(HasSignature("id_usize", "(%arg0: i64) -> i64"));
+  EXPECT_TRUE(HasSignature("id_f128", "(%arg0: f128) -> f128"));
+  EXPECT_TRUE(HasSignature("id_f256",
+                           "(%arg0: !kelyra.f256) -> !kelyra.f256"));
+  EXPECT_TRUE(HasSignature("id_f512",
+                           "(%arg0: !kelyra.f512) -> !kelyra.f512"));
+  EXPECT_TRUE(HasSignature("id_bool", "(%arg0: i1) -> i1"));
+  EXPECT_TRUE(HasSignature("id_char", "(%arg0: i32) -> i32"));
 }
 
 TEST(IRGen, TypedArithmeticAndLiterals) {

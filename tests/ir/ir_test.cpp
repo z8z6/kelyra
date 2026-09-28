@@ -56,3 +56,43 @@ TEST(KelyraIR, RejectInvalidAdd) {
     ASSERT_TRUE(diagnostics > before) << "invalid add emits diagnostic";
   }
 }
+
+TEST(KelyraIR, ShaderDefinitionsRoundTrip) {
+  mlir::MLIRContext context;
+  context.loadDialect<kelyra::ir::KelyraDialect>();
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(R"(
+    module {
+      "kelyra.shader.record"() {
+        sym_name = "VertexOut",
+        fields = ["position"],
+        field_types = [f32],
+        decorations = [{}]
+      } : () -> ()
+      "kelyra.shader.func"() ({
+        %value = "kelyra.shader.literal"() {text = "1.0"} : () -> f32
+        %result = "kelyra.shader.intrinsic"(%value) {name = "sin"} : (f32) -> f32
+        "kelyra.shader.return"(%result) : (f32) -> ()
+      }) {
+        sym_name = "main",
+        function_type = () -> f32,
+        parameter_names = [],
+        input_decorations = [],
+        stage = "fragment"
+      } : () -> ()
+    }
+  )", &context);
+  ASSERT_TRUE(bool(module) && mlir::succeeded(mlir::verify(*module)));
+  unsigned functions = 0;
+  unsigned intrinsics = 0;
+  module->walk([&](kelyra::ir::ShaderFunctionOp) { ++functions; });
+  module->walk([&](kelyra::ir::ShaderIntrinsicOp intrinsic) {
+    ++intrinsics;
+    EXPECT_EQ(intrinsic.getName(), "sin");
+  });
+  EXPECT_EQ(functions, 1);
+  EXPECT_EQ(intrinsics, 1);
+  std::string printed;
+  llvm::raw_string_ostream stream(printed);
+  module->print(stream);
+  EXPECT_TRUE(bool(mlir::parseSourceString<mlir::ModuleOp>(printed, &context)));
+}

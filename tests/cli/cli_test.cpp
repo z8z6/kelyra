@@ -27,13 +27,15 @@ void run(llvm::ArrayRef<llvm::StringRef> arguments, int expectedCode,
   const int code = llvm::sys::ExecuteAndWait(
       KELYRA_EXECUTABLE, args, std::nullopt,
       {llvm::StringRef(""), outPath.str(), errPath.str()}, 10, 0, &error);
-  ASSERT_EQ(code, expectedCode) << error;
   auto output = llvm::MemoryBuffer::getFile(outPath);
   auto errors = llvm::MemoryBuffer::getFile(errPath);
   ASSERT_TRUE(bool(output));
   ASSERT_TRUE(bool(errors));
   const auto out = (*output)->getBuffer();
   const auto err = (*errors)->getBuffer();
+  ASSERT_EQ(code, expectedCode)
+      << error << "\nstdout:\n" << out.str() << "\nstderr:\n"
+      << err.str();
   if (expectedOut.empty())
     EXPECT_TRUE(out.empty()) << out.str();
   else
@@ -47,6 +49,22 @@ void run(llvm::ArrayRef<llvm::StringRef> arguments, int expectedCode,
 
 TEST(CLI, CheckValidSource) {
   run({"--check", KELYRA_SOURCE_DIR "/examples/basic.kly"}, 0, "", "");
+}
+
+TEST(CLI, BooleanOperatorsShortCircuit) {
+  llvm::SmallString<128> ExecutablePath;
+  ASSERT_FALSE(llvm::sys::fs::createTemporaryFile(
+      "kelyra-short-circuit", "exe", ExecutablePath));
+  llvm::FileRemover RemoveExecutable(ExecutablePath);
+  run({"--emit-exe", "-o", ExecutablePath,
+       KELYRA_TEST_DIR "/short_circuit.kly"},
+      0, "", "");
+  llvm::SmallVector<llvm::StringRef> Args{ExecutablePath};
+  std::string Error;
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(ExecutablePath, Args, std::nullopt, {},
+                                      10, 0, &Error),
+            0)
+      << Error;
 }
 
 TEST(CLI, ImportStandardLibraryWithoutModulePath) {
@@ -258,6 +276,11 @@ TEST(CLI, GenericMultipleAndNestedTypes) {
 TEST(CLI, RejectGenericArgumentCountMismatch) {
   run({"--emit-obj", KELYRA_TEST_DIR "/generic_invalid_arity.kly"}, 1, "",
       "wrong number of generic type arguments");
+}
+
+TEST(CLI, RejectGenericFunctionTemplateOverload) {
+  run({"--check", KELYRA_TEST_DIR "/generic_overload_reject.kly"}, 1, "",
+      "duplicate generic declaration");
 }
 
 TEST(CLI, GenericFromLinkedModule) {
@@ -663,7 +686,7 @@ TEST(CLI, DumpClassLayout) {
   run({"--dump-class-layout", KELYRA_TEST_DIR "/inheritance.kly"}, 0,
       "+0 size=16 align=8 index=0 $base: Base", "");
   run({"--dump-class-layout", KELYRA_TEST_DIR "/inheritance.kly"}, 0,
-      "+8 size=8 align=8 index=2 $virtual.read: fn", "");
+      "+8 size=8 align=8 index=2 $virtual.read#0_: fn", "");
 }
 
 TEST(CLI, GenericAliases) {
@@ -1144,7 +1167,13 @@ TEST(CLI, RejectExternalModuleWithoutLinkInput) {
   run({"--emit-exe", "--module-path=" KELYRA_TEST_DIR "/external/library",
        "--external-path=" KELYRA_TEST_DIR "/external/library", "-o",
        executablePath, KELYRA_TEST_DIR "/external/main.kly"},
-      1, "", "linker failed");
+      1,
+#ifdef _WIN32
+      "LNK2019",
+#else
+      "",
+#endif
+      "linker failed");
 }
 
 TEST(CLI, CallCFunction) {

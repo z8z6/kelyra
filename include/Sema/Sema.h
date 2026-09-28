@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -185,7 +186,11 @@ class Sema {
   struct FunctionInfo {
     const lex::Node *Node = nullptr;
     std::string Module;
+    std::string QualifiedName;
+    std::string Signature;
+    std::string BaseSymbol;
     std::string Symbol;
+    std::string Library;
     std::vector<Type> Parameters;
     Type Return{BuiltinType::Void, {}};
     bool Public = false;
@@ -194,6 +199,8 @@ class Sema {
     bool Virtual = false;
     bool Override = false;
     bool Static = false;
+    bool Extern = false;
+    bool SpecialAbi = false;
     std::string OwnerClass;
     const ExternalFunction *External = nullptr;
   };
@@ -213,6 +220,8 @@ class Sema {
   ReflectionDatabase Reflection;
   std::unordered_map<const lex::Node *, Type> Types;
   std::unordered_map<std::string, FunctionInfo> Functions;
+  std::unordered_map<std::string, std::vector<std::string>> FunctionGroups;
+  std::unordered_map<const lex::Node *, std::string> FunctionKeys;
   std::unordered_map<std::string, ClassInfo> Classes;
   std::unordered_map<std::string, EnumInfo> Enums;
   std::unordered_map<std::string, TypeDeclarationInfo> TypeDeclarations;
@@ -292,9 +301,15 @@ class Sema {
                                         std::optional<Type> Expected);
 
   void Error(const lex::Node &Node, lex::DiagnosticKind Kind);
+  void Error(const lex::Node &Node, lex::DiagnosticKind Kind,
+             std::string Detail);
   void Warn(const lex::Node &Node, std::string Message);
   void WarnIfDeprecated(const lex::Node &Use, const lex::Node *Declaration);
   void GenerateSymbolPrefix(const std::vector<ModuleInput> &Modules);
+  std::vector<const FunctionInfo *>
+  FindOverloads(std::string_view QualifiedName) const;
+  const FunctionInfo *FindFunction(const lex::Node &Declaration) const;
+  std::string FormatFunctionSignature(const FunctionInfo &Function) const;
   void RegisterAnnotation(const lex::Node &Declaration,
                           std::string_view Module);
   void CheckAnnotationDefinition(const lex::Node &Declaration);
@@ -409,6 +424,12 @@ public:
   const std::string &GetSymbol(const lex::Node &Node) const {
     return Symbols.at(&Node);
   }
+  const std::string &GetFunctionSignature(const lex::Node &Node) const {
+    return Functions.at(FunctionKeys.at(&Node)).Signature;
+  }
+  const std::string &GetFunctionSignature(std::string_view Key) const {
+    return Functions.at(std::string(Key)).Signature;
+  }
   const std::string &GetCallee(const lex::Node &Node) const {
     return Callees.at(&Node);
   }
@@ -418,6 +439,15 @@ public:
   }
   const CWrapper *GetCWrapper(const lex::Node &Node) const;
   const std::vector<CWrapper> &GetCWrappers() const { return CWrappers; }
+  std::set<std::string> GetLinkLibraries(
+      const std::unordered_set<std::string> &RuntimeModules) const {
+    std::set<std::string> Libraries;
+    for (const auto &[Name, Function] : Functions)
+      if (RuntimeModules.contains(Function.Module) &&
+          !Function.Library.empty())
+        Libraries.insert(Function.Library);
+    return Libraries;
+  }
   const ClassInfo *GetClass(std::string_view Name) const;
   const EnumInfo *GetEnum(std::string_view Name) const;
   const ClassInfo *GetClass(const Type &Value) const;

@@ -171,10 +171,58 @@ std::string MetaTypeName(const sema::Type &Type) {
   return Result;
 }
 
+std::string EncodeOverloadParameters(const std::vector<sema::Type> &Parameters,
+                                     std::size_t Start) {
+  constexpr char Hex[] = "0123456789ABCDEF";
+  std::string Result = std::to_string(Parameters.size() - Start) + "_";
+  for (std::size_t I = Start; I < Parameters.size(); ++I) {
+    const auto Name = MetaTypeName(Parameters[I]);
+    Result += std::to_string(Name.size()) + "_";
+    for (unsigned char Byte : Name) {
+      Result.push_back(Hex[Byte >> 4]);
+      Result.push_back(Hex[Byte & 15]);
+    }
+  }
+  return Result;
+}
+
 } // namespace
+
+std::vector<const sema::Sema::FunctionInfo *>
+sema::Sema::FindOverloads(std::string_view QualifiedName) const {
+  std::vector<const FunctionInfo *> Result;
+  if (const auto Group = FunctionGroups.find(std::string(QualifiedName));
+      Group != FunctionGroups.end())
+    for (const auto &Key : Group->second)
+      Result.push_back(&Functions.at(Key));
+  return Result;
+}
+
+const sema::Sema::FunctionInfo *
+sema::Sema::FindFunction(const lex::Node &Declaration) const {
+  const auto It = FunctionKeys.find(&Declaration);
+  return It == FunctionKeys.end() ? nullptr : &Functions.at(It->second);
+}
+
+std::string sema::Sema::FormatFunctionSignature(
+    const FunctionInfo &Function) const {
+  std::string Result = Function.QualifiedName + "(";
+  const auto Start = Function.OwnerClass.empty() || Function.Static ? 0u : 1u;
+  for (std::size_t I = Start; I < Function.Parameters.size(); ++I) {
+    if (I != Start)
+      Result += ", ";
+    Result += MetaTypeName(Function.Parameters[I]);
+  }
+  return Result + ") -> " + MetaTypeName(Function.Return);
+}
 
 void sema::Sema::Error(const lex::Node &Node, lex::DiagnosticKind Kind) {
   Diagnostics.push_back({Kind, Node.Loc});
+}
+
+void sema::Sema::Error(const lex::Node &Node, lex::DiagnosticKind Kind,
+                       std::string Detail) {
+  Diagnostics.push_back({Kind, Node.Loc, std::move(Detail)});
 }
 
 std::optional<std::string>
@@ -258,6 +306,12 @@ sema::Sema::EvaluateConstant(const lex::Node &Expression) {
                   return nullptr;
                 Found = Candidate;
               }
+          }
+          if (Found != Functions.end()) {
+            const auto Group =
+                FunctionGroups.find(Found->second.QualifiedName);
+            if (Group != FunctionGroups.end() && Group->second.size() > 1)
+              return nullptr;
           }
           if (Found == Functions.end() || Found->second.External ||
               !Found->second.Node ||
@@ -877,6 +931,8 @@ bool sema::Sema::CheckModules(
   Reflection.Clear();
   Types.clear();
   Functions.clear();
+  FunctionGroups.clear();
+  FunctionKeys.clear();
   Classes.clear();
   Enums.clear();
   TypeDeclarations.clear();
@@ -1166,13 +1222,17 @@ bool sema::Sema::CheckModules(
   if (!Diagnostics.empty())
     return false;
 
-  std::function<bool(const ClassInfo &, std::string_view)> InterfaceHasMethod =
-      [&](const ClassInfo &Interface, std::string_view Method) {
-        if (Functions.contains(Interface.QualifiedName + "." +
-                               std::string(Method)))
-          return true;
+  std::function<bool(const ClassInfo &, std::string_view, std::string_view)>
+      InterfaceHasMethod = [&](const ClassInfo &Interface,
+                               std::string_view Method,
+                               std::string_view Signature) {
+        for (const auto *Candidate :
+             FindOverloads(Interface.QualifiedName + "." +
+                           std::string(Method)))
+          if (Candidate->Signature == Signature)
+            return true;
         for (const auto &Parent : Interface.Interfaces)
-          if (InterfaceHasMethod(*GetClass(Parent), Method))
+          if (InterfaceHasMethod(*GetClass(Parent), Method, Signature))
             return true;
         return false;
       };
@@ -1350,27 +1410,32 @@ bool sema::Sema::CheckModules(
           Error(*ExternAnnotation,
                 lex::DiagnosticKind::InvalidExternDeclaration);
         Info.Symbol = Function.text;
-        if (!ExternAnnotation->children.empty()) {
-          if (ExternAnnotation->children.size() != 1 ||
-              ExternAnnotation->children.front()->kind !=
-                  K::ast_annotation_argument ||
-              !ExternAnnotation->children.front()->text.empty() ||
-              ExternAnnotation->children.front()->children.size() != 1 ||
-              ExternAnnotation->children.front()->children.front()->kind !=
-                  K::ast_literal) {
+        if (ExternAnnotation->children.empty() ||
+            ExternAnnotation->children.size() > 2)
+          Error(*ExternAnnotation,
+                lex::DiagnosticKind::InvalidExternDeclaration);
+        for (std::size_t Index = 0; Index < ExternAnnotation->children.size();
+             ++Index) {
+          const auto &Argument = *ExternAnnotation->children[Index];
+          if (Argument.kind != K::ast_annotation_argument ||
+              !Argument.text.empty() || Argument.children.size() != 1 ||
+              Argument.children.front()->kind != K::ast_literal) {
             Error(*ExternAnnotation,
                   lex::DiagnosticKind::InvalidExternDeclaration);
-          } else {
-            const auto &Spelling =
-                ExternAnnotation->children.front()->children.front()->text;
-            if (Spelling.size() < 3 || Spelling.front() != '"' ||
-                Spelling.back() != '"' ||
-                Spelling.find('\\') != std::string::npos)
-              Error(*ExternAnnotation,
-                    lex::DiagnosticKind::InvalidExternDeclaration);
-            else
-              Info.Symbol = Spelling.substr(1, Spelling.size() - 2);
+            continue;
           }
+          const auto &Spelling = Argument.children.front()->text;
+          if (Spelling.size() < 3 || Spelling.front() != '"' ||
+              Spelling.back() != '"' ||
+              Spelling.find('\\') != std::string::npos) {
+            Error(*ExternAnnotation,
+                  lex::DiagnosticKind::InvalidExternDeclaration);
+            continue;
+          }
+          if (Index == 0)
+            Info.Symbol = Spelling.substr(1, Spelling.size() - 2);
+          else
+            Info.Library = Spelling.substr(1, Spelling.size() - 2);
         }
       } else if (!HasBody && !IntrinsicAnnotation &&
                  (Owner.empty() ||
@@ -1488,16 +1553,44 @@ bool sema::Sema::CheckModules(
         }
       }
       Reflection.Records[Id].Type = GetOrCreateMetaType(Info.Return);
-      Reflection.Records[Id].Symbol = Info.Symbol;
-      Types[&Function] = Info.Return;
       const auto Key =
           Owner.empty()
               ? (Name.empty() ? Function.text : Name + "." + Function.text)
               : std::string(Owner) + "." + Function.text;
+      Info.QualifiedName = Key;
+      Info.Signature = Function.text + "#" +
+                       EncodeOverloadParameters(Info.Parameters,
+                                                Owner.empty() || Info.Static ? 0 : 1);
+      auto &Group = FunctionGroups[Key];
       if (Classes.contains(Key) || Enums.contains(Key) ||
           TypeDeclarations.contains(Key) ||
-          !Functions.emplace(Key, Info).second)
+          std::any_of(Group.begin(), Group.end(), [&](const auto &Existing) {
+            return Functions.at(Existing).Signature == Info.Signature;
+          }) ||
+          (!Group.empty() && (Function.kind != K::ast_function ||
+                              Function.text == "init" ||
+                              Function.text == "deinit" ||
+                              Function.text == "copy" ||
+                              Function.text == "move" || MainAnnotation))) {
         Error(Function, lex::DiagnosticKind::DuplicateFunction);
+        return;
+      }
+      const auto StorageKey =
+          Group.empty() ? Key : Key + "#" + Info.Signature;
+      Info.BaseSymbol = Info.Symbol;
+      Info.Extern = ExternAnnotation != nullptr;
+      Info.SpecialAbi = MainAnnotation || IntrinsicAnnotation ||
+                        Info.Symbol == "_K0F4main" ||
+                        (!Owner.empty() &&
+                         (Function.text == "init" ||
+                          Function.text == "deinit" ||
+                          Function.text == "copy" ||
+                          Function.text == "move"));
+      Reflection.Records[Id].Symbol = Info.Symbol;
+      Types[&Function] = Info.Return;
+      Functions.emplace(StorageKey, Info);
+      Group.push_back(StorageKey);
+      FunctionKeys[&Function] = StorageKey;
       Symbols[&Function] = Info.Symbol;
     };
     for (const auto &Child : Module.children) {
@@ -1520,13 +1613,16 @@ bool sema::Sema::CheckModules(
           continue;
         auto &Class = ClassIt->second;
         CurrentClass = Class.QualifiedName;
-        std::unordered_set<std::string> MemberNames;
+        std::unordered_map<std::string, bool> MemberNames;
         for (const auto &Member : Child->children) {
           if (Member->kind == K::ast_public ||
               Member->kind == K::ast_annotation ||
               Member->kind == K::ast_base_type)
             continue;
-          if (!MemberNames.insert(Member->text).second ||
+          const bool IsMethod = Member->kind == K::ast_function;
+          const auto [Existing, NewName] =
+              MemberNames.emplace(Member->text, IsMethod);
+          if ((!NewName && (!IsMethod || !Existing->second)) ||
               (Member->kind == K::ast_function &&
                (Member->text == "init" || Member->text == "deinit")))
             Error(*Member, lex::DiagnosticKind::InvalidClass);
@@ -1662,21 +1758,20 @@ bool sema::Sema::CheckModules(
         for (const auto &Member : Child->children) {
           if (Member->kind != K::ast_function)
             continue;
-          const auto It =
-              Functions.find(Class.QualifiedName + "." + Member->text);
-          if (It == Functions.end() || !It->second.Virtual || It->second.Static)
+          const auto *Info = FindFunction(*Member);
+          if (!Info || !Info->Virtual || Info->Static)
             continue;
-          if (Class.IsInterface || It->second.Override ||
+          if (Class.IsInterface || Info->Override ||
               Member->text == "copy" || Member->text == "move") {
             Error(*Member, lex::DiagnosticKind::InvalidClass);
             continue;
           }
           Type Slot{BuiltinType::Function, {}};
-          Slot.Parameters = It->second.Parameters;
-          Slot.Results.push_back(It->second.Return);
-          Class.VirtualSlots.emplace(Member->text, Class.Fields.size());
+          Slot.Parameters = Info->Parameters;
+          Slot.Results.push_back(Info->Return);
+          Class.VirtualSlots.emplace(Info->Signature, Class.Fields.size());
           Class.Fields.push_back(
-              {Member.get(), "$virtual." + Member->text, Slot, false});
+              {Member.get(), "$virtual." + Info->Signature, Slot, false});
         }
         if (Class.IsInterface) {
           Class.DefaultConstructible = false;
@@ -1733,6 +1828,39 @@ bool sema::Sema::CheckModules(
       }
       RegisterFunction(*Child, {});
     }
+  }
+
+  // Registration can leave malformed declarations without function metadata.
+  // Stop before class and interface passes inspect those declarations.
+  if (!Diagnostics.empty())
+    return false;
+
+  // Every ordinary function uses its parameter types in the exported symbol.
+  // Adding an overload therefore preserves symbols of existing declarations.
+  for (const auto &[Name, Group] : FunctionGroups) {
+    for (const auto &Key : Group) {
+      auto &Info = Functions.at(Key);
+      if (!Info.Extern && !Info.SpecialAbi)
+        Info.Symbol = Info.BaseSymbol + "__O" +
+                      EncodeOverloadParameters(
+                          Info.Parameters,
+                          Info.OwnerClass.empty() || Info.Static ? 0 : 1);
+      Symbols[Info.Node] = Info.Symbol;
+      if (const auto Id = Reflection.GetId(*Info.Node))
+        Reflection.Records[*Id].Symbol = Info.Symbol;
+    }
+  }
+  std::unordered_map<std::string, const lex::Node *> ExportedSymbols;
+  for (const auto &[Name, Info] : Functions) {
+    if (!Info.Node)
+      continue;
+    // CheckEntrypoint diagnoses multiple @main declarations separately.
+    if (Info.SpecialAbi && Info.Symbol == "main")
+      continue;
+    if (const auto [It, New] =
+            ExportedSymbols.emplace(Info.Symbol, Info.Node);
+        !New)
+      Error(*Info.Node, lex::DiagnosticKind::DuplicateFunction);
   }
 
   for (const auto &Input : Modules) {
@@ -1847,12 +1975,11 @@ bool sema::Sema::CheckModules(
           auto &Parent = Classes.at(ParentName);
           CollectInterfaceMethods(Parent);
           for (const auto &Method : Parent.InterfaceMethods) {
-            const auto Dot = Method.rfind('.');
-            const auto Name = Method.substr(Dot + 1);
             const auto Duplicate = std::find_if(
                 Class.InterfaceMethods.begin(), Class.InterfaceMethods.end(),
                 [&](const auto &Existing) {
-                  return Existing.substr(Existing.rfind('.') + 1) == Name;
+                  return Functions.at(Existing).Signature ==
+                         Functions.at(Method).Signature;
                 });
             if (Duplicate == Class.InterfaceMethods.end())
               Class.InterfaceMethods.push_back(Method);
@@ -1863,12 +1990,13 @@ bool sema::Sema::CheckModules(
         for (const auto &Member : Class.Node->children) {
           if (Member->kind != K::ast_function)
             continue;
+          const auto Method = FunctionKeys.at(Member.get());
           const auto Existing = std::find_if(
               Class.InterfaceMethods.begin(), Class.InterfaceMethods.end(),
-              [&](const auto &Method) {
-                return Method.substr(Method.rfind('.') + 1) == Member->text;
+              [&](const auto &Candidate) {
+                return Functions.at(Candidate).Signature ==
+                       Functions.at(Method).Signature;
               });
-          const auto Method = Class.QualifiedName + "." + Member->text;
           if (Existing == Class.InterfaceMethods.end())
             Class.InterfaceMethods.push_back(Method);
           else if (!SameInterfaceSignature(*Existing, Method))
@@ -1885,17 +2013,20 @@ bool sema::Sema::CheckModules(
       if (Member->kind != K::ast_function || Member->text == "copy" ||
           Member->text == "move")
         continue;
-      const auto &Method = Functions.at(Name + "." + Member->text);
+      const auto &Method = *FindFunction(*Member);
       const ClassInfo *SlotOwner = nullptr;
       const FunctionInfo *Inherited = nullptr;
       for (auto BaseName = Class.BaseName; !BaseName.empty();) {
         const auto *Base = GetClass(BaseName);
         if (!Inherited) {
-          const auto It = Functions.find(BaseName + "." + Member->text);
-          if (It != Functions.end())
-            Inherited = &It->second;
+          for (const auto *Candidate :
+               FindOverloads(BaseName + "." + Member->text))
+            if (Candidate->Signature == Method.Signature) {
+              Inherited = Candidate;
+              break;
+            }
         }
-        if (Base->VirtualSlots.contains(Member->text))
+        if (Base->VirtualSlots.contains(Method.Signature))
           SlotOwner = Base;
         BaseName = Base->BaseName;
       }
@@ -1906,7 +2037,8 @@ bool sema::Sema::CheckModules(
         bool InterfaceMethod = false;
         for (const auto &Interface : Class.Interfaces)
           InterfaceMethod |=
-              InterfaceHasMethod(*GetClass(Interface), Member->text);
+              InterfaceHasMethod(*GetClass(Interface), Member->text,
+                                 Method.Signature);
         if ((!SlotOwner && !InterfaceMethod) || Method.Virtual ||
             (SlotOwner && !Inherited) ||
             (Inherited &&
@@ -1924,9 +2056,9 @@ bool sema::Sema::CheckModules(
           Error(*Member, lex::DiagnosticKind::TypeMismatch);
         if (SlotOwner)
           Class.OverrideSlots.emplace(
-              Member->text,
+              Method.Signature,
               std::make_pair(SlotOwner->QualifiedName,
-                             SlotOwner->VirtualSlots.at(Member->text)));
+                             SlotOwner->VirtualSlots.at(Method.Signature)));
       } else if (Inherited) {
         Error(*Member, lex::DiagnosticKind::InvalidClass);
       }
@@ -1939,15 +2071,17 @@ bool sema::Sema::CheckModules(
           for (const auto &Member : Interface.Node->children) {
             if (Member->kind != K::ast_function)
               continue;
-            const auto &Required =
-                Functions.at(Interface.QualifiedName + "." + Member->text);
+            const auto &Required = *FindFunction(*Member);
             const FunctionInfo *Implementation = nullptr;
             for (auto OwnerName = Class.QualifiedName; !OwnerName.empty();) {
-              const auto It = Functions.find(OwnerName + "." + Member->text);
-              if (It != Functions.end()) {
-                Implementation = &It->second;
+              for (const auto *Candidate :
+                   FindOverloads(OwnerName + "." + Member->text))
+                if (Candidate->Signature == Required.Signature) {
+                  Implementation = Candidate;
+                  break;
+                }
+              if (Implementation)
                 break;
-              }
               OwnerName = GetClass(OwnerName)->BaseName;
             }
             if (!Implementation ||

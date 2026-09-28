@@ -105,12 +105,12 @@ codegen::IRGen::EmitInterfaceConversion(const lex::Node &Expression,
   auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
   for (std::size_t I = 0; I < Interface.InterfaceMethods.size(); ++I) {
     const auto &MethodKey = Interface.InterfaceMethods[I];
-    const auto Name = MethodKey.substr(MethodKey.rfind('.') + 1);
+    const auto &Signature = Analysis.GetFunctionSignature(MethodKey);
     if (FromInterface) {
       const auto Method = std::find_if(
           Concrete->InterfaceMethods.begin(), Concrete->InterfaceMethods.end(),
           [&](const auto &Candidate) {
-            return Candidate.substr(Candidate.rfind('.') + 1) == Name;
+            return Analysis.GetFunctionSignature(Candidate) == Signature;
           });
       assert(Method != Concrete->InterfaceMethods.end());
       auto Callee = mlir::LLVM::ExtractValueOp::create(
@@ -126,7 +126,8 @@ codegen::IRGen::EmitInterfaceConversion(const lex::Node &Expression,
     const lex::Node *Method = nullptr;
     while (MethodOwner && !Method) {
       for (const auto &Member : MethodOwner->Node->children)
-        if (Member->kind == K::ast_function && Member->text == Name) {
+        if (Member->kind == K::ast_function &&
+            Analysis.GetFunctionSignature(*Member) == Signature) {
           Method = Member.get();
           break;
         }
@@ -140,7 +141,7 @@ codegen::IRGen::EmitInterfaceConversion(const lex::Node &Expression,
     for (const sema::ClassInfo *Owner = Concrete; Owner;
          Owner = Owner->BaseName.empty() ? nullptr
                                          : Analysis.GetClass(Owner->BaseName)) {
-      const auto Slot = Owner->VirtualSlots.find(Name);
+      const auto Slot = Owner->VirtualSlots.find(Signature);
       if (Slot != Owner->VirtualSlots.end()) {
         auto Address = FieldAddress(*Owner, Object, Slot->second, Loc);
         Callee = mlir::LLVM::LoadOp::create(Builder, Loc, Pointer, Address);
@@ -601,12 +602,29 @@ mlir::Value codegen::IRGen::EmitBinaryExpression(const lex::Node &Expression) {
   const auto &SemanticType = Analysis.GetType(Expression);
   const auto Type = GetType(SemanticType);
   auto Lhs = EmitExpression(*Expression.children[0]);
+  if (Expression.text == "&&" || Expression.text == "||") {
+    auto ResultAddress = CreateAlloca(SemanticType, Loc);
+    mlir::LLVM::StoreOp::create(Builder, Loc, Lhs, ResultAddress);
+    auto *Region = Builder.getInsertionBlock()->getParent();
+    auto *EvaluateRhs = new mlir::Block();
+    auto *After = new mlir::Block();
+    Region->push_back(EvaluateRhs);
+    Region->push_back(After);
+    if (Expression.text == "&&")
+      mlir::cf::CondBranchOp::create(Builder, Loc, Lhs, EvaluateRhs, After);
+    else
+      mlir::cf::CondBranchOp::create(Builder, Loc, Lhs, After, EvaluateRhs);
+
+    Builder.setInsertionPointToStart(EvaluateRhs);
+    auto Rhs = EmitExpression(*Expression.children[1]);
+    mlir::LLVM::StoreOp::create(Builder, Loc, Rhs, ResultAddress);
+    mlir::cf::BranchOp::create(Builder, Loc, After);
+
+    Builder.setInsertionPointToStart(After);
+    return mlir::LLVM::LoadOp::create(Builder, Loc, Type, ResultAddress);
+  }
   auto Rhs = EmitExpression(*Expression.children[1]);
   const auto &OperandType = Analysis.GetType(*Expression.children[0]);
-  if (Expression.text == "&&")
-    return mlir::arith::AndIOp::create(Builder, Loc, Lhs, Rhs);
-  if (Expression.text == "||")
-    return mlir::arith::OrIOp::create(Builder, Loc, Lhs, Rhs);
   const bool Comparison = Expression.text == "==" || Expression.text == "!=" ||
                           Expression.text == "<" || Expression.text == "<=" ||
                           Expression.text == ">" || Expression.text == ">=";

@@ -92,9 +92,13 @@ int driver::Emit(const ModuleLoader &Loader, const sema::Sema &Analysis) {
                                          Option::CSources.end());
     LinkSources.insert(LinkSources.end(), Option::LinkInputs.begin(),
                        Option::LinkInputs.end());
+    const auto Libraries = Analysis.GetLinkLibraries(RuntimeModules);
+    const std::vector<std::string> LibraryNames(Libraries.begin(),
+                                                Libraries.end());
     return codegen::EmitExecutable(
         *Module, Option::OutputFile, Option::OptLevel, LinkSources,
-        Option::CArguments, CWrapperSource, Runtime, Option::Target);
+        Option::CArguments, CWrapperSource, Runtime, Option::Target,
+        LibraryNames);
   }();
   if (Error) {
     kerr() << Option::InputFile

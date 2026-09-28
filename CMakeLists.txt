@@ -18,7 +18,7 @@ set(LLVM_ENABLE_PROJECTS "mlir;clang" CACHE STRING "LLVM projects to build")
 if(NOT "mlir" IN_LIST LLVM_ENABLE_PROJECTS OR NOT "clang" IN_LIST LLVM_ENABLE_PROJECTS)
   message(FATAL_ERROR "Kelyra requires mlir and clang in LLVM_ENABLE_PROJECTS")
 endif()
-set(LLVM_TARGETS_TO_BUILD "Native" CACHE STRING "LLVM target backends")
+set(LLVM_TARGETS_TO_BUILD "Native;DirectX;SPIRV" CACHE STRING "LLVM target backends")
 set(LLVM_INCLUDE_TESTS OFF CACHE BOOL "Build LLVM tests")
 set(LLVM_INCLUDE_BENCHMARKS OFF CACHE BOOL "Build LLVM benchmarks")
 set(MLIR_INCLUDE_TESTS OFF CACHE BOOL "Build MLIR tests")
@@ -50,6 +50,9 @@ add_executable(kelyra
   src/Driver/Analysis.cpp
   src/Driver/Emit.cpp
   src/Driver/Shader.cpp
+  src/Driver/DirectSpirv.cpp
+  src/Driver/DirectDxil.cpp
+  src/Driver/DxilValidator.cpp
   src/Driver/Generics.cpp
   src/Driver/ModuleLoader.cpp)
 target_compile_definitions(kelyra PRIVATE
@@ -62,6 +65,13 @@ target_link_libraries(kelyra PRIVATE
   kelyra_ir
   kelyra_sema
   MLIRFuncDialect
+  MLIRSPIRVDialect
+  MLIRSPIRVSerialization
+  MLIRParser
+  LLVMDirectXCodeGen
+  LLVMDirectXDesc
+  LLVMDirectXInfo
+  LLVMDirectXIRPasses
 )
 if(NOT LLVM_ENABLE_RTTI)
   target_compile_options(kelyra PRIVATE -fno-rtti)

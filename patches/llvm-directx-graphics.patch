@@ -1,0 +1,473 @@
+diff --git a/llvm/lib/Target/DirectX/DXContainerGlobals.cpp b/llvm/lib/Target/DirectX/DXContainerGlobals.cpp
+index 7182c30ea..1442608f0 100644
+--- a/llvm/lib/Target/DirectX/DXContainerGlobals.cpp
++++ b/llvm/lib/Target/DirectX/DXContainerGlobals.cpp
+@@ -20,6 +20,7 @@
+ #include "llvm/Analysis/DXILResource.h"
+ #include "llvm/BinaryFormat/DXContainer.h"
+ #include "llvm/CodeGen/Passes.h"
++#include "llvm/Frontend/HLSL/SemanticSignatures.h"
+ #include "llvm/IR/Constants.h"
+ #include "llvm/IR/Module.h"
+ #include "llvm/InitializePasses.h"
+@@ -33,7 +34,9 @@
+ #include "llvm/Support/Path.h"
+ #include "llvm/TargetParser/Triple.h"
+ #include "llvm/Transforms/Utils/ModuleUtils.h"
++#include <algorithm>
+ #include <cstdint>
++#include <utility>
+ 
+ using namespace llvm;
+ using namespace llvm::dxil;
+@@ -47,6 +50,213 @@ cl::opt<bool> PdbInPrivate("dx-pdb-in-private",
+                            cl::desc("Store PDB in private user data"));
+ 
+ namespace {
++struct GraphicsSignatures {
++  SmallVector<hlsl::SemanticSignatureElement> Inputs;
++  SmallVector<hlsl::SemanticSignatureElement> Outputs;
++};
++
++static uint32_t getSignatureInt(const MDNode *Node, unsigned Operand) {
++  if (!Node || Operand >= Node->getNumOperands())
++    report_fatal_error("malformed DXIL entry point signature");
++  const auto *Value =
++      mdconst::dyn_extract<ConstantInt>(Node->getOperand(Operand));
++  if (!Value)
++    report_fatal_error("DXIL entry point signature expects an integer");
++  return static_cast<uint32_t>(Value->getZExtValue());
++}
++
++static void
++readSignatureList(const MDNode *List,
++                  SmallVectorImpl<hlsl::SemanticSignatureElement> &Out) {
++  if (!List)
++    return;
++  for (const MDOperand &Operand : List->operands()) {
++    const auto *Node = dyn_cast<MDNode>(Operand.get());
++    if (!Node || Node->getNumOperands() != 11)
++      report_fatal_error("malformed DXIL entry point signature element");
++    const auto *Name = dyn_cast<MDString>(Node->getOperand(1));
++    const auto *Indices = dyn_cast<MDNode>(Node->getOperand(4));
++    if (!Name || !Indices)
++      report_fatal_error("DXIL entry point signature expects semantic data");
++    hlsl::SemanticSignatureElement Element;
++    Element.SigId = getSignatureInt(Node, 0);
++    Element.SemanticName = Name->getString();
++    Element.CompType = static_cast<dxil::ElementType>(getSignatureInt(Node, 2));
++    Element.SemanticKind =
++        static_cast<dxbc::PSV::SemanticKind>(getSignatureInt(Node, 3));
++    for (unsigned I = 0; I != Indices->getNumOperands(); ++I)
++      Element.SemanticIndices.push_back(getSignatureInt(Indices, I));
++    Element.InterpMode =
++        static_cast<dxbc::PSV::InterpolationMode>(getSignatureInt(Node, 5));
++    Element.Rows = getSignatureInt(Node, 6);
++    Element.Cols = getSignatureInt(Node, 7);
++    Element.StartRow = getSignatureInt(Node, 8);
++    Element.StartCol = getSignatureInt(Node, 9);
++    const auto *Usage = dyn_cast<MDNode>(Node->getOperand(10));
++    Element.UsageMask = getSignatureInt(Usage, 1);
++    if (Element.Rows != Element.SemanticIndices.size() || Element.Cols == 0 ||
++        Element.Cols > 4 || Element.StartCol > 3)
++      report_fatal_error("invalid DXIL entry point signature shape");
++    Out.push_back(std::move(Element));
++  }
++}
++
++static GraphicsSignatures readGraphicsSignatures(const Module &M,
++                                                 const Function *Entry) {
++  GraphicsSignatures Signatures;
++  const NamedMDNode *Metadata = M.getNamedMetadata("dx.entryPoints");
++  if (!Metadata || !Entry)
++    return Signatures;
++  for (const MDNode *PerEntry : Metadata->operands()) {
++    if (PerEntry->getNumOperands() != 5)
++      continue;
++    const auto *Reference = dyn_cast<ValueAsMetadata>(PerEntry->getOperand(0));
++    if (!Reference || Reference->getValue() != Entry)
++      continue;
++    const auto *Legacy = dyn_cast_or_null<MDNode>(PerEntry->getOperand(2));
++    if (Legacy && Legacy->getNumOperands() == 3) {
++      readSignatureList(dyn_cast_or_null<MDNode>(Legacy->getOperand(0)),
++                        Signatures.Inputs);
++      readSignatureList(dyn_cast_or_null<MDNode>(Legacy->getOperand(1)),
++                        Signatures.Outputs);
++    }
++    break;
++  }
++  return Signatures;
++}
++
++static uint32_t getStartRow(const hlsl::SemanticSignatureElement &Element,
++                            unsigned Sequence, bool IsOutput) {
++  if (Element.isAllocated())
++    return Element.StartRow;
++  if (IsOutput && Element.SemanticKind == dxbc::PSV::SemanticKind::Target &&
++      !Element.SemanticIndices.empty())
++    return Element.SemanticIndices.front();
++  return Sequence;
++}
++
++static uint8_t getStartCol(const hlsl::SemanticSignatureElement &Element) {
++  return Element.isAllocated() ? Element.StartCol : 0;
++}
++
++static dxbc::SigComponentType
++getSignatureComponentType(dxil::ElementType Type) {
++  switch (Type) {
++  case dxil::ElementType::I1:
++    return dxbc::SigComponentType::UInt32;
++  case dxil::ElementType::U16:
++    return dxbc::SigComponentType::UInt16;
++  case dxil::ElementType::I16:
++    return dxbc::SigComponentType::SInt16;
++  case dxil::ElementType::U32:
++    return dxbc::SigComponentType::UInt32;
++  case dxil::ElementType::I32:
++    return dxbc::SigComponentType::SInt32;
++  case dxil::ElementType::F16:
++  case dxil::ElementType::SNormF16:
++  case dxil::ElementType::UNormF16:
++    return dxbc::SigComponentType::Float16;
++  case dxil::ElementType::F32:
++  case dxil::ElementType::SNormF32:
++  case dxil::ElementType::UNormF32:
++    return dxbc::SigComponentType::Float32;
++  case dxil::ElementType::U64:
++    return dxbc::SigComponentType::UInt64;
++  case dxil::ElementType::I64:
++    return dxbc::SigComponentType::SInt64;
++  case dxil::ElementType::F64:
++  case dxil::ElementType::SNormF64:
++  case dxil::ElementType::UNormF64:
++    return dxbc::SigComponentType::Float64;
++  default:
++    return dxbc::SigComponentType::Unknown;
++  }
++}
++
++static dxbc::D3DSystemValue getSystemValue(dxbc::PSV::SemanticKind Kind) {
++  using KindType = dxbc::PSV::SemanticKind;
++  using ValueType = dxbc::D3DSystemValue;
++  switch (Kind) {
++  case KindType::Position:
++    return ValueType::Position;
++  case KindType::ClipDistance:
++    return ValueType::ClipDistance;
++  case KindType::CullDistance:
++    return ValueType::CullDistance;
++  case KindType::RenderTargetArrayIndex:
++    return ValueType::RenderTargetArrayIndex;
++  case KindType::ViewPortArrayIndex:
++    return ValueType::ViewPortArrayIndex;
++  case KindType::VertexID:
++    return ValueType::VertexID;
++  case KindType::PrimitiveID:
++    return ValueType::PrimitiveID;
++  case KindType::InstanceID:
++    return ValueType::InstanceID;
++  case KindType::IsFrontFace:
++    return ValueType::IsFrontFace;
++  case KindType::SampleIndex:
++    return ValueType::SampleIndex;
++  case KindType::Barycentrics:
++    return ValueType::Barycentrics;
++  case KindType::ShadingRate:
++    return ValueType::ShadingRate;
++  case KindType::CullPrimitive:
++    return ValueType::CullPrimitive;
++  case KindType::Target:
++    return ValueType::Target;
++  case KindType::Depth:
++    return ValueType::Depth;
++  case KindType::Coverage:
++    return ValueType::Coverage;
++  case KindType::DepthGreaterEqual:
++    return ValueType::DepthGE;
++  case KindType::DepthLessEqual:
++    return ValueType::DepthLE;
++  case KindType::StencilRef:
++    return ValueType::StencilRef;
++  case KindType::InnerCoverage:
++    return ValueType::InnerCoverage;
++  default:
++    return ValueType::Undefined;
++  }
++}
++
++static void
++addGraphicsSignatureElements(ArrayRef<hlsl::SemanticSignatureElement> Elements,
++                             bool IsOutput, Signature *Signature,
++                             SmallVectorImpl<PSVSignatureElement> *PSVElements,
++                             uint8_t &VectorCount) {
++  for (unsigned I = 0; I != Elements.size(); ++I) {
++    const auto &Element = Elements[I];
++    const uint32_t Row = getStartRow(Element, I, IsOutput);
++    if (Row > UINT8_MAX || Element.Rows > UINT8_MAX - Row)
++      report_fatal_error("DXIL semantic signature exceeds PSV vector range");
++    const uint8_t Col = getStartCol(Element);
++    const uint8_t Mask =
++        static_cast<uint8_t>(((1U << Element.Cols) - 1U) << Col);
++    const auto CompType = getSignatureComponentType(Element.CompType);
++    const auto SystemValue = getSystemValue(Element.SemanticKind);
++    const auto MinPrecision = Element.getMinPrecision(true);
++    for (unsigned R = 0; R != Element.Rows; ++R) {
++      const uint32_t Index = Element.SemanticIndices[R];
++      const uint8_t Exclusive =
++          IsOutput ? static_cast<uint8_t>(~Element.UsageMask & Mask)
++                   : static_cast<uint8_t>(Element.UsageMask & Mask);
++      Signature->addParam(Element.GSStream, Element.SemanticName, Index,
++                          SystemValue, CompType, Row + R, Mask, Exclusive,
++                          MinPrecision);
++    }
++    PSVElements->push_back(PSVSignatureElement{
++        Element.SemanticName, SmallVector<uint32_t>(Element.SemanticIndices),
++        static_cast<uint8_t>(Row), Element.Cols, Col, true,
++        Element.SemanticKind, static_cast<dxbc::PSV::ComponentType>(CompType),
++        Element.InterpMode, Element.DynIndexMask,
++        static_cast<uint8_t>(Element.GSStream)});
++    VectorCount = std::max<uint8_t>(VectorCount, Row + Element.Rows);
++  }
++}
++
+ class DXContainerGlobals : public llvm::ModulePass {
+ 
+   GlobalVariable *buildContainerGlobal(Module &M, Constant *Content,
+@@ -218,13 +428,24 @@ GlobalVariable *DXContainerGlobals::buildSignature(Module &M, Signature &Sig,
+ 
+ void DXContainerGlobals::addSignature(Module &M,
+                                       SmallVector<GlobalValue *> &Globals) {
+-  // FIXME: support graphics shader.
+-  //  see issue https://github.com/llvm/llvm-project/issues/90504.
++  dxil::ModuleMetadataInfo &MMI =
++      getAnalysis<DXILMetadataAnalysisWrapperPass>().getModuleMetadata();
++  const Function *Entry =
++      MMI.EntryPropertyVec.empty() ? nullptr : MMI.EntryPropertyVec[0].Entry;
++  GraphicsSignatures Signatures = readGraphicsSignatures(M, Entry);
+ 
+   Signature InputSig;
++  SmallVector<PSVSignatureElement> IgnoredInput;
++  uint8_t IgnoredInputVectors = 0;
++  addGraphicsSignatureElements(Signatures.Inputs, false, &InputSig,
++                               &IgnoredInput, IgnoredInputVectors);
+   Globals.emplace_back(buildSignature(M, InputSig, "dx.isg1", "ISG1"));
+ 
+   Signature OutputSig;
++  SmallVector<PSVSignatureElement> IgnoredOutput;
++  uint8_t IgnoredOutputVectors = 0;
++  addGraphicsSignatureElements(Signatures.Outputs, true, &OutputSig,
++                               &IgnoredOutput, IgnoredOutputVectors);
+   Globals.emplace_back(buildSignature(M, OutputSig, "dx.osg1", "OSG1"));
+ }
+ 
+@@ -264,25 +485,25 @@ void DXContainerGlobals::addResourcesForPSV(Module &M, PSVRuntimeInfo &PSV) {
+   DXILResourceTypeMap &DRTM =
+       getAnalysis<DXILResourceTypeWrapperPass>().getResourceTypeMap();
+ 
+-  auto MakeBinding =
+-      [](const dxil::ResourceInfo::ResourceBinding &Binding,
+-         const dxbc::PSV::ResourceType Type, const dxil::ResourceKind Kind,
+-         const dxbc::PSV::ResourceFlags Flags = dxbc::PSV::ResourceFlags()) {
+-        dxbc::PSV::v2::ResourceBindInfo BindInfo;
+-        BindInfo.Type = Type;
+-        BindInfo.LowerBound = Binding.LowerBound;
+-        assert(
+-            (Binding.Size == 0 ||
+-             (uint64_t)Binding.LowerBound + Binding.Size - 1 <= UINT32_MAX) &&
+-            "Resource range is too large");
+-        BindInfo.UpperBound = (Binding.Size == 0)
+-                                  ? UINT32_MAX
+-                                  : Binding.LowerBound + Binding.Size - 1;
+-        BindInfo.Space = Binding.Space;
+-        BindInfo.Kind = static_cast<dxbc::PSV::ResourceKind>(Kind);
+-        BindInfo.Flags = Flags;
+-        return BindInfo;
+-      };
++  auto MakeBinding = [](const dxil::ResourceInfo::ResourceBinding &Binding,
++                        const dxbc::PSV::ResourceType Type,
++                        const dxil::ResourceKind Kind,
++                        const dxbc::PSV::ResourceFlags Flags =
++                            dxbc::PSV::ResourceFlags()) {
++    dxbc::PSV::v2::ResourceBindInfo BindInfo;
++    BindInfo.Type = Type;
++    BindInfo.LowerBound = Binding.LowerBound;
++    assert((Binding.Size == 0 ||
++            (uint64_t)Binding.LowerBound + Binding.Size - 1 <= UINT32_MAX) &&
++           "Resource range is too large");
++    BindInfo.UpperBound = (Binding.Size == 0)
++                              ? UINT32_MAX
++                              : Binding.LowerBound + Binding.Size - 1;
++    BindInfo.Space = Binding.Space;
++    BindInfo.Kind = static_cast<dxbc::PSV::ResourceKind>(Kind);
++    BindInfo.Flags = Flags;
++    return BindInfo;
++  };
+ 
+   for (const dxil::ResourceInfo &RI : DRM.cbuffers()) {
+     if (!RI.hasBinding())
+@@ -358,6 +579,44 @@ void DXContainerGlobals::addPipelineStateValidationInfo(
+ 
+   addResourcesForPSV(M, PSV);
+ 
++  if (MMI.ShaderProfile == Triple::Vertex ||
++      MMI.ShaderProfile == Triple::Pixel) {
++    const Function *Entry = MMI.EntryPropertyVec[0].Entry;
++    GraphicsSignatures Signatures = readGraphicsSignatures(M, Entry);
++    uint8_t InputVectors = 0;
++    uint8_t OutputVectors = 0;
++    Signature IgnoredInput, IgnoredOutput;
++    addGraphicsSignatureElements(Signatures.Inputs, false, &IgnoredInput,
++                                 &PSV.InputElements, InputVectors);
++    addGraphicsSignatureElements(Signatures.Outputs, true, &IgnoredOutput,
++                                 &PSV.OutputElements, OutputVectors);
++    PSV.BaseData.SigInputVectors = InputVectors;
++    PSV.BaseData.SigOutputVectors[0] = OutputVectors;
++    if (MMI.ShaderProfile == Triple::Vertex) {
++      for (const auto &Element : Signatures.Outputs)
++        if (Element.SemanticKind == dxbc::PSV::SemanticKind::Position)
++          PSV.BaseData.StageInfo.VS.OutputPositionPresent = 1;
++    } else {
++      for (const auto &Element : Signatures.Inputs)
++        if (Element.InterpMode == dxbc::PSV::InterpolationMode::LinearSample ||
++            Element.InterpMode ==
++                dxbc::PSV::InterpolationMode::LinearNoperspectiveSample)
++          PSV.BaseData.StageInfo.PS.SampleFrequency = 1;
++      for (const auto &Element : Signatures.Outputs)
++        if (Element.SemanticKind == dxbc::PSV::SemanticKind::Depth ||
++            Element.SemanticKind == dxbc::PSV::SemanticKind::DepthLessEqual ||
++            Element.SemanticKind == dxbc::PSV::SemanticKind::DepthGreaterEqual)
++          PSV.BaseData.StageInfo.PS.DepthOutput = 1;
++    }
++    // The validator requires this map to agree with dx.viewIDState. Until
++    // dependency metadata is present, write an empty map with the required
++    // dimensions.
++    if (InputVectors && OutputVectors) {
++      const unsigned DwordsPerInputVector = (OutputVectors + 7) / 8;
++      PSV.InputOutputMap[0].assign(InputVectors * 4 * DwordsPerInputVector, 0);
++    }
++  }
++
+   // Hardcoded values here to unblock loading the shader into D3D.
+   //
+   // TODO: Lots more stuff to do here!
+diff --git a/llvm/lib/Target/DirectX/DXILOpBuilder.cpp b/llvm/lib/Target/DirectX/DXILOpBuilder.cpp
+index 997b0cef3..9bb2521d7 100644
+--- a/llvm/lib/Target/DirectX/DXILOpBuilder.cpp
++++ b/llvm/lib/Target/DirectX/DXILOpBuilder.cpp
+@@ -568,7 +568,7 @@ Expected<CallInst *> DXILOpBuilder::tryCreateOp(dxil::OpCode OpCode,
+     return makeOpError(OpCode, Twine("No valid stage for DXIL version ") +
+                                    DXILVersion.getAsString());
+ 
+-  uint16_t ValidShaderKindMask = Prop->Stages[*StIndexOrErr].ValidStages;
++  uint32_t ValidShaderKindMask = Prop->Stages[*StIndexOrErr].ValidStages;
+ 
+   // Ensure valid shader stage properties are specified
+   if (ValidShaderKindMask == ShaderKind::removed)
+diff --git a/llvm/lib/Target/DirectX/DXILTranslateMetadata.cpp b/llvm/lib/Target/DirectX/DXILTranslateMetadata.cpp
+index bde0729e3..cb58080db 100644
+--- a/llvm/lib/Target/DirectX/DXILTranslateMetadata.cpp
++++ b/llvm/lib/Target/DirectX/DXILTranslateMetadata.cpp
+@@ -15,6 +15,7 @@
+ #include "llvm/ADT/Twine.h"
+ #include "llvm/Analysis/DXILMetadataAnalysis.h"
+ #include "llvm/Analysis/DXILResource.h"
++#include "llvm/Frontend/HLSL/SemanticSignatures.h"
+ #include "llvm/IR/BasicBlock.h"
+ #include "llvm/IR/Constants.h"
+ #include "llvm/IR/DiagnosticInfo.h"
+@@ -531,6 +532,76 @@ static GlobalMDList CompatibleNamedModuleMDs = {
+     "dx.source.defines", "dx.source.mainFileName",
+     "dx.source.args"};
+ 
++static MDTuple *buildLegacySignatureList(Module &M, const MDNode *Source) {
++  if (!Source)
++    return nullptr;
++  LLVMContext &Ctx = M.getContext();
++  IRBuilder<> B(Ctx);
++  SmallVector<Metadata *> Entries;
++  for (unsigned I = 0; I < Source->getNumOperands(); ++I) {
++    auto *ElementNode = dyn_cast<MDNode>(Source->getOperand(I));
++    if (!ElementNode) {
++      reportError(M, "malformed shader semantic signature element");
++      return nullptr;
++    }
++    auto Element = hlsl::SemanticSignatureElement::fromMetadata(ElementNode);
++    if (!Element) {
++      consumeError(Element.takeError());
++      reportError(M, "invalid shader semantic signature element");
++      return nullptr;
++    }
++    SmallVector<Metadata *> Indices;
++    for (uint32_t Index : Element->SemanticIndices)
++      Indices.push_back(ConstantAsMetadata::get(B.getInt32(Index)));
++    auto *IndexNode = MDNode::get(Ctx, Indices);
++    const uint32_t Row = Element->isAllocated()
++                             ? Element->StartRow
++                             : (Element->SemanticName == "SV_Target" &&
++                                        !Element->SemanticIndices.empty()
++                                    ? Element->SemanticIndices.front()
++                                    : I);
++    const uint8_t Col = Element->isAllocated() ? Element->StartCol : 0;
++    const uint32_t UsedMask = ((1U << Element->Cols) - 1U) << Col;
++    auto *UsageNode =
++        MDNode::get(Ctx, {ConstantAsMetadata::get(B.getInt32(3)),
++                          ConstantAsMetadata::get(B.getInt32(UsedMask))});
++    Entries.push_back(MDNode::get(
++        Ctx, {ConstantAsMetadata::get(B.getInt32(Element->SigId)),
++              MDString::get(Ctx, Element->SemanticName),
++              ConstantAsMetadata::get(
++                  B.getInt8(static_cast<uint8_t>(Element->CompType))),
++              ConstantAsMetadata::get(
++                  B.getInt8(static_cast<uint8_t>(Element->SemanticKind))),
++              IndexNode,
++              ConstantAsMetadata::get(
++                  B.getInt8(static_cast<uint8_t>(Element->InterpMode))),
++              ConstantAsMetadata::get(B.getInt32(Element->Rows)),
++              ConstantAsMetadata::get(B.getInt8(Element->Cols)),
++              ConstantAsMetadata::get(B.getInt32(Row)),
++              ConstantAsMetadata::get(B.getInt8(Col)), UsageNode}));
++  }
++  return MDNode::get(Ctx, Entries);
++}
++
++static MDTuple *buildLegacySignatures(Module &M, const Function *Entry) {
++  auto *Semantic = M.getNamedMetadata("dx.semantic.signatures");
++  if (!Semantic)
++    return nullptr;
++  for (const MDNode *PerEntry : Semantic->operands()) {
++    if (PerEntry->getNumOperands() != 3)
++      continue;
++    auto *Reference = dyn_cast<ValueAsMetadata>(PerEntry->getOperand(0));
++    if (!Reference || Reference->getValue() != Entry)
++      continue;
++    auto *Input = dyn_cast_or_null<MDNode>(PerEntry->getOperand(1));
++    auto *Output = dyn_cast_or_null<MDNode>(PerEntry->getOperand(2));
++    return MDNode::get(M.getContext(),
++                       {buildLegacySignatureList(M, Input),
++                        buildLegacySignatureList(M, Output), nullptr});
++  }
++  return nullptr;
++}
++
+ static void translateGlobalMetadata(Module &M, DXILResourceMap &DRM,
+                                     DXILResourceTypeMap &DRTM,
+                                     const ModuleShaderFlags &ShaderFlags,
+@@ -545,9 +616,6 @@ static void translateGlobalMetadata(Module &M, DXILResourceMap &DRM,
+   NamedMDNode *NamedResourceMD = emitResourceMetadata(M, DRM, DRTM);
+   auto *ResourceMD =
+       (NamedResourceMD != nullptr) ? NamedResourceMD->getOperand(0) : nullptr;
+-  // FIXME: Add support to construct Signatures
+-  // See https://github.com/llvm/llvm-project/issues/57928
+-  MDTuple *Signatures = nullptr;
+ 
+   if (MMDI.ShaderProfile == Triple::EnvironmentType::Library) {
+     // Get the combined shader flag mask of all functions in the library to be
+@@ -572,6 +640,7 @@ static void translateGlobalMetadata(Module &M, DXILResourceMap &DRM,
+                    Twine(Triple::getEnvironmentTypeName(MMDI.ShaderProfile) +
+                          "'"));
+     }
++    MDTuple *Signatures = buildLegacySignatures(M, EntryProp.Entry);
+     EntryFnMDNodes.emplace_back(emitEntryMD(
+         M, EntryProp, Signatures, ResourceMD, EntryShaderFlags, MMDI));
+   }

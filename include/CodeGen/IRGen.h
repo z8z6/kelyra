@@ -162,5 +162,6 @@ EmitExecutable(mlir::ModuleOp Module, llvm::StringRef OutputPath,
                llvm::ArrayRef<std::string> CArguments = {},
                llvm::StringRef CWrapperSource = {},
                RuntimeMode Runtime = RuntimeMode::Host,
-               llvm::StringRef TargetTriple = {});
+               llvm::StringRef TargetTriple = {},
+               llvm::ArrayRef<std::string> Libraries = {});
 } // namespace kelyra::codegen

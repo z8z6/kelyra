@@ -299,7 +299,7 @@ void sema::Sema::CheckClassLayouts() {
           Element = Element.Indexed();
         if ((!Element.IsPointer() && Element.IsClass() &&
              !Classes.at(Element.ClassName).CLayout) ||
-            Element.IsFunction() || Element.IsResults() || Element.IsVoid() ||
+            Element.IsResults() || Element.IsVoid() ||
             (!Element.IsClass() && !CFieldAlignment(Element))) {
           Error(*Field.Node, lex::DiagnosticKind::UnsupportedType);
           return false;

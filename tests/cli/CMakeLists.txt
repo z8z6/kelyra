@@ -13,7 +13,13 @@ target_compile_definitions(kelyra_cli_tests PRIVATE
   KELYRA_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 add_dependencies(kelyra_cli_tests kelyra)
-gtest_discover_tests(kelyra_cli_tests)
+if(WIN32)
+  gtest_discover_tests(kelyra_cli_tests PROPERTIES
+    ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:${PROJECT_BINARY_DIR}/llvm/bin")
+else()
+  gtest_discover_tests(kelyra_cli_tests)
+endif()
 
 find_program(KELYRA_GDB gdb)
 find_package(Python3 COMPONENTS Interpreter QUIET)

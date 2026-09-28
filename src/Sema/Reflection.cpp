@@ -33,8 +33,12 @@ sema::ReflectionDatabase::GetId(const lex::Node &Node) const {
 std::optional<sema::MetaId>
 sema::ReflectionDatabase::Find(std::string_view QualifiedName,
                                MetaKind Kind) const {
+  std::optional<MetaId> Match;
   for (const auto &Record : Records)
-    if (Record.Kind == Kind && Record.QualifiedName == QualifiedName)
-      return Record.Id;
-  return std::nullopt;
+    if (Record.Kind == Kind && Record.QualifiedName == QualifiedName) {
+      if (Match)
+        return std::nullopt;
+      Match = Record.Id;
+    }
+  return Match;
 }

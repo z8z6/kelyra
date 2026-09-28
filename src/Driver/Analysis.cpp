@@ -20,7 +20,8 @@ void driver::DumpAstIfRequested(const ModuleLoader &Loader) {
 
 bool driver::WantsCompilation() {
   return Option::LexVerify || Option::DumpClassLayout || Option::EmitMlir ||
-         Option::EmitObject || Option::EmitExecutable || Option::EmitSpirv;
+         Option::EmitObject || Option::EmitExecutable || Option::EmitSpirv ||
+         Option::EmitDxil || Option::EmitShaderIr;
 }
 
 namespace {

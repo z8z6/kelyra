@@ -118,7 +118,7 @@ bool ModuleLoader::IsUnderExternalPath(
   const auto Normalized = Path.lexically_normal();
   for (const auto &External : ExternalPaths) {
     const auto Relative = Normalized.lexically_relative(External);
-    if (!Relative.empty() && Relative.native().rfind("..", 0) != 0)
+    if (!Relative.empty() && *Relative.begin() != std::filesystem::path(".."))
       return true;
   }
   return false;

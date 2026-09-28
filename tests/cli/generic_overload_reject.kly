@@ -1,0 +1,4 @@
+fn choose<T>(value: T) -> T { return value; }
+fn choose<T>(value: *T) -> *T { return value; }
+
+fn use(value: i32) -> i32 { return choose<i32>(value); }

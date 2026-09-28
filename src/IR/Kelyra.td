@@ -3,6 +3,7 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
@@ -38,5 +39,7 @@ def Kelyra_AddOp : Op<Kelyra_Dialect, "add",
   let results = (outs AnySignlessInteger:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
 }
+
+include "Shader.td"
 
 #endif

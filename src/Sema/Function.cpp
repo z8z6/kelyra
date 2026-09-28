@@ -43,6 +43,7 @@ sema::Sema::CheckFunctionValue(const lex::Node &Node,
   const auto Key =
       Qualified || LookupModule.empty() ? Name : LookupModule + "." + Name;
   auto Function = Functions.find(Key);
+  std::vector<std::string> ImportedOverloads;
   if (Function == Functions.end() && Qualified && !LookupModule.empty())
     Function = Functions.find(LookupModule + "." + Name);
   const auto Import = Imports.find(LookupModule);
@@ -52,16 +53,56 @@ sema::Sema::CheckFunctionValue(const lex::Node &Node,
       if (Candidate == Functions.end() || !Candidate->second.Public ||
           !Candidate->second.OwnerClass.empty())
         continue;
-      if (Function != Functions.end()) {
-        Error(Node, lex::DiagnosticKind::AmbiguousName);
-        return std::nullopt;
-      }
-      Function = Candidate;
+      if (Function == Functions.end())
+        Function = Candidate;
+      if (const auto Group =
+              FunctionGroups.find(Candidate->second.QualifiedName);
+          Group != FunctionGroups.end())
+        for (const auto &CandidateKey : Group->second)
+          if (Functions.at(CandidateKey).Public)
+            ImportedOverloads.push_back(CandidateKey);
     }
   }
   if (Function == Functions.end()) {
     Error(Node, lex::DiagnosticKind::UnknownName);
     return std::nullopt;
+  }
+  std::vector<std::string> OverloadKeys;
+  if (!ImportedOverloads.empty())
+    OverloadKeys = ImportedOverloads;
+  else if (const auto Group =
+               FunctionGroups.find(Function->second.QualifiedName);
+           Group != FunctionGroups.end())
+    OverloadKeys = Group->second;
+  if (OverloadKeys.size() > 1) {
+    std::string Details = "candidate signatures:";
+    for (const auto &CandidateKey : OverloadKeys)
+      Details += "\n  " +
+                 FormatFunctionSignature(Functions.at(CandidateKey));
+    if (!Expected || !Expected->IsFunction()) {
+      Error(Node, lex::DiagnosticKind::AmbiguousOverload, Details);
+      return std::nullopt;
+    }
+    const FunctionInfo *Match = nullptr;
+    std::string MatchKey;
+    for (const auto &CandidateKey : OverloadKeys) {
+      const auto &Candidate = Functions.at(CandidateKey);
+      if (Candidate.Parameters == Expected->Parameters &&
+          Expected->Results.size() == 1 &&
+          Candidate.Return == Expected->Results.front()) {
+        if (Match) {
+          Error(Node, lex::DiagnosticKind::AmbiguousOverload, Details);
+          return std::nullopt;
+        }
+        Match = &Candidate;
+        MatchKey = CandidateKey;
+      }
+    }
+    if (!Match) {
+      Error(Node, lex::DiagnosticKind::TypeMismatch, Details);
+      return std::nullopt;
+    }
+    Function = Functions.find(MatchKey);
   }
   const auto &Info = Function->second;
   if ((MetaModules.contains(Info.Module) ||

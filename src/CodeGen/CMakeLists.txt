@@ -19,6 +19,8 @@ target_link_libraries(kelyra_codegen PUBLIC
   LLVM${KELYRA_LLVM_NATIVE_ARCH}Desc
   LLVM${KELYRA_LLVM_NATIVE_ARCH}Info
   LLVMPasses
+  LLVMIRReader
+  LLVMLinker
   kelyra_frontend
   kelyra_ir
   kelyra_sema

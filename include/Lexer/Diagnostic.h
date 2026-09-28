@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <iosfwd>
+#include <string>
 #include <string_view>
 
 namespace kelyra::lex {
@@ -70,6 +71,7 @@ enum class DiagnosticKind {
   UnsupportedExpression,  // Expression is not supported by IR generation.
   UnknownName,            // Name cannot be resolved.
   AmbiguousName,          // Name is provided by multiple wildcard imports.
+  AmbiguousOverload,      // Multiple function signatures match a call.
   InvalidIntegerLiteral,  // Integer literal does not fit its target type.
   MissingReturn,          // Function does not return a value.
   TypeMismatch,           // Expression type does not match its context.
@@ -98,6 +100,7 @@ enum class DiagnosticKind {
 struct Diagnostic {
   DiagnosticKind Kind;
   Location Loc;
+  std::string Detail;
 };
 
 struct DiagnosticInfo {

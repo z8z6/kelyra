@@ -155,11 +155,13 @@ void codegen::IRGen::EmitVirtualSlots(const sema::ClassInfo &Class,
   };
   for (const auto &[Name, Index] : Class.VirtualSlots)
     for (const auto &Member : Class.Node->children)
-      if (Member->kind == lex::TokenKind::ast_function && Member->text == Name)
+      if (Member->kind == lex::TokenKind::ast_function &&
+          Analysis.GetFunctionSignature(*Member) == Name)
         SetSlot(Class, Index, *Member);
   for (const auto &[Name, Slot] : Class.OverrideSlots)
     for (const auto &Member : Class.Node->children)
-      if (Member->kind == lex::TokenKind::ast_function && Member->text == Name)
+      if (Member->kind == lex::TokenKind::ast_function &&
+          Analysis.GetFunctionSignature(*Member) == Name)
         SetSlot(*Analysis.GetClass(Slot.first), Slot.second, *Member);
 }
 
