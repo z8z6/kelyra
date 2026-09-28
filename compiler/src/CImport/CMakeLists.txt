@@ -11,5 +11,9 @@ target_link_libraries(kelyra_cimport PUBLIC kelyra_sema PRIVATE
   LLVMSupport
 )
 if(NOT LLVM_ENABLE_RTTI)
-  target_compile_options(kelyra_cimport PRIVATE -fno-rtti)
+  if(MSVC)
+    target_compile_options(kelyra_cimport PRIVATE /GR-)
+  else()
+    target_compile_options(kelyra_cimport PRIVATE -fno-rtti)
+  endif()
 endif()

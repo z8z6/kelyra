@@ -40,5 +40,9 @@ target_link_libraries(kelyra_codegen PUBLIC
   MLIRTargetLLVMIRExport
 )
 if(NOT LLVM_ENABLE_RTTI)
-  target_compile_options(kelyra_codegen PRIVATE -fno-rtti)
+  if(MSVC)
+    target_compile_options(kelyra_codegen PRIVATE /GR-)
+  else()
+    target_compile_options(kelyra_codegen PRIVATE -fno-rtti)
+  endif()
 endif()

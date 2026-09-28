@@ -10,7 +10,11 @@ target_link_libraries(kelyra-ls PRIVATE
   LLVMSupportLSP
 )
 if(NOT LLVM_ENABLE_RTTI)
-  target_compile_options(kelyra-ls PRIVATE -fno-rtti)
+  if(MSVC)
+    target_compile_options(kelyra-ls PRIVATE /GR-)
+  else()
+    target_compile_options(kelyra-ls PRIVATE -fno-rtti)
+  endif()
 endif()
 set_target_properties(kelyra-ls PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"

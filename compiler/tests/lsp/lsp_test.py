@@ -3,13 +3,11 @@ import pathlib
 import shutil
 import subprocess
 import sys
-import uuid
+import tempfile
 
 # A workspace whose modules reach outside the opened folder: a local path
 # dependency next to the workspace and a cached dependency clone under .kelp.
-fixture = (pathlib.Path(__file__).resolve().parents[2] / "build/tests/lsp" /
-           f"kelyra-lsp-{uuid.uuid4().hex}")
-fixture.mkdir()
+fixture = pathlib.Path(tempfile.mkdtemp(prefix="kelyra-lsp-")).resolve()
 workspace = fixture / "ws"
 demo = fixture / "libs/demo"
 cached = workspace / ".kelp/dependencies/cached"
@@ -400,4 +398,5 @@ receive(6)
 send({"jsonrpc": "2.0", "method": "exit", "params": None})
 process.stdin.close()
 assert process.wait(timeout=5) == 0, process.stderr.read().decode()
+assert fixture.parent == pathlib.Path(tempfile.gettempdir()).resolve()
 shutil.rmtree(fixture, ignore_errors=True)

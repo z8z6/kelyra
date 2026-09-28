@@ -40,6 +40,10 @@ if(NOT TARGET LLVMCore)
     "${KELYRA_LLVM_BINARY_DIR}" EXCLUDE_FROM_ALL)
 endif()
 
+if(MSVC)
+  add_compile_options(/EHsc)
+endif()
+
 add_subdirectory(src/IR)
 
 add_library(kelyra_frontend
@@ -91,7 +95,11 @@ if(TARGET clang)
   add_dependencies(kelyra clang)
 endif()
 if(NOT LLVM_ENABLE_RTTI)
-  target_compile_options(kelyra PRIVATE -fno-rtti)
+  if(MSVC)
+    target_compile_options(kelyra PRIVATE /GR-)
+  else()
+    target_compile_options(kelyra PRIVATE -fno-rtti)
+  endif()
 endif()
 set_target_properties(kelyra PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
