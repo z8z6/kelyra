@@ -1,0 +1,9 @@
+*.vsix
+.gradle/
+build/
+jetbrains/.gradle/
+jetbrains/.intellijPlatform/
+jetbrains/build/
+node_modules/
+assets/1.png
+.npm-cache/

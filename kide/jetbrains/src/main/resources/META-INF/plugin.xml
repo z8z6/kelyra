@@ -1,0 +1,16 @@
+<idea-plugin>
+  <id>com.z8z6.kide</id>
+  <name>Kelyra</name>
+  <vendor url="https://github.com/z8z6">z8z6</vendor>
+  <description>Kelyra language support for JetBrains IDEs.</description>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.modules.ultimate</depends>
+  <depends>com.intellij.modules.lsp</depends>
+  <depends>org.jetbrains.plugins.textmate</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <textmate.bundleProvider implementation="com.z8z6.kide.KelyraBundleProvider"/>
+    <platform.lsp.serverSupportProvider implementation="com.z8z6.kide.KelyraLspServerSupportProvider"/>
+  </extensions>
+</idea-plugin>

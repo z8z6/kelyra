@@ -1,0 +1,126 @@
+{
+  "Module declaration": {
+    "prefix": "module",
+    "body": ["module ${1:name};", "", "${0}"],
+    "description": "Declare this file's module."
+  },
+  "Import module": {
+    "prefix": "import",
+    "body": ["import ${1:module};"],
+    "description": "Import a module."
+  },
+  "Import C header": {
+    "prefix": "importc",
+    "body": ["import c \"${1:header.h}\";"],
+    "description": "Import a C header."
+  },
+  "Function": {
+    "prefix": "fn",
+    "body": ["fn ${1:name}(${2}) -> ${3:i32} {", "  ${0:return 0;}", "}"],
+    "description": "Function declaration."
+  },
+  "Public function": {
+    "prefix": "pubfn",
+    "body": ["pub fn ${1:name}(${2}) -> ${3:i32} {", "  ${0:return 0;}", "}"],
+    "description": "Public function declaration."
+  },
+  "Entry point": {
+    "prefix": "main",
+    "body": ["pub fn main() -> i32 {", "  ${0:return 0;}", "}"],
+    "description": "Executable entry point."
+  },
+  "Class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "  ${2:value}: ${3:i32};",
+      "",
+      "  init(${4}) {",
+      "    ${2:value} = ${5:0};",
+      "  }",
+      "}",
+      "${0}"
+    ],
+    "description": "Class with a field and constructor."
+  },
+  "Public class": {
+    "prefix": "pubclass",
+    "body": [
+      "pub class ${1:Name} {",
+      "  ${2:value}: ${3:i32};",
+      "",
+      "  pub init(${4}) {",
+      "    ${2:value} = ${5:0};",
+      "  }",
+      "}",
+      "${0}"
+    ],
+    "description": "Public class with a field and constructor."
+  },
+  "Constructor": {
+    "prefix": "init",
+    "body": ["init(${1}) {", "  ${0}", "}"],
+    "description": "Class constructor."
+  },
+  "Destructor": {
+    "prefix": "deinit",
+    "body": ["deinit() {", "  ${0}", "}"],
+    "description": "Class destructor."
+  },
+  "If": {
+    "prefix": "if",
+    "body": ["if ${1:condition} {", "  ${0}", "}"],
+    "description": "Conditional branch."
+  },
+  "If else": {
+    "prefix": "ifelse",
+    "body": ["if ${1:condition} {", "  ${2}", "} else {", "  ${0}", "}"],
+    "description": "Conditional branch with an alternative."
+  },
+  "While loop": {
+    "prefix": "while",
+    "body": ["while ${1:condition} {", "  ${0}", "}"],
+    "description": "Loop while the condition holds."
+  },
+  "Compile-time when": {
+    "prefix": "when",
+    "body": ["when ${1:condition} {", "  ${2}", "} else {", "  ${0}", "}"],
+    "description": "Compile-time conditional."
+  },
+  "Inline assembly": {
+    "prefix": "asm",
+    "body": [
+      "asm {",
+      "  ${1:mov {result}, {value}}",
+      "}",
+      ".in(${2:value})",
+      ".out(${3:result})",
+      ".op(intel, nomem, nostack);",
+      "${0}"
+    ],
+    "description": "Inline assembly block with constraints."
+  },
+  "Annotation declaration": {
+    "prefix": "annotation",
+    "body": [
+      "@target(Target.Function)",
+      "annotation ${1:name}(${2:value}: ${3:i32});"
+    ],
+    "description": "Compile-time annotation declaration."
+  },
+  "Type alias": {
+    "prefix": "alias",
+    "body": ["alias ${1:Name} = ${2:i32};"],
+    "description": "Declare a type alias in the current scope."
+  },
+  "Local binding": {
+    "prefix": "let",
+    "body": ["let ${1:name}: ${2:i32} = ${3:0};"],
+    "description": "Local binding with an explicit type."
+  },
+  "Return": {
+    "prefix": "return",
+    "body": ["return ${1};"],
+    "description": "Return from the current function."
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kelp",
+  "scopeName": "source.kelp.toml",
+  "patterns": [
+    {
+      "name": "comment.line.number-sign.kelp",
+      "match": "#.*$"
+    },
+    {
+      "name": "entity.name.section.kelp",
+      "match": "(?<=\\[)[A-Za-z0-9_.-]+(?=\\])"
+    },
+    {
+      "match": "^[ \\t]*([A-Za-z][A-Za-z0-9-]*)(?=[ \\t]*=)",
+      "captures": {
+        "1": {
+          "name": "variable.other.key.kelp"
+        }
+      }
+    },
+    {
+      "name": "string.quoted.double.kelp",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.kelp",
+          "match": "\\\\[\\\\\"nrt]"
+        }
+      ]
+    },
+    {
+      "name": "constant.language.boolean.kelp",
+      "match": "\\b(?:true|false)\\b"
+    },
+    {
+      "name": "constant.numeric.integer.kelp",
+      "match": "\\b[0-9]+\\b"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <mask id="kelp-cutout">
+      <rect width="24" height="24" fill="white"/>
+      <path d="M7 6h3v5.1L15 6h4l-6.4 6.1L19 18h-4.2L10 13.4V18H7z" fill="black"/>
+      <path d="M2 17 7 22H2z" fill="black"/>
+    </mask>
+  </defs>
+  <rect x="2" y="2" width="20" height="20" rx="3" fill="#C5C5C5" mask="url(#kelp-cutout)"/>
+</svg>

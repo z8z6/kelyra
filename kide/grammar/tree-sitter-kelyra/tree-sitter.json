@@ -1,0 +1,16 @@
+{
+  "grammars": [
+    {
+      "name": "kelyra",
+      "camelcase": "Kelyra",
+      "scope": "source.kelyra",
+      "path": ".",
+      "file-types": ["kly"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Incremental editor token grammar for Kelyra"
+  }
+}

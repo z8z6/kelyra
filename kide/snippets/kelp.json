@@ -1,0 +1,58 @@
+{
+  "Project": {
+    "prefix": "project",
+    "body": [
+      "[project]",
+      "name = \"${1:app}\"",
+      "version = \"0.1.0\"",
+      "entry = \"src/main.kly\"",
+      "${0}"
+    ],
+    "description": "Project section."
+  },
+  "Build": {
+    "prefix": "build",
+    "body": [
+      "[build]",
+      "compiler = \"kelyra\"",
+      "kind = \"${1|executable,library|}\"",
+      "output = \"${2:app}\"",
+      "optimization = 0",
+      "safe-level = 0",
+      "c-sources = []",
+      "c-args = []",
+      "${0}"
+    ],
+    "description": "Build section."
+  },
+  "Workspace": {
+    "prefix": "workspace",
+    "body": ["[workspace]", "members = [${1}]", "${0}"],
+    "description": "Subproject members."
+  },
+  "Package": {
+    "prefix": "package",
+    "body": ["[package]", "output = \"${1:app}-0.1.0.tar.gz\"", "${0}"],
+    "description": "Source archive output."
+  },
+  "Test": {
+    "prefix": "test",
+    "body": ["[test]", "sources = [${1}]", "${0}"],
+    "description": "Test sources."
+  },
+  "Git dependency": {
+    "prefix": "dependency",
+    "body": [
+      "[dependencies.${1:kstd}]",
+      "repository = \"${2:git@github.com:owner/repo.git}\"",
+      "revision = \"${3:main}\"",
+      "${0}"
+    ],
+    "description": "Git dependency."
+  },
+  "Path dependency": {
+    "prefix": "path-dependency",
+    "body": ["[dependencies.${1:math}]", "path = \"${2:../libs/math}\"", "${0}"],
+    "description": "Local path dependency."
+  }
+}

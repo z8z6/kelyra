@@ -1,0 +1,35 @@
+{
+  "name": "kelyra",
+  "displayName": "Kelyra",
+  "version": "0.4.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "kelyra",
+        "aliases": ["Kelyra", "kelyra"],
+        "extensions": [".kly"],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "kelp",
+        "aliases": ["Kelp"],
+        "filenames": ["kelp.toml"]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kelyra",
+        "scopeName": "source.kelyra",
+        "path": "./syntaxes/kelyra.tmLanguage.json"
+      },
+      {
+        "language": "kelp",
+        "scopeName": "source.kelp.toml",
+        "path": "./syntaxes/kelp.tmLanguage.json"
+      }
+    ]
+  }
+}
