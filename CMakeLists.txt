@@ -6,7 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(kelp src/main.cpp)
-target_compile_options(kelp PRIVATE -Wall -Wextra -Wpedantic)
+if(MSVC)
+  target_compile_options(kelp PRIVATE /W4)
+else()
+  target_compile_options(kelp PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 target_compile_definitions(kelp PRIVATE KELP_VERSION="${PROJECT_VERSION}")
 install(TARGETS kelp RUNTIME DESTINATION bin)
 
