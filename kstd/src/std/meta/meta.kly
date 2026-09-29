@@ -5,20 +5,7 @@ import std.util.string;
 
 pub alias Id = usize;
 
-// A compile-time handle for a declaration of any kind. meta(...) values are
-// interpreted by the compiler and cannot be passed to runtime functions.
-pub class Symbol {
-  pub id: Id;
-  pub name: StringSlice;
-  pub fn is_public() -> bool {
-    return std.meta.__read_public(id);
-  }
-  pub fn has_annotation(value: Annotation) -> bool {
-    return std.meta.__has_annotation(id, value.id);
-  }
-}
-
-pub class Type: Symbol {
+pub class Annotation: Symbol {
 }
 
 pub class Class: Type {
@@ -53,9 +40,10 @@ pub class Class: Type {
 }
 
 pub class Field: Symbol {
-  pub owner: *Class;
-  pub field_type: Type;
+  pub owner      : *Class;
+  pub field_type : Type;
   pub byte_offset: usize;
+
   pub fn is_static() -> bool {
     return std.meta.__is_static(id);
   }
@@ -63,8 +51,9 @@ pub class Field: Symbol {
 
 pub class Function: Symbol {
   // A free function belongs to a module; a method belongs to a class.
-  pub owner: *Symbol;
+  pub owner      : *Symbol;
   pub return_type: Type;
+
   pub fn is_static() -> bool {
     return std.meta.__is_static(id);
   }
@@ -80,20 +69,33 @@ pub class Function: Symbol {
 }
 
 pub class Parameter: Symbol {
-  pub owner: *Function;
+  pub owner         : *Function;
   pub parameter_type: Type;
-  pub index: usize;
+  pub index         : usize;
 }
 
-pub class Annotation: Symbol {
+// A compile-time handle for a declaration of any kind. meta(...) values are
+// interpreted by the compiler and cannot be passed to runtime functions.
+pub class Symbol {
+  pub id  : Id;
+  pub name: StringSlice;
+
+  pub fn is_public() -> bool {
+    return __read_public(id);
+  }
+  pub fn has_annotation(value: Annotation) -> bool {
+    return __has_annotation(id, value.id);
+  }
 }
 
-// The compiler provides these compile-time metadata operations.
-@intrinsic
-fn __read_public(id: Id) -> bool;
+pub class Type: Symbol {
+}
 
 @intrinsic
 fn __has_annotation(id: Id, annotation_id: Id) -> bool;
+
+@intrinsic
+fn __has_base_class(id: Id) -> bool;
 
 @intrinsic
 fn __has_constructor(id: Id) -> bool;
@@ -105,31 +107,32 @@ fn __has_default_constructor(id: Id) -> bool;
 fn __has_destructor(id: Id) -> bool;
 
 @intrinsic
-fn __has_base_class(id: Id) -> bool;
-
-@intrinsic
-fn __is_interface(id: Id) -> bool;
-
-@intrinsic
-fn __is_final(id: Id) -> bool;
-
-@intrinsic
-fn __has_member(id: Id, name: StringSlice) -> bool;
-
-@intrinsic
 fn __has_field(id: Id, name: StringSlice) -> bool;
 
 @intrinsic
 fn __has_function(id: Id, name: StringSlice) -> bool;
 
 @intrinsic
-fn __is_static(id: Id) -> bool;
-
-@intrinsic
-fn __is_method(id: Id) -> bool;
+fn __has_member(id: Id, name: StringSlice) -> bool;
 
 @intrinsic
 fn __is_constructor(id: Id) -> bool;
 
 @intrinsic
 fn __is_destructor(id: Id) -> bool;
+
+@intrinsic
+fn __is_final(id: Id) -> bool;
+
+@intrinsic
+fn __is_interface(id: Id) -> bool;
+
+@intrinsic
+fn __is_method(id: Id) -> bool;
+
+@intrinsic
+fn __is_static(id: Id) -> bool;
+
+// The compiler provides these compile-time metadata operations.
+@intrinsic
+fn __read_public(id: Id) -> bool;

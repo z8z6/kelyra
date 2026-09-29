@@ -8,7 +8,7 @@
   PascalCase.
 - Validate compiler and Kelp changes with `ctest --test-dir build`, standard
   library changes with the relevant `kstd/tests/` scripts, and editor changes
-  with `npm test --prefix kide`.
+  with `npm test --prefix kide/vscode`.
 - Do not commit generated `build/`, `.kelp/`, `node_modules/`, or VSIX files.
 - Before developing a new feature, study relevant designs in Rust, Go, Zig,
   and other languages. Present a design proposal and wait for review before

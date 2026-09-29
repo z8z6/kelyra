@@ -68,9 +68,10 @@ annotation-parameter = name, ":", type,
 ```
 
 位置参数必须出现在命名参数之前。命名参数不能重复。缺少的可选参数由声明中的默认值填充。参数值必须是编译期常量，支持布尔、字符、整数、浮点数、枚举成员、`StringSlice` 和 `std.meta` 的具体句柄类。句柄参数使用 `meta(...)` 传入；导入 `std.meta` 后，例如函数参数可声明为 `Function`，传入 `meta(handler)`。`Class` 可传给 `Type` 参数，`Symbol` 可接收任一种句柄。
+枚举值的位置参数按枚举类型寻找唯一匹配的形参。例如，`@cfg(arch.X86_64, os.Windows)` 可交换参数顺序；若多个形参接受同一种枚举，则需写出形参名。
 `std.annotation` 显式导入 `std.meta` 和 `std.util.string`。普通项目通过标准库模块搜索路径加载这些依赖；编译器直接调用 Sema 检查单个 AST 时，内建注解声明使用引导路径。
 
-有固定取值的标准注解使用 `std.annotation` 中的枚举：`Layout.System/C`、`CallingConvention.C/System`、`InlineMode.Auto/Always`、`Retention.Source/Compile`。例如 `@layout(Layout.C)`、`@callconv(CallingConvention.C)`。这些值必须写成对应枚举的成员；任意字符串会被类型检查拒绝。
+有固定取值的标准注解使用 `std.annotation` 中的枚举：`os.Any/Windows/Linux/MacOS`、`arch.Any/X86_64/AArch64`、`cc.C/System`、`Layout.System/C`、`InlineMode.Auto/Always`、`Retention.Source/Compile`。例如 `@cfg(arch.X86_64)`、`@layout(Layout.C)`、`@callconv(cc.C)`。这些值必须写成对应枚举的成员；任意字符串会被类型检查拒绝。
 
 ## AST
 

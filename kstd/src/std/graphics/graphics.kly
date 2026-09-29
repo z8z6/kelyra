@@ -18,9 +18,31 @@ pub annotation vertex_index();
 @target(Target.Field, Target.Parameter)
 pub annotation location(index: usize);
 
+// Resource parameters are bound by the host at a descriptor set and slot.
+// The two resource kinds stay separate so Vulkan and Direct3D can share the
+// same shader source and sampler state can be reused by multiple textures.
+pub enum ResourceKind {
+  Texture2D,
+  SamplerState
+}
+
+@target(Target.Class)
+pub annotation resource(kind: ResourceKind);
+
+@target(Target.Parameter)
+pub annotation binding(set: u32, slot: u32);
+
 // Maps a declared shader-only function to a target's standard GPU intrinsic.
 @target(Target.Function)
 pub annotation gpu_builtin(name: StringSlice);
+
+@resource(ResourceKind.SamplerState)
+pub class SamplerState {
+}
+
+@resource(ResourceKind.Texture2D)
+pub class Texture2D {
+}
 
 pub class Vec2 {
   pub x: f32;
@@ -56,4 +78,12 @@ pub class Vec4 {
     this.z = z;
     this.w = w;
   }
+}
+
+@gpu_builtin("sample_2d")
+pub fn sample_2d(image  : Texture2D,
+                 sampler: SamplerState,
+                 uv     : Vec2) -> Vec4 {
+  // GPU compilation replaces this call with a shader sampling operation.
+  return Vec4(0.0, 0.0, 0.0, 0.0);
 }

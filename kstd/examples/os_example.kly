@@ -4,39 +4,38 @@ import std.os;
 
 @main
 pub fn main() -> i32 {
-  if std.os.process_id() <= 0 {
+  if process_id() <= 0 {
     return 1;
   }
-  let before: i64 = std.os.monotonic_millis();
-  if before < 0 || std.os.sleep_millis(1) != 0 {
+  let before: i64 = monotonic_millis();
+  if before < 0 || sleep_millis(1) != 0 {
     return 2;
   }
-  if std.os.monotonic_millis() < before {
+  if monotonic_millis() < before {
     return 3;
   }
-  if std.os.sleep_millis(-1) == 0 {
+  if sleep_millis(-1) == 0 {
     return 4;
   }
-
-  let buffer: *u8 = std.alloc.allocate(256);
-  if std.alloc.is_null(buffer) {
+  let buffer: *u8 = allocate(256);
+  if is_null(buffer) {
     return 5;
   }
-  let length: i64 = std.os.working_directory(buffer, 256);
-  if length <= 1 || std.alloc.load(buffer, 0) == 0 {
-    std.alloc.release(buffer);
+  let length: i64 = working_directory(buffer, 256);
+  if length <= 1 || load(buffer, 0) == 0 {
+    release(buffer);
     return 9;
   }
-  if std.os.working_directory(buffer, 1) >= 0 {
-    std.alloc.release(buffer);
+  if working_directory(buffer, 1) >= 0 {
+    release(buffer);
     return 10;
   }
-  std.alloc.release(buffer);
+  release(buffer);
   let environment: [128]u8;
   let size = std.os.environment("KSTD_OS_TEST", &environment[0], 128);
   if size < 1 || size > 128 {
     return 11;
   }
-  std.io.println((&environment[0]) as *c.char);
+  println((&environment[0]) as *c.char);
   return 0;
 }

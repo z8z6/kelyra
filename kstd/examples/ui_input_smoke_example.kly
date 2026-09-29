@@ -1,0 +1,105 @@
+@cfg(os=os.Windows, arch=arch.X86_64)
+import std.graphics.ui;
+@cfg(os=os.Windows, arch=arch.X86_64)
+import std.graphics.ui.win;
+@cfg(os=os.Windows, arch=arch.X86_64)
+import std.win.input;
+@cfg(os=os.Windows, arch=arch.X86_64)
+import std.win.message;
+@cfg(os=os.Windows, arch=arch.X86_64)
+import std.win.window;
+
+@cfg(os=os.Windows, arch=arch.X86_64)
+class Probe {
+  right_down: i32;
+  double_click: i32;
+  wheel: i32;
+  key: i32;
+  character: u32;
+  resized: i32;
+  cancel_close: bool;
+}
+
+@cfg(os=os.Windows, arch=arch.X86_64)
+fn on_event(context: *u8, event: *std.graphics.ui.Event) -> void {
+  let probe = context as *Probe;
+  if event.kind == std.graphics.ui.EventKind.PointerDown &&
+      event.button == std.graphics.ui.MouseButton.Right {
+    probe.right_down = probe.right_down + 1;
+  }
+  if event.kind == std.graphics.ui.EventKind.PointerDoubleClick &&
+      event.button == std.graphics.ui.MouseButton.Left {
+    probe.double_click = probe.double_click + 1;
+  }
+  if event.kind == std.graphics.ui.EventKind.PointerWheel {
+    probe.wheel = event.wheel_y;
+  }
+  if event.kind == std.graphics.ui.EventKind.KeyDown &&
+      event.key == 65 && event.repeat_count == 2 &&
+      event.scan_code == 30 && event.repeated {
+    probe.key = probe.key + 1;
+  }
+  if event.kind == std.graphics.ui.EventKind.TextInput {
+    probe.character = event.character;
+  }
+  if event.kind == std.graphics.ui.EventKind.Resize &&
+      event.width == 400 && event.height == 350 {
+    probe.resized = probe.resized + 1;
+  }
+  if event.kind == std.graphics.ui.EventKind.Close && probe.cancel_close {
+    event.handled = true;
+  }
+}
+
+@cfg(os=os.Windows, arch=arch.X86_64)
+@main
+pub fn main() -> i32 {
+  if std.win.input.low_signed(-1) != -1 ||
+      std.win.input.high_signed(-65536) != -1 ||
+      std.win.input.combine_surrogates(55357, 56832) != 128512 {
+    return 1;
+  }
+  let window = std.graphics.ui.win.Window("Input events", 320, 240);
+  if !window.valid() { return 2; }
+  let probe = Probe();
+  let context = (&probe) as *u8;
+  window.ui.root.set_handler(on_event, context);
+
+  // SendMessage invokes WndProc before poll, including for WM_SIZE.
+  std.win.message.send(window.handle(), std.win.message.Code.Size,
+                       0, 350 * 65536 + 400);
+  std.win.message.send(window.handle(), std.win.message.Code.RightButtonDown,
+                       0, 20 * 65536 + 20);
+  std.win.message.send(window.handle(),
+                       std.win.message.Code.LeftButtonDoubleClick,
+                       0, 20 * 65536 + 20);
+  let wheel_point = std.win.window.Point();
+  wheel_point.x = 20; wheel_point.y = 20;
+  std.win.input.client_to_screen(window.handle(), &wheel_point);
+  let wheel_coordinates = wheel_point.y * 65536 + wheel_point.x;
+  std.win.message.send(window.handle(), std.win.message.Code.MouseWheel,
+                       120 * 65536, wheel_coordinates as isize);
+  std.win.message.send(window.handle(), std.win.message.Code.KeyDown,
+                       65, 1073741824 + 30 * 65536 + 2);
+  std.win.message.send(window.handle(), std.win.message.Code.Character,
+                       55357, 0);
+  std.win.message.send(window.handle(), std.win.message.Code.Character,
+                       56832, 0);
+  if !window.poll() { return 3; }
+  if probe.right_down != 1 { return 4; }
+  if probe.double_click != 1 { return 12; }
+  if probe.wheel != 120 { return 6; }
+  if probe.key != 1 { return 7; }
+  if probe.character != 128512 { return 8; }
+  if probe.resized != 1 { return 9; }
+  if window.client_width() != 400 || window.client_height() != 350 {
+    return 10;
+  }
+  probe.cancel_close = true;
+  std.win.message.send(window.handle(), std.win.message.Code.Close, 0, 0);
+  if !window.poll() { return 11; }
+  probe.cancel_close = false;
+  std.win.message.send(window.handle(), std.win.message.Code.Close, 0, 0);
+  if window.poll() { return 5; }
+  return 0;
+}

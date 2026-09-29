@@ -23,8 +23,10 @@ pub fn main() -> i32 {
 `@cfg` 可在顶层按目标系统和架构选择模块或声明。
 
 ```kelyra
-@cfg(os="windows", arch="x86_64")
+@cfg(os.Windows, arch.X86_64)
 module app.windows;
 ```
 
 条件在依赖加载和语义检查之前生效。跨目标链接仍需要相应平台工具链和库。平台 API 的示例见[窗口与 UI](/library/ui.md)。
+
+`os` 与 `arch` 是 `std.annotation` 的枚举；只有一个条件时可直接写 `@cfg(arch.X86_64)`。两个枚举参数也可交换顺序，编译器按类型绑定。字符串条件不再接受。

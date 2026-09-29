@@ -18,6 +18,21 @@ host code.
 See `kstd/examples/triangle_shaders.kly` for a complete vertex and
 fragment pair.
 
+## Sampled resources
+
+`std.graphics.Texture2D` and `std.graphics.SamplerState` are separate shader
+resource types. Declare them as entry parameters with
+`@std.graphics.binding(set, slot)` and call `std.graphics.sample_2d` from a
+fragment shader. The binding annotation resolves by its full module name, so
+another module can define its own `binding` annotation. The compiler checks
+resource types, binding uniqueness, and sampling arguments. The shared Shader
+IR represents resources and sampling; Vulkan SPIR-V emits separate sampled
+image and sampler descriptors. See `kstd/examples/texture_shaders.kly`.
+
+DXIL resource lowering is not yet implemented. Requesting DXIL for a shader
+that uses these resources fails with an explicit error instead of producing
+invalid bytecode.
+
 The first shader subset supports scalar `f32`, `i32`, `u32`, `bool`, data
 classes, direct calls to local or imported Kelyra functions, arithmetic,
 comparisons, typed or inferred

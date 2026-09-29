@@ -1,0 +1,10 @@
+.git/**
+.gitignore
+AGENTS.md
+.npm-cache/**
+.gradle/**
+test/**
+grammar/**
+build/**
+*.vsix
+assets/1.png

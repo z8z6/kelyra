@@ -1,6 +1,7 @@
 #include "Lexer/Formatter.h"
 
 #include <algorithm>
+#include <cctype>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -46,6 +47,21 @@ public:
   void PushIndent() { ++Indent; }
   void PopIndent() { --Indent; }
   bool IsLineStart() const { return LineStart; }
+
+  unsigned Column() const {
+    const auto Last = Output.rfind('\n');
+    return static_cast<unsigned>(Output.size() -
+                                 (Last == std::string::npos ? 0 : Last + 1));
+  }
+
+  unsigned IndentColumn() const { return Indent * 2; }
+
+  void PadTo(unsigned Column) {
+    if (LineStart)
+      Write("");
+    if (const auto Current = this->Column(); Current < Column)
+      Output.append(Column - Current, ' ');
+  }
 
   void RawLines(std::string_view Text) {
     while (!Text.empty()) {
@@ -117,13 +133,218 @@ void CollectTypeOffsets(const Node &Node,
 }
 
 void CollectAnnotationEnds(const Node &Node,
-                           std::unordered_set<std::size_t> &Ends) {
+                           std::unordered_set<std::size_t> &Ends,
+                           bool InParameter = false) {
   if (Node.kind == TokenKind::ast_annotation_uses)
     return;
-  if (Node.kind == TokenKind::ast_annotation)
+  InParameter |= Node.kind == TokenKind::ast_parameter ||
+                 Node.kind == TokenKind::ast_parameter_pack;
+  if (Node.kind == TokenKind::ast_annotation && !InParameter)
     Ends.insert(Node.Loc.End());
   for (const auto &Child : Node.children)
-    CollectAnnotationEnds(*Child, Ends);
+    CollectAnnotationEnds(*Child, Ends, InParameter);
+}
+
+struct ParameterLayout {
+  bool Multiline = false;
+  bool FirstOnNewLine = false;
+  unsigned MaxPrefix = 0;
+  unsigned FirstWidth = 0;
+  std::unordered_map<std::size_t, unsigned> Starts;
+  std::unordered_map<std::size_t, unsigned> ColonPads;
+  std::unordered_set<std::size_t> Names;
+  std::unordered_set<std::size_t> Commas;
+};
+
+void CollectParameterLayouts(
+    const Node &Node, const ParseResult &Parsed,
+    std::unordered_map<std::size_t, ParameterLayout> &Layouts) {
+  const auto Kind = Node.kind;
+  if (Kind == TokenKind::ast_function || Kind == TokenKind::ast_constructor ||
+      Kind == TokenKind::ast_destructor) {
+    const auto &Tokens = Parsed.tokens;
+    const auto First = std::find_if(Tokens.begin(), Tokens.end(),
+                                    [&](const Token &Token) {
+                                      return Token.Loc.Offset >= Node.Loc.Offset;
+                                    });
+    auto Name = std::find_if(First, Tokens.end(), [&](const Token &Token) {
+      return Token.kind == TokenKind::keyword_fn ||
+             (Token.kind == TokenKind::name &&
+              std::string_view(Parsed.source)
+                      .substr(Token.Loc.Offset, Token.Loc.Len) == Node.text);
+    });
+    if (Name != Tokens.end()) {
+      const auto Open = std::find_if(Name + 1, Tokens.end(),
+                                     [](const Token &Token) {
+                                       return Token.kind == TokenKind::punc_left_paren;
+                                     });
+      if (Open != Tokens.end()) {
+        ParameterLayout Layout;
+        std::vector<std::pair<std::size_t, unsigned>> ColonWidths;
+        unsigned MaxNameWidth = 0;
+        unsigned Depth = 1;
+        auto Close = Open + 1;
+        for (; Close != Tokens.end() && Depth; ++Close) {
+          if (Close->kind == TokenKind::punc_left_paren)
+            ++Depth;
+          else if (Close->kind == TokenKind::punc_right_paren)
+            --Depth;
+          else if (Depth == 1 && Close->kind == TokenKind::punc_comma)
+            Layout.Commas.insert(Close->Loc.Offset);
+        }
+        if (Close != Tokens.end()) {
+          const auto End = (Close - 1)->Loc.Offset;
+          Layout.Multiline = std::string_view(Parsed.source)
+                                 .substr(Open->Loc.End(), End - Open->Loc.End())
+                                 .find('\n') != std::string_view::npos;
+        }
+        for (const auto &Child : Node.children) {
+          if (Child->kind != TokenKind::ast_parameter &&
+              Child->kind != TokenKind::ast_parameter_pack)
+            continue;
+          const auto Start = Child->Loc.Offset;
+          auto ParameterName = std::find_if(
+              Tokens.begin(), Tokens.end(), [&](const Token &Token) {
+                return Token.Loc.Offset >= Start && Token.kind == TokenKind::name &&
+                       std::string_view(Parsed.source)
+                               .substr(Token.Loc.Offset, Token.Loc.Len) == Child->text;
+              });
+          if (ParameterName == Tokens.end())
+            continue;
+          if (Layout.Starts.empty()) {
+            Layout.FirstWidth = Child->Loc.End() - Start;
+            Layout.FirstOnNewLine =
+                std::string_view(Parsed.source)
+                    .substr(Open->Loc.End(), Start - Open->Loc.End())
+                    .find('\n') != std::string_view::npos;
+          }
+          const auto Prefix = std::string_view(Parsed.source)
+                                  .substr(Start, ParameterName->Loc.Offset - Start);
+          unsigned Width = 0;
+          bool Space = false;
+          for (const char Character : Prefix)
+            if (Character == ' ' || Character == '\t' || Character == '\n' ||
+                Character == '\r')
+              Space = true;
+            else {
+              if (Space && Width)
+                ++Width;
+              ++Width;
+              Space = false;
+            }
+          if (Width)
+            ++Width;
+          for (auto Token = std::find_if(
+                   Tokens.begin(), Tokens.end(), [&](const auto &Item) {
+                     return Item.Loc.Offset >= Start;
+                   });
+               Token != Tokens.end() &&
+               Token->Loc.Offset < ParameterName->Loc.Offset;
+               ++Token) {
+            if (Token->kind == TokenKind::punc_comma &&
+                Token->Loc.End() < Parsed.source.size() &&
+                !std::isspace(static_cast<unsigned char>(
+                    Parsed.source[Token->Loc.End()])))
+              ++Width;
+          }
+          Layout.Starts.emplace(Start, Width);
+          Layout.Names.insert(ParameterName->Loc.Offset);
+          Layout.MaxPrefix = std::max(Layout.MaxPrefix, Width);
+          const auto Colon =
+              std::find_if(ParameterName + 1, Tokens.end(), [](const auto &Item) {
+                return Item.kind == TokenKind::punc_colon;
+              });
+          if (Colon != Tokens.end() && Colon->Loc.Offset < Child->Loc.End()) {
+            const auto NameWidth = static_cast<unsigned>(Child->text.size());
+            ColonWidths.emplace_back(Colon->Loc.Offset, NameWidth);
+            MaxNameWidth = std::max(MaxNameWidth, NameWidth);
+          }
+        }
+        for (const auto &[Offset, Width] : ColonWidths)
+          Layout.ColonPads.emplace(Offset, MaxNameWidth - Width);
+        Layouts.emplace(Open->Loc.Offset, std::move(Layout));
+      }
+    }
+  }
+  for (const auto &Child : Node.children)
+    CollectParameterLayouts(*Child, Parsed, Layouts);
+}
+
+void CollectClassLayout(const Node &Node, const ParseResult &Parsed,
+                        std::unordered_map<std::size_t, unsigned> &NamePads,
+                        std::unordered_map<std::size_t, unsigned> &ColonPads,
+                        std::unordered_set<std::size_t> &BlankBefore) {
+  if (Node.kind == TokenKind::ast_class) {
+    const auto IsField = [](TokenKind Kind) {
+      return Kind == TokenKind::ast_field || Kind == TokenKind::ast_const_field;
+    };
+    const auto IsMethod = [](TokenKind Kind) {
+      return Kind == TokenKind::ast_function ||
+             Kind == TokenKind::ast_constructor ||
+             Kind == TokenKind::ast_destructor;
+    };
+    const auto &Members = Node.children;
+    for (std::size_t Index = 0; Index < Members.size();) {
+      const auto &Member = *Members[Index];
+      if (Index && ((IsField(Member.kind) && IsMethod(Members[Index - 1]->kind)) ||
+                    (IsMethod(Member.kind) && IsField(Members[Index - 1]->kind))))
+        BlankBefore.insert(Member.Loc.Offset);
+      if (!IsField(Member.kind)) {
+        ++Index;
+        continue;
+      }
+      struct FieldAlignment {
+        std::size_t NameOffset;
+        std::size_t ColonOffset;
+        unsigned PrefixWidth;
+        unsigned NameWidth;
+      };
+      std::vector<FieldAlignment> Group;
+      unsigned MaximumPrefix = 0;
+      unsigned MaximumName = 0;
+      do {
+        const auto &Field = *Members[Index];
+        unsigned PrefixWidth = 0;
+        if (Field.kind == TokenKind::ast_const_field)
+          PrefixWidth += 6;
+        if (std::any_of(Field.children.begin(), Field.children.end(),
+                        [](const auto &Part) {
+                          return Part->kind == TokenKind::ast_public;
+                        }))
+          PrefixWidth += 4;
+        const auto Name = std::find_if(
+            Parsed.tokens.begin(), Parsed.tokens.end(), [&](const Token &Token) {
+              return Token.Loc.Offset >= Field.Loc.Offset &&
+                     Token.kind == TokenKind::name &&
+                     std::string_view(Parsed.source)
+                             .substr(Token.Loc.Offset, Token.Loc.Len) == Field.text;
+            });
+        if (Name != Parsed.tokens.end()) {
+          const auto Colon = std::find_if(Name + 1, Parsed.tokens.end(),
+                                          [](const Token &Token) {
+                                            return Token.kind == TokenKind::punc_colon;
+                                          });
+          if (Colon != Parsed.tokens.end() &&
+              Colon->Loc.Offset < Field.Loc.End()) {
+            const auto NameWidth = static_cast<unsigned>(Field.text.size());
+            Group.push_back({Name->Loc.Offset, Colon->Loc.Offset, PrefixWidth,
+                             NameWidth});
+            MaximumPrefix = std::max(MaximumPrefix, PrefixWidth);
+            MaximumName = std::max(MaximumName, NameWidth);
+          }
+        }
+        ++Index;
+      } while (Index < Members.size() && IsField(Members[Index]->kind));
+      for (const auto &Field : Group) {
+        NamePads.emplace(Field.NameOffset,
+                         MaximumPrefix - Field.PrefixWidth);
+        ColonPads.emplace(Field.ColonOffset,
+                          MaximumName - Field.NameWidth);
+      }
+    }
+  }
+  for (const auto &Child : Node.children)
+    CollectClassLayout(*Child, Parsed, NamePads, ColonPads, BlankBefore);
 }
 
 void CollectGenericAngles(const Node &Node, std::string_view Source,
@@ -174,6 +395,53 @@ void CollectGenericAngles(const Node &Node, std::string_view Source,
   }
   for (const auto &Child : Node.children)
     CollectGenericAngles(*Child, Source, Angles);
+}
+
+void CollectLogicalBreaks(
+    const Node &Node, const ParseResult &Parsed,
+    std::unordered_map<std::size_t, std::size_t> &BreakAfter,
+    bool NestedLogical = false) {
+  const bool Logical = Node.kind == TokenKind::ast_binary &&
+                       (Node.text == "||" || Node.text == "&&");
+  if (Logical && !NestedLogical) {
+    std::vector<const kelyra::lex::Node *> Operands;
+    const auto Flatten = [&](const auto &Self,
+                             const kelyra::lex::Node &Part) -> void {
+      if (Part.kind == TokenKind::ast_binary && Part.text == Node.text &&
+          Part.children.size() == 2) {
+        Self(Self, *Part.children[0]);
+        Self(Self, *Part.children[1]);
+      } else {
+        Operands.push_back(&Part);
+      }
+    };
+    Flatten(Flatten, Node);
+    unsigned Width = 0;
+    bool Space = false;
+    for (const char Character : std::string_view(Parsed.source).substr(
+             Node.Loc.Offset, Node.Loc.Len)) {
+      if (std::isspace(static_cast<unsigned char>(Character))) {
+        Space = true;
+      } else {
+        Width += 1 + (Space && Width ? 1 : 0);
+        Space = false;
+      }
+    }
+    if (Operands.size() > 1 && Width + 4 > 80)
+      for (std::size_t Index = 1; Index < Operands.size(); ++Index)
+        for (const auto &Token : Parsed.tokens)
+          if (Token.Loc.Offset >= Operands[Index - 1]->Loc.End() &&
+              Token.Loc.End() <= Operands[Index]->Loc.Offset &&
+              std::string_view(Parsed.source).substr(Token.Loc.Offset,
+                                                     Token.Loc.Len) == Node.text) {
+            BreakAfter.emplace(Token.Loc.Offset, Node.Loc.End());
+            break;
+          }
+  }
+  for (const auto &Child : Node.children)
+    CollectLogicalBreaks(*Child, Parsed, BreakAfter,
+                         Logical && Child->kind == TokenKind::ast_binary &&
+                             Child->text == Node.text);
 }
 
 std::vector<Token> NormalizeImports(const ParseResult &Parsed) {
@@ -533,10 +801,19 @@ std::string kelyra::lex::Format(const ParseResult &Parsed,
   std::unordered_set<std::size_t> GenericAngles;
   std::unordered_set<std::size_t> AnnotationEnds;
   std::unordered_set<std::size_t> BlankAfterComments;
+  std::unordered_set<std::size_t> BlankBeforeMembers;
+  std::unordered_map<std::size_t, unsigned> FieldColonPads;
+  std::unordered_map<std::size_t, unsigned> FieldNamePads;
+  std::unordered_map<std::size_t, ParameterLayout> ParameterLayouts;
+  std::unordered_map<std::size_t, std::size_t> LogicalBreaks;
   if (Parsed.root) {
     CollectTypeOffsets(*Parsed.root, TypePointers, ArrayElements);
     CollectGenericAngles(*Parsed.root, Parsed.source, GenericAngles);
     CollectAnnotationEnds(*Parsed.root, AnnotationEnds);
+    CollectClassLayout(*Parsed.root, Parsed, FieldNamePads, FieldColonPads,
+                       BlankBeforeMembers);
+    CollectParameterLayouts(*Parsed.root, Parsed, ParameterLayouts);
+    CollectLogicalBreaks(*Parsed.root, Parsed, LogicalBreaks);
   }
   for (std::size_t Index = 0; Index + 1 < Parsed.tokens.size(); ++Index) {
     const auto &Comment = Parsed.tokens[Index];
@@ -553,7 +830,17 @@ std::string kelyra::lex::Format(const ParseResult &Parsed,
   std::vector<bool> StructBraces;
   std::vector<bool> AsmBraces;
   unsigned Parentheses = 0;
-  std::vector<unsigned> AnnotatedParameterDepths;
+  struct ActiveParameters {
+    const ParameterLayout *Layout;
+    unsigned Depth;
+    unsigned NameColumn;
+    unsigned BaseColumn;
+    bool Multiline;
+    bool BreakFirst;
+  };
+  std::vector<ActiveParameters> ActiveParameterLists;
+  std::vector<std::size_t> ContinuationEnds;
+  std::size_t LastSourceEnd = 0;
   TokenKind Previous = TokenKind::end;
   bool AsmChain = false;
   bool BlankAfterComment = false;
@@ -569,6 +856,44 @@ std::string kelyra::lex::Format(const ParseResult &Parsed,
       break;
     const auto Text =
         std::string_view(Parsed.source).substr(Token.Loc.Offset, Token.Loc.Len);
+
+    while (!ContinuationEnds.empty() &&
+           Token.Loc.Offset >= ContinuationEnds.back()) {
+      Output.PopIndent();
+      ContinuationEnds.pop_back();
+    }
+    if (Index && Token.Loc.Offset >= LastSourceEnd &&
+        Output.IsLineStart()) {
+      const auto Gap = std::string_view(Parsed.source).substr(
+          LastSourceEnd, Token.Loc.Offset - LastSourceEnd);
+      if (std::count(Gap.begin(), Gap.end(), '\n') > 1)
+        Output.NewLine(true);
+    }
+    LastSourceEnd = Token.Loc.End();
+
+    if (BlankBeforeMembers.contains(Token.Loc.Offset))
+      Output.NewLine(true);
+    if (const auto Pad = FieldNamePads.find(Token.Loc.Offset);
+        Pad != FieldNamePads.end()) {
+      if (Output.IsLineStart())
+        Output.PadTo(Output.IndentColumn());
+      Output.PadTo(Output.Column() + Pad->second);
+    }
+    if (!ActiveParameterLists.empty()) {
+      const auto &Active = ActiveParameterLists.back();
+      if (Active.Multiline) {
+        const auto Start = Active.Layout->Starts.find(Token.Loc.Offset);
+        if (Active.BreakFirst) {
+          if (Start != Active.Layout->Starts.end())
+            Output.PadTo(Active.BaseColumn);
+          if (Active.Layout->Names.contains(Token.Loc.Offset))
+            Output.PadTo(Active.NameColumn);
+        } else if (Start != Active.Layout->Starts.end() &&
+                   Active.NameColumn >= Start->second) {
+          Output.PadTo(Active.NameColumn - Start->second);
+        }
+      }
+    }
 
     if (Token.kind == TokenKind::comment) {
       if (!Output.IsLineStart())
@@ -629,6 +954,7 @@ std::string kelyra::lex::Format(const ParseResult &Parsed,
       break;
     }
     case TokenKind::punc_semicolon: {
+      Output.TrimSpace();
       Output.Write(Text);
       std::size_t NextIndex = Index + 1;
       const bool InlineComment = NextIndex < Tokens.size() &&
@@ -656,12 +982,25 @@ std::string kelyra::lex::Format(const ParseResult &Parsed,
     }
     case TokenKind::punc_comma:
       Output.Write(Text);
-      if (!StructBraces.empty() && StructBraces.back() && Parentheses == 0)
+      if (!ActiveParameterLists.empty() &&
+          ActiveParameterLists.back().Depth == Parentheses &&
+          ActiveParameterLists.back().Multiline &&
+          ActiveParameterLists.back().Layout->Commas.contains(Token.Loc.Offset))
+        Output.NewLine();
+      else if (!StructBraces.empty() && StructBraces.back() && Parentheses == 0)
         Output.NewLine();
       else
         Output.Space();
       break;
     case TokenKind::punc_colon:
+      if (const auto Pad = FieldColonPads.find(Token.Loc.Offset);
+          Pad != FieldColonPads.end())
+        Output.PadTo(Output.Column() + Pad->second);
+      if (!ActiveParameterLists.empty() && ActiveParameterLists.back().Multiline)
+        if (const auto Pad = ActiveParameterLists.back().Layout->ColonPads.find(
+                Token.Loc.Offset);
+            Pad != ActiveParameterLists.back().Layout->ColonPads.end())
+          Output.PadTo(Output.Column() + Pad->second);
       Output.Write(Text);
       Output.Space();
       break;
@@ -669,15 +1008,16 @@ std::string kelyra::lex::Format(const ParseResult &Parsed,
     case TokenKind::punc_right_bracket:
     case TokenKind::punc_right_paren:
       if (Token.kind == TokenKind::punc_right_paren &&
-          !AnnotatedParameterDepths.empty() &&
-          AnnotatedParameterDepths.back() == Parentheses) {
+          !ActiveParameterLists.empty() &&
+          ActiveParameterLists.back().Depth == Parentheses &&
+          ActiveParameterLists.back().BreakFirst)
         Output.NewLine();
-        Output.PopIndent();
-        AnnotatedParameterDepths.pop_back();
-      }
       Output.TrimSpace();
       Output.Write(Text);
       if (Token.kind == TokenKind::punc_right_paren) {
+        if (!ActiveParameterLists.empty() &&
+            ActiveParameterLists.back().Depth == Parentheses)
+          ActiveParameterLists.pop_back();
         --Parentheses;
         const auto Next =
             Index + 1 < Tokens.size() ? Tokens[Index + 1].kind : TokenKind::end;
@@ -696,20 +1036,41 @@ std::string kelyra::lex::Format(const ParseResult &Parsed,
         Output.Space();
       Output.Write(Text);
       ++Parentheses;
+      if (const auto Layout = ParameterLayouts.find(Token.Loc.Offset);
+          Layout != ParameterLayouts.end()) {
+        const auto First = Index + 1 < Tokens.size()
+                               ? Layout->second.Starts.find(Tokens[Index + 1].Loc.Offset)
+                               : Layout->second.Starts.end();
+        const auto FirstPrefix = First == Layout->second.Starts.end()
+                                     ? 0U
+                                     : First->second;
+        const bool BreakFirst =
+            Layout->second.FirstOnNewLine ||
+            (Layout->second.Multiline && Layout->second.MaxPrefix) ||
+            Output.Column() + Layout->second.FirstWidth > 80;
+        const unsigned BaseColumn = Output.IndentColumn() + 2;
+        ActiveParameterLists.push_back({
+            &Layout->second, Parentheses,
+            BreakFirst ? BaseColumn + Layout->second.MaxPrefix
+                       : std::max(Output.Column() + FirstPrefix,
+                                  Output.IndentColumn() + Layout->second.MaxPrefix),
+            BaseColumn, Layout->second.Multiline || BreakFirst, BreakFirst});
+        if (BreakFirst)
+          Output.NewLine();
+      }
       break;
     case TokenKind::punc_at:
-      if (Parentheses && (Previous == TokenKind::punc_left_paren ||
-                          Previous == TokenKind::punc_comma)) {
-        Output.NewLine();
-        if (AnnotatedParameterDepths.empty() ||
-            AnnotatedParameterDepths.back() != Parentheses) {
-          Output.PushIndent();
-          AnnotatedParameterDepths.push_back(Parentheses);
-        }
-      }
+      if (Previous == TokenKind::name ||
+          Previous == TokenKind::punc_right_paren)
+        Output.Space();
       Output.Write(Text);
       break;
     case TokenKind::keyword_else:
+      Output.Write(Text);
+      Output.Space();
+      break;
+    case TokenKind::keyword_as:
+      Output.Space();
       Output.Write(Text);
       Output.Space();
       break;
@@ -735,7 +1096,15 @@ std::string kelyra::lex::Format(const ParseResult &Parsed,
         if (!Unary)
           Output.Space();
         Output.Write(Text);
-        if (!Unary)
+        if (const auto Break = LogicalBreaks.find(Token.Loc.Offset);
+            Break != LogicalBreaks.end()) {
+          if (ContinuationEnds.empty() ||
+              ContinuationEnds.back() != Break->second) {
+            ContinuationEnds.push_back(Break->second);
+            Output.PushIndent();
+          }
+          Output.NewLine();
+        } else if (!Unary)
           Output.Space();
       } else {
         if (StartsWord(Token.kind) &&

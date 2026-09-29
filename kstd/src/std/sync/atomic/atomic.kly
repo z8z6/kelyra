@@ -1,4 +1,4 @@
-@cfg(arch = "x86_64")
+@cfg(arch = arch.X86_64)
 module std.sync.atomic;
 
 pub fn load_acquire(word: *u32) -> u32 {

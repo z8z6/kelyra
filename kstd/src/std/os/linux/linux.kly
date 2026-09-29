@@ -1,7 +1,7 @@
-@cfg(os="linux", arch="x86_64") module std.os.linux;
+@cfg(os=os.Linux, arch=arch.X86_64) module std.os.linux;
 
 @extern("getenv")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn libc_getenv(name: *c.char) -> *c.char;
 
 // Linux x86-64 kernel timespec layout.

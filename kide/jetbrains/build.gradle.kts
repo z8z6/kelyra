@@ -17,7 +17,12 @@ repositories {
 
 dependencies {
   intellijPlatform {
-    intellijIdea("2025.2.6.1")
+    val localIdea = providers.environmentVariable("KIDE_IDEA_HOME").orNull
+    if (localIdea != null) {
+      local(localIdea)
+    } else {
+      intellijIdea("2025.2.6.1")
+    }
     bundledPlugin("org.jetbrains.plugins.textmate")
     bundledModule("com.intellij.modules.lsp")
   }
@@ -33,18 +38,24 @@ intellijPlatform {
 }
 
 tasks {
+  // The plugin has no Swing forms to instrument.
+  named("instrumentCode") { enabled = false }
   withType<JavaCompile> {
     sourceCompatibility = "21"
     targetCompatibility = "21"
+    providers.environmentVariable("KIDE_JAVAC").orNull?.let {
+      options.isFork = true
+      options.forkOptions.executable = it
+    }
   }
   withType<PrepareSandboxTask> {
     from(layout.projectDirectory.dir("textmate")) {
       into(pluginName.map { "$it/textmate" })
     }
-    from(layout.projectDirectory.dir("../syntaxes")) {
+    from(layout.projectDirectory.dir("../vscode/syntaxes")) {
       into(pluginName.map { "$it/textmate/syntaxes" })
     }
-    from(layout.projectDirectory.file("../language-configuration.json")) {
+    from(layout.projectDirectory.file("../vscode/language-configuration.json")) {
       into(pluginName.map { "$it/textmate" })
     }
   }

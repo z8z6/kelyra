@@ -1,17 +1,17 @@
 # UI components
 
-`std.ui` is a platform-neutral retained component tree. `std.ui.win.Window`
+`std.graphics.ui` is a platform-neutral retained component tree. `std.graphics.ui.win.Window`
 owns the Win32 window and forwards input and size changes to the tree. The
 window's `handle()` can also be used by a Vulkan or DX12 swapchain.
 
 ```kelyra
-import std.ui;
-import std.ui.win;
+import std.graphics.ui;
+import std.graphics.ui.win;
 
-let window = std.ui.win.Window("Controls", 800, 600);
-let panel = std.ui.Panel(10, 10, 780, 580);
-panel.set_anchors(std.ui.Anchor.Stretch, std.ui.Anchor.Stretch, 10, 10);
-let button = std.ui.Button("Apply", 20, 20, 100, 30);
+let window = std.graphics.ui.win.Window("Controls", 800, 600);
+let panel = std.graphics.ui.Panel(10, 10, 780, 580);
+panel.set_anchors(std.graphics.ui.Anchor.Stretch, std.graphics.ui.Anchor.Stretch, 10, 10);
+let button = std.graphics.ui.Button("Apply", 20, 20, 100, 30);
 panel.add(&button);
 window.ui.add(&panel);
 window.set_ui_paint(true);
@@ -23,7 +23,7 @@ interfaces. `Widget` implements them with virtual methods and shared geometry,
 tree, visibility, and event state. `Panel`, `Label`, `Button`, and `Slider`
 inherit `Widget`; user components can do the same and override `measure`,
 `arrange`, `paint`, or `on_event`. The renderer uses the `Painter` interface;
-`std.ui.win.gdi.GdiPainter` is the Win32 implementation. Control behavior lives
+`std.graphics.ui.win.gdi.GdiPainter` is the Win32 implementation. Control behavior lives
 in the component, without numeric type tags in the window controller.
 
 `bounds` is relative to the parent; `frame` is the resolved client-area
@@ -48,6 +48,18 @@ normalized value while pressed. `Window` routes pointer capture, drag, focus,
 keyboard, resize, and close events. The Win32 host captures the mouse during a
 press so dragging continues outside the client area.
 
+The Windows host queues messages from its window procedure, including messages
+sent synchronously while a window is created, shown, or resized. Call `poll()`
+to deliver them to the UI tree. `Event` carries left, right, middle, and X
+mouse buttons and double clicks; vertical and horizontal wheel deltas (in native wheel units);
+signed client coordinates; Shift, Ctrl, and Alt modifier bits (1, 2, and 4);
+and keyboard virtual key, scan code, repeat count, previous-key state, and
+extended-key state. `TextInput.character` is a Unicode code point, with UTF-16
+surrogate pairs combined by the host. `PointerLeave`, `CaptureLost`, `Focus`,
+and `Blur` are also forwarded. Mark a `Close` event as handled to keep the
+window open. The low-level `std.win.input` module exposes Win32 input helpers
+when native details are needed.
+
 `set_ui_paint(true)` enables GDI backgrounds, outlines, UTF-8 labels, and
 slider drawing. Call `window.repaint()` when application code changes a
 component outside input handling. GPU swapchain hosts can leave GDI disabled
@@ -55,4 +67,5 @@ and pass another `Painter` implementation to `window.ui.paint`.
 
 `examples/ui_layout_example.kly` checks layout and input,
 `examples/ui_win_smoke_example.kly` checks the native window and GDI output,
+`examples/ui_input_smoke_example.kly` checks synchronous input messages,
 and `examples/ui_controls_example.kly` opens an interactive UI.

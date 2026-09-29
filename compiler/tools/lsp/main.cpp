@@ -30,6 +30,8 @@ cl::opt<bool> Stdio("stdio", cl::desc("Use standard input/output for LSP"),
 enum class SymbolType {
   Function,
   Class,
+  Enum,
+  EnumMember,
   Method,
   Field,
   Parameter,
@@ -253,6 +255,7 @@ struct Document {
     for (const auto &Candidate : Symbols) {
       const bool Forward = Candidate.Kind == SymbolType::Function ||
                            Candidate.Kind == SymbolType::Class ||
+                           Candidate.Kind == SymbolType::Enum ||
                            Candidate.Kind == SymbolType::Annotation ||
                            Candidate.Kind == SymbolType::Method ||
                            Candidate.Kind == SymbolType::Field;
@@ -411,6 +414,24 @@ struct Document {
 
     const Span FileScope{0, Parsed.source.size()};
     for (const auto &Node : Parsed.root->children) {
+      if (Node->kind == K::ast_enum) {
+        const bool Public = std::any_of(
+            Node->children.begin(), Node->children.end(),
+            [](const auto &Child) { return Child->kind == K::ast_public; });
+        Symbols.push_back({SymbolType::Enum, Node->text, Node->text,
+                           "enum " + Node->text, Module,
+                           FindDeclaration(*Node, K::keyword_enum), FileScope,
+                           Public});
+        for (const auto &Variant : Node->children)
+          if (Variant->kind == K::ast_enum_variant)
+            Symbols.push_back({SymbolType::EnumMember, Variant->text,
+                               Node->text, Node->text + "." + Variant->text,
+                               Module,
+                               {Variant->Loc.Offset, Variant->text.size()},
+                               {Node->Loc.Offset, Node->Loc.Len}, Public,
+                               {}, Node->text});
+        continue;
+      }
       if (Node->kind != K::ast_function && Node->kind != K::ast_class &&
           Node->kind != K::ast_annotation_decl)
         continue;
@@ -778,9 +799,28 @@ class Server {
                            std::size_t Offset) const {
     const auto Dot = Qualifier.find('.');
     const auto *Root = Doc.FindVisible(Qualifier.substr(0, Dot), Offset);
-    if (!Root)
-      return {};
-    std::string Type = Dereference(Root->Type);
+    std::string Type;
+    if (Root) {
+      Type = Dereference(Root->Type);
+    } else {
+      for (const auto &[Path, Imported] : Documents)
+        if (Imported.Module == "std.annotation" ||
+            std::any_of(Doc.ImportRefs.begin(), Doc.ImportRefs.end(),
+                        [&](const Document::ImportRef &Ref) {
+                          return Ref.Module == Imported.Module;
+                        }))
+          for (const auto &Candidate : Imported.Symbols)
+            if ((Candidate.Kind == SymbolType::Class ||
+                 Candidate.Kind == SymbolType::Enum) &&
+                Candidate.Public &&
+                Candidate.Name == Qualifier.substr(0, Dot)) {
+              if (!Type.empty())
+                return {};
+              Type = Imported.Module + "." + Candidate.Name;
+            }
+      if (Type.empty())
+        return {};
+    }
     std::size_t Start = Dot;
     while (Start != std::string_view::npos) {
       ++Start;
@@ -795,6 +835,213 @@ class Server {
       Start = End;
     }
     return Type;
+  }
+
+  std::optional<Location>
+  AnnotationMemberLocation(const Document &Current, std::string Type,
+                           std::string_view Name) const {
+    using K = lex::TokenKind;
+    Type = Dereference(std::move(Type));
+    const auto ExpandName = [](std::string_view Pattern,
+                               std::string_view TargetName,
+                               std::string_view TargetBinding,
+                               const std::map<std::string, std::string> &Values)
+        -> std::string {
+      std::string Result;
+      while (!Pattern.empty()) {
+        const auto Open = Pattern.find("${");
+        if (Open == std::string_view::npos) {
+          Result += Pattern;
+          break;
+        }
+        Result += Pattern.substr(0, Open);
+        Pattern.remove_prefix(Open + 2);
+        const auto Close = Pattern.find('}');
+        if (Close == std::string_view::npos)
+          return {};
+        auto Expression = Pattern.substr(0, Close);
+        while (!Expression.empty()) {
+          const auto Plus = Expression.find('+');
+          auto Part = Expression.substr(0, Plus);
+          while (!Part.empty() &&
+                 std::isspace(static_cast<unsigned char>(Part.front())))
+            Part.remove_prefix(1);
+          while (!Part.empty() &&
+                 std::isspace(static_cast<unsigned char>(Part.back())))
+            Part.remove_suffix(1);
+          if (!TargetBinding.empty() &&
+              Part.size() == TargetBinding.size() + 5 &&
+              Part.starts_with(TargetBinding) && Part.ends_with(".name")) {
+            Result += TargetName;
+          } else if (Part.size() >= 2 && Part.front() == '"' &&
+                     Part.back() == '"') {
+            Result += Part.substr(1, Part.size() - 2);
+          } else if (const auto Found = Values.find(std::string(Part));
+                     Found != Values.end()) {
+            Result += Found->second;
+          } else {
+            return {};
+          }
+          if (Plus == std::string_view::npos)
+            break;
+          Expression.remove_prefix(Plus + 1);
+        }
+        Pattern.remove_prefix(Close + 1);
+      }
+      return Result;
+    };
+    const auto ResolveAnnotation =
+        [&](const auto &Self, const Document &UseDoc,
+            const lex::Node &Use, std::string_view TargetName,
+            std::set<std::string> &Visited) -> std::optional<Location> {
+      const auto AnnotationName = std::string_view(Use.text);
+      const auto Dot = AnnotationName.rfind('.');
+      const auto Module = Dot == std::string_view::npos
+                              ? std::string_view{}
+                              : AnnotationName.substr(0, Dot);
+      const auto ShortName = Dot == std::string_view::npos
+                                 ? AnnotationName
+                                 : AnnotationName.substr(Dot + 1);
+      for (const auto &[Path, Doc] : Documents) {
+        if (!Module.empty() && Doc.Module != Module)
+          continue;
+        if (Module.empty() && &Doc != &UseDoc &&
+            Doc.Module != "std.annotation" &&
+            !std::any_of(UseDoc.ImportRefs.begin(), UseDoc.ImportRefs.end(),
+                         [&](const Document::ImportRef &Ref) {
+                           return Ref.Module == Doc.Module;
+                         }))
+          continue;
+        for (const auto &Declaration : Doc.Parsed.root->children) {
+          if (Declaration->kind != K::ast_annotation_decl ||
+              Declaration->text != ShortName)
+            continue;
+          if (&Doc != &UseDoc && !std::any_of(
+                                     Declaration->children.begin(),
+                                     Declaration->children.end(),
+                                     [](const auto &Child) {
+                                       return Child->kind == K::ast_public;
+                                     }))
+            continue;
+          if (!Visited.insert(Doc.Path + ":" + Declaration->text).second)
+            continue;
+          std::map<std::string, std::string> Values;
+          std::string TargetBinding;
+          std::vector<const lex::Node *> Parameters;
+          for (const auto &Part : Declaration->children) {
+            if (Part->kind == K::ast_annotation &&
+                (Part->text == "target" ||
+                 Part->text == "std.annotation.target"))
+              for (const auto &Argument : Part->children)
+                if (!Argument->children.empty()) {
+                  const auto &Target = *Argument->children.front();
+                  if (Target.kind == K::ast_name &&
+                      !Target.children.empty())
+                    TargetBinding = Target.children.front()->text;
+                }
+            if (Part->kind == K::ast_annotation_parameter) {
+              Parameters.push_back(Part.get());
+              if (Part->children.size() > 1 &&
+                  Part->children[1]->kind == K::ast_literal) {
+                auto Default = std::string_view(Part->children[1]->text);
+                if (Default.size() >= 2 && Default.front() == '"' &&
+                    Default.back() == '"')
+                  Values[Part->text] =
+                      Default.substr(1, Default.size() - 2);
+              }
+            }
+          }
+          std::size_t Positional = 0;
+          for (const auto &Argument : Use.children) {
+            if (Argument->kind != K::ast_annotation_argument ||
+                Argument->children.empty() ||
+                Argument->children.front()->kind != K::ast_literal)
+              continue;
+            const auto Literal =
+                std::string_view(Argument->children.front()->text);
+            if (Literal.size() < 2 || Literal.front() != '"' ||
+                Literal.back() != '"')
+              continue;
+            const auto Key = Argument->text.empty()
+                                 ? Positional < Parameters.size()
+                                       ? Parameters[Positional]->text
+                                       : std::string{}
+                                 : Argument->text;
+            if (!Key.empty())
+              Values[Key] = Literal.substr(1, Literal.size() - 2);
+            if (Argument->text.empty())
+              ++Positional;
+          }
+          const auto FindInBody = [&](const auto &FindSelf,
+                                      const lex::Node &Body)
+              -> std::optional<Location> {
+            for (const auto &Member : Body.children) {
+              if (Member->kind == K::ast_annotation_body ||
+                  Member->kind == K::ast_when) {
+                if (auto Found = FindSelf(FindSelf, *Member))
+                  return Found;
+                continue;
+              }
+              if (Member->kind != K::ast_field &&
+                  Member->kind != K::ast_const_field &&
+                  Member->kind != K::ast_function)
+                continue;
+              if (ExpandName(Member->text, TargetName, TargetBinding, Values) !=
+                  Name)
+                continue;
+              const auto Keyword = Member->kind == K::ast_function
+                                       ? K::keyword_fn
+                                       : K::name;
+              return Location{Doc.Uri, Doc.ToRange(
+                                           Doc.FindDeclaration(*Member,
+                                                               Keyword))};
+            }
+            return std::nullopt;
+          };
+          for (const auto &Part : Declaration->children) {
+            if (Part->kind == K::ast_annotation_body)
+              if (auto Found = FindInBody(FindInBody, *Part))
+                return Found;
+            if (Part->kind == K::ast_annotation_uses)
+              for (const auto &Composed : Part->children)
+                if (Composed->kind == K::ast_annotation)
+                  if (auto Found =
+                          Self(Self, Doc, *Composed, TargetName, Visited))
+                    return Found;
+          }
+        }
+      }
+      return std::nullopt;
+    };
+
+    for (const auto &[Path, Doc] : Documents)
+      for (const auto &Declaration : Doc.Parsed.root->children) {
+        if (Declaration->kind != K::ast_class)
+          continue;
+        const auto Qualified = Doc.Module.empty()
+                                   ? Declaration->text
+                                   : Doc.Module + "." + Declaration->text;
+        if (Type != Qualified && !(&Doc == &Current && Type == Declaration->text))
+          continue;
+        for (const auto &Part : Declaration->children)
+          if (Part->kind == K::ast_annotation) {
+            std::set<std::string> Visited;
+            if (auto Found = ResolveAnnotation(ResolveAnnotation, Doc, *Part,
+                                               Declaration->text, Visited))
+              return Found;
+          }
+        for (const auto &Field : Declaration->children)
+          if (Field->kind == K::ast_field ||
+              Field->kind == K::ast_const_field)
+            for (const auto &Part : Field->children)
+              if (Part->kind == K::ast_annotation) {
+                std::set<std::string> Visited;
+                if (auto Found = ResolveAnnotation(ResolveAnnotation, Doc,
+                                                   *Part, Field->text, Visited))
+                  return Found;
+              }
+      }
+    return std::nullopt;
   }
 
   std::pair<const Document *, const Symbol *> Resolve(const URIForFile &Uri,
@@ -852,7 +1099,8 @@ class Server {
                           return Ref.Module == Candidate.Module;
                         });
         const bool ImplicitBuiltin =
-            AnnotationUse && Candidate.Module == "std.annotation" &&
+            (AnnotationUse || Candidate.Kind == SymbolType::Enum) &&
+            Candidate.Module == "std.annotation" &&
             (Qualifier.empty() || Qualifier == "std.annotation");
         if (Imported || ImplicitBuiltin) {
           if (Result.first && Qualifier.empty() &&
@@ -1067,12 +1315,25 @@ class Server {
     if (Symbol && (Symbol->Kind == SymbolType::Variable ||
                    Symbol->Kind == SymbolType::Parameter || TargetDoc == &Doc ||
                    HasImportedSymbol(Doc, Symbol->Name) ||
+                   (Symbol->Kind == SymbolType::EnumMember &&
+                    std::any_of(Doc.ImportRefs.begin(), Doc.ImportRefs.end(),
+                                [&](const Document::ImportRef &Ref) {
+                                  return Ref.Module == TargetDoc->Module;
+                                })) ||
                    (Symbol->Kind == SymbolType::Annotation &&
+                    TargetDoc->Module == "std.annotation") ||
+                   ((Symbol->Kind == SymbolType::Enum ||
+                     Symbol->Kind == SymbolType::EnumMember) &&
                     TargetDoc->Module == "std.annotation")))
       return Location{TargetDoc->Uri, TargetDoc->ToRange(Symbol->Definition)};
     std::size_t TokenIndex = 0;
     if (const auto *Token = TokenAt(Doc, Offset, &TokenIndex)) {
       const auto [Qualifier, Name] = QualifiedName(Doc, TokenIndex);
+      if (!Qualifier.empty())
+        if (const auto Type = ReceiverType(Doc, Qualifier, Offset);
+            !Type.empty())
+          if (auto Found = AnnotationMemberLocation(Doc, Type, Name))
+            return Found;
       // `c.printf(...)` and unprefixed names after `import c;` come from the
       // C headers, so look there before giving up on the name.
       if ((Qualifier == "c" || (Qualifier.empty() && Doc.CImported)) &&
@@ -1458,6 +1719,13 @@ public:
       if (Child->kind == lex::TokenKind::ast_function) {
         Result.push_back(
             Make(*Child, SymbolKind::Function, lex::TokenKind::keyword_fn));
+      } else if (Child->kind == lex::TokenKind::ast_enum) {
+        auto Enum = Make(*Child, SymbolKind::Enum, lex::TokenKind::keyword_enum);
+        for (const auto &Variant : Child->children)
+          if (Variant->kind == lex::TokenKind::ast_enum_variant)
+            Enum.children.push_back(
+                Make(*Variant, SymbolKind::EnumMember, lex::TokenKind::name));
+        Result.push_back(std::move(Enum));
       } else if (Child->kind == lex::TokenKind::ast_annotation_decl) {
         Result.push_back(Make(*Child, SymbolKind::Class,
                               lex::TokenKind::keyword_annotation));
@@ -1521,8 +1789,11 @@ public:
             const auto [Owner, Found] = FindMember(Current, Type, Member.Name);
             if (Found == &Member)
               Add(Member.Name,
-                  Member.Kind == SymbolType::Field ? CompletionItemKind::Field
-                                                   : CompletionItemKind::Method,
+                  Member.Kind == SymbolType::EnumMember
+                      ? CompletionItemKind::EnumMember
+                      : Member.Kind == SymbolType::Field
+                            ? CompletionItemKind::Field
+                            : CompletionItemKind::Method,
                   Member.Detail);
           }
         return Result;
@@ -1533,8 +1804,11 @@ public:
           Offset <= Symbol.Scope.Offset + Symbol.Scope.Length &&
           Symbol.Name != "init" && Symbol.Name != "deinit")
         Add(Symbol.Name,
-            Symbol.Kind == SymbolType::Field ? CompletionItemKind::Field
-                                             : CompletionItemKind::Method,
+            Symbol.Kind == SymbolType::EnumMember
+                ? CompletionItemKind::EnumMember
+                : Symbol.Kind == SymbolType::Field
+                      ? CompletionItemKind::Field
+                      : CompletionItemKind::Method,
             Symbol.Detail);
       if ((Symbol.Kind == SymbolType::Variable ||
            Symbol.Kind == SymbolType::Parameter) &&
@@ -1550,6 +1824,8 @@ public:
           Add(Symbol.Name, CompletionItemKind::Function, Symbol.Detail);
         else if (Symbol.Kind == SymbolType::Class)
           Add(Symbol.Name, CompletionItemKind::Class, Symbol.Detail);
+        else if (Symbol.Kind == SymbolType::Enum)
+          Add(Symbol.Name, CompletionItemKind::Enum, Symbol.Detail);
       }
     for (const auto Keyword :
          {"fn", "class", "init", "deinit", "this", "let", "pub", "if", "else",

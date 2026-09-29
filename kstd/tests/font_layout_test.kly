@@ -1,0 +1,67 @@
+@cfg(os=os.Windows, arch=arch.X86_64) module font_layout_test;
+
+import std.graphics.font;
+import std.io;
+
+@main
+pub fn main() -> i32 {
+  let empty = std.graphics.font.TextLayout(
+      "", "", 44.0, 350.0, 800, 600, 0.0, 0.0);
+  if !empty.valid() || empty.glyph_count() != 0 ||
+      empty.vertex_count() != 0 { return 8; }
+  let content = "AAAA Kelyra 你好، مرحبا!\nVulkan 字体与纹理";
+  let layout = std.graphics.font.TextLayout(
+      content, "", 44.0, 350.0, 800, 600, 48.0, 90.0);
+  if !layout.valid() {
+    std.io.println(layout.last_error());
+    return 1;
+  }
+  if layout.line_count() < 2 || layout.glyph_count() < 10 ||
+      layout.cluster_count() <= layout.glyph_count() ||
+      layout.text_width() <= 0.0 || layout.text_width() > 450.0 ||
+      layout.text_height() <= 44.0 {
+    return 2;
+  }
+  let fallback = false;
+  let wrapped = false;
+  let index: u32 = 0;
+  while index < layout.cluster_count() {
+    let cluster = layout.cluster_at(index);
+    if cluster.face > 0 { fallback = true; }
+    if cluster.line > 0 { wrapped = true; }
+    if cluster.byte_start > cluster.byte_end { return 3; }
+    index = index + 1;
+  }
+  if !fallback || !wrapped { return 4; }
+
+  let directional = std.graphics.font.TextLayout(
+      "ABC مرحبا! 你好 🦋", "", 44.0, 700.0, 800, 600, 0.0, 0.0);
+  if !directional.valid() {
+    std.io.println(directional.last_error());
+    return 5;
+  }
+  let arabic_count: u32 = 0;
+  let previous_byte: u32 = 4294967295;
+  let previous_x: f32 = -1.0;
+  let han = false;
+  let emoji = false;
+  index = 0;
+  while index < directional.cluster_count() {
+    let cluster = directional.cluster_at(index);
+    if cluster.byte_start >= 4 && cluster.byte_start < 14 {
+      if cluster.byte_start >= previous_byte || cluster.left < previous_x {
+        return 6;
+      }
+      previous_byte = cluster.byte_start;
+      previous_x = cluster.left;
+      arabic_count = arabic_count + 1;
+    }
+    if cluster.byte_start >= 16 && cluster.byte_start < 22 &&
+        cluster.face == 1 { han = true; }
+    if cluster.byte_start >= 23 && cluster.byte_end == 27 &&
+        cluster.face == 2 { emoji = true; }
+    index = index + 1;
+  }
+  if arabic_count != 5 || !han || !emoji { return 7; }
+  return 0;
+}

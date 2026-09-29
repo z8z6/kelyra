@@ -1,55 +1,54 @@
 import std.sync.signal;
 import std.sync.thread;
-@cfg(os="windows", arch="x86_64")
+
+@cfg(os = os.Windows, arch = arch.X86_64)
 import std.win.signal;
 
-@cfg(os="linux", arch="x86_64")
+@cfg(os = os.Linux, arch = arch.X86_64)
 @main
 pub fn main() -> i32 {
-  let id: i64 = std.sync.thread.current_id();
-  if id <= 0 || std.sync.thread.yield_now() != 0 {
+  let id: i64 = current_id();
+  if id <= 0 || yield_now() != 0 {
     return 1;
   }
-
   let word: u32 = 7;
-  if std.sync.thread.wait_word(&word, 8) != -11 {
+  if wait_word(&word, 8) != -11 {
     return 2;
   }
-  if std.sync.thread.wake_one(&word) != 0 || std.sync.thread.wake_all(&word) != 0 {
+  if wake_one(&word) != 0 || wake_all(&word) != 0 {
     return 3;
   }
-
   // This smoke test runs on the initial thread, whose Linux TID equals PID.
   let pid: i64 = id;
-  if std.sync.signal.send_process(pid, 0) != 0 {
+  if send_process(pid, 0) != 0 {
     return 4;
   }
-  if std.sync.signal.send_thread(pid, id, 0) != 0 {
+  if send_thread(pid, id, 0) != 0 {
     return 5;
   }
   return 0;
 }
 
-@cfg(os="windows", arch="x86_64")
+@cfg(os = os.Windows, arch = arch.X86_64)
 @main
 pub fn main() -> i32 {
-  if std.sync.thread.current_id() <= 0 || std.sync.thread.yield_now() != 0 {
+  if current_id() <= 0 || yield_now() != 0 {
     return 1;
   }
   let word: u32 = 7;
-  if std.sync.thread.wait_word(&word, 8) != 0 {
+  if wait_word(&word, 8) != 0 {
     return 2;
   }
-  if std.sync.thread.wake_one(&word) != 0 || std.sync.thread.wake_all(&word) != 0 {
+  if wake_one(&word) != 0 || wake_all(&word) != 0 {
     return 3;
   }
-  if std.win.signal.send_console_event(2, 0) != -87 {
+  if send_console_event(2, 0) != -87 {
     return 4;
   }
-  if std.win.signal.ignore_control_c(true) != 0 {
+  if ignore_control_c(true) != 0 {
     return 5;
   }
-  if std.win.signal.ignore_control_c(false) != 0 {
+  if ignore_control_c(false) != 0 {
     return 6;
   }
   return 0;

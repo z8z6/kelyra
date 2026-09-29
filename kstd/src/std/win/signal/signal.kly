@@ -1,13 +1,13 @@
-@cfg(os="windows", arch="x86_64") module std.win.signal;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.signal;
 
 import std.win.error;
 
 @extern("GenerateConsoleCtrlEvent", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_generate_console_ctrl_event(event: u32, process_group: u32) -> i32;
 
 @extern("SetConsoleCtrlHandler", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_set_console_callback(handler: fn(u32) -> i32, add: i32) -> i32;
 
 // Windows may invoke the handler on a new thread. Keep it valid until removed.

@@ -1,17 +1,17 @@
-@cfg(os="windows", arch="x86_64") module std.win.thread;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.thread;
 
 import std.win.error;
 import std.win.handle;
 import std.win.wait;
 
 @extern("CreateThread", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_create_thread(attributes: *u8, stack_size: usize,
                      callback: fn(*u8) -> u32, context: *u8,
                      flags: u32, thread_id: *u32) -> *u8;
 
 @extern("GetExitCodeThread", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_get_exit_code_thread(handle: *u8, exit_code: *u32) -> i32;
 
 // The caller owns the returned handle and must close it after join.
@@ -40,24 +40,24 @@ pub fn close(handle: *u8) -> i64 {
 }
 
 @extern("GetCurrentThreadId", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_current_thread_id() -> u32;
 
 @extern("SwitchToThread", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_switch_to_thread() -> i32;
 
 @extern("WaitOnAddress", "Synchronization")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_wait_on_address(address: *u32, expected: *u32, size: usize,
                        milliseconds: u32) -> i32;
 
 @extern("WakeByAddressSingle", "Synchronization")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_wake_by_address_single(address: *u32) -> void;
 
 @extern("WakeByAddressAll", "Synchronization")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_wake_by_address_all(address: *u32) -> void;
 
 pub fn current_id() -> u32 {

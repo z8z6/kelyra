@@ -24,7 +24,7 @@ Linux uses x86-64 syscalls for process ID, clock, sleep and current directory.
 `sleep_millis` retries after `EINTR`. Its environment lookup uses libc `getenv`
 internally; `std.os` therefore remains a separate host module rather than part
 of Kelp's freestanding-safe library object. Windows calls are declared in
-`std.win.system` with `@extern` and `@callconv(CallingConvention.System)`.
+`std.win.system` with `@extern` and `@callconv(cc.System)`.
 The linker selects the Windows import libraries named by the declarations.
 
 `examples/os_example.kly` checks these APIs. On Windows, set `KSTD_OS_TEST` and

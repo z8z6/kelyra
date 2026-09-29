@@ -2,6 +2,7 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -20,6 +21,15 @@ bool Check(VkResult Result, const char *Action) {
   return false;
 }
 
+struct VulkanTexture {
+  VkImage Image = VK_NULL_HANDLE;
+  VkDeviceMemory Memory = VK_NULL_HANDLE;
+  VkImageView View = VK_NULL_HANDLE;
+  VkDescriptorSet DescriptorSet = VK_NULL_HANDLE;
+  uint32_t Width = 0;
+  uint32_t Height = 0;
+};
+
 struct VulkanWindow {
   VkInstance Instance = VK_NULL_HANDLE;
   VkSurfaceKHR Surface = VK_NULL_HANDLE;
@@ -36,18 +46,295 @@ struct VulkanWindow {
   std::vector<VkFramebuffer> Framebuffers;
   VkPipelineLayout PipelineLayout = VK_NULL_HANDLE;
   VkPipeline Pipeline = VK_NULL_HANDLE;
+  VkDescriptorSetLayout DescriptorLayout = VK_NULL_HANDLE;
+  VkDescriptorPool DescriptorPool = VK_NULL_HANDLE;
+  VkSampler Sampler = VK_NULL_HANDLE;
   VkCommandPool CommandPool = VK_NULL_HANDLE;
   VkCommandBuffer Commands = VK_NULL_HANDLE;
   VkFence AcquireFence = VK_NULL_HANDLE;
   uint32_t VertexCount = 0;
+  VkBuffer VertexBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory VertexMemory = VK_NULL_HANDLE;
   VkBuffer CaptureBuffer = VK_NULL_HANDLE;
   VkDeviceMemory CaptureMemory = VK_NULL_HANDLE;
   bool FrameCaptured = false;
   bool CanCapture = false;
+  std::vector<VulkanTexture *> Textures;
+  VulkanTexture *CurrentTexture = nullptr;
+
+  void DestroyTexture(VulkanTexture *Texture) {
+    if (!Texture)
+      return;
+    if (Texture->DescriptorSet && DescriptorPool)
+      vkFreeDescriptorSets(Device, DescriptorPool, 1, &Texture->DescriptorSet);
+    if (Texture->View)
+      vkDestroyImageView(Device, Texture->View, nullptr);
+    if (Texture->Image)
+      vkDestroyImage(Device, Texture->Image, nullptr);
+    if (Texture->Memory)
+      vkFreeMemory(Device, Texture->Memory, nullptr);
+    delete Texture;
+  }
+
+  uint32_t MemoryType(uint32_t Allowed, VkMemoryPropertyFlags Required) {
+    VkPhysicalDeviceMemoryProperties Properties{};
+    vkGetPhysicalDeviceMemoryProperties(PhysicalDevice, &Properties);
+    for (uint32_t Index = 0; Index < Properties.memoryTypeCount; ++Index)
+      if ((Allowed & (1u << Index)) &&
+          (Properties.memoryTypes[Index].propertyFlags & Required) == Required)
+        return Index;
+    return UINT32_MAX;
+  }
+
+  VulkanTexture *CreateTexture(const uint8_t *Pixels, uint32_t Width,
+                               uint32_t Height, uint32_t RowPitch) {
+    if (!Pixels || !Width || !Height || Width > 16384 || Height > 16384 ||
+        RowPitch < static_cast<uint64_t>(Width) * 4 || RowPitch % 4 ||
+        static_cast<uint64_t>(RowPitch) * Height > 256ull * 1024 * 1024) {
+      LastError = "invalid RGBA8 texture dimensions or row pitch";
+      return nullptr;
+    }
+    VkFormatProperties FormatProperties{};
+    vkGetPhysicalDeviceFormatProperties(
+        PhysicalDevice, VK_FORMAT_R8G8B8A8_UNORM, &FormatProperties);
+    if (!(FormatProperties.optimalTilingFeatures &
+          VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+      LastError = "RGBA8 sampled images are unsupported";
+      return nullptr;
+    }
+    const VkDeviceSize Size = static_cast<VkDeviceSize>(RowPitch) * Height;
+    auto *Texture = new VulkanTexture();
+    VkBuffer Staging = VK_NULL_HANDLE;
+    VkDeviceMemory StagingMemory = VK_NULL_HANDLE;
+    VkCommandBuffer Upload = VK_NULL_HANDLE;
+    bool Success = [&]() {
+      VkBufferCreateInfo BufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+      BufferInfo.size = Size;
+      BufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+      BufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+      if (!Check(vkCreateBuffer(Device, &BufferInfo, nullptr, &Staging),
+                 "vkCreateBuffer(texture staging)"))
+        return false;
+      VkMemoryRequirements Requirements{};
+      vkGetBufferMemoryRequirements(Device, Staging, &Requirements);
+      auto Type = MemoryType(Requirements.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      if (Type == UINT32_MAX) {
+        LastError = "no host-visible coherent texture staging memory";
+        return false;
+      }
+      VkMemoryAllocateInfo Allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+      Allocate.allocationSize = Requirements.size;
+      Allocate.memoryTypeIndex = Type;
+      if (!Check(vkAllocateMemory(Device, &Allocate, nullptr, &StagingMemory),
+                 "vkAllocateMemory(texture staging)") ||
+          !Check(vkBindBufferMemory(Device, Staging, StagingMemory, 0),
+                 "vkBindBufferMemory(texture staging)"))
+        return false;
+      void *Mapped = nullptr;
+      if (!Check(vkMapMemory(Device, StagingMemory, 0, Size, 0, &Mapped),
+                 "vkMapMemory(texture staging)"))
+        return false;
+      std::memcpy(Mapped, Pixels, static_cast<size_t>(Size));
+      vkUnmapMemory(Device, StagingMemory);
+
+      VkImageCreateInfo ImageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+      ImageInfo.imageType = VK_IMAGE_TYPE_2D;
+      ImageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+      ImageInfo.extent = {Width, Height, 1};
+      ImageInfo.mipLevels = 1;
+      ImageInfo.arrayLayers = 1;
+      ImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+      ImageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+      ImageInfo.usage =
+          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+      ImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+      ImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      if (!Check(vkCreateImage(Device, &ImageInfo, nullptr, &Texture->Image),
+                 "vkCreateImage(texture)"))
+        return false;
+      vkGetImageMemoryRequirements(Device, Texture->Image, &Requirements);
+      Type = MemoryType(Requirements.memoryTypeBits,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+      if (Type == UINT32_MAX) {
+        LastError = "no device-local texture memory";
+        return false;
+      }
+      Allocate.allocationSize = Requirements.size;
+      Allocate.memoryTypeIndex = Type;
+      if (!Check(vkAllocateMemory(Device, &Allocate, nullptr, &Texture->Memory),
+                 "vkAllocateMemory(texture)") ||
+          !Check(vkBindImageMemory(Device, Texture->Image, Texture->Memory, 0),
+                 "vkBindImageMemory(texture)"))
+        return false;
+      VkCommandBufferAllocateInfo CommandInfo{
+          VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+      CommandInfo.commandPool = CommandPool;
+      CommandInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+      CommandInfo.commandBufferCount = 1;
+      if (!Check(vkAllocateCommandBuffers(Device, &CommandInfo, &Upload),
+                 "vkAllocateCommandBuffers(texture)"))
+        return false;
+      VkCommandBufferBeginInfo Begin{
+          VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+      Begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+      if (!Check(vkBeginCommandBuffer(Upload, &Begin),
+                 "vkBeginCommandBuffer(texture)"))
+        return false;
+      VkImageMemoryBarrier Barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      Barrier.srcAccessMask = 0;
+      Barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      Barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      Barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      Barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      Barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      Barrier.image = Texture->Image;
+      Barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      Barrier.subresourceRange.levelCount = 1;
+      Barrier.subresourceRange.layerCount = 1;
+      vkCmdPipelineBarrier(Upload, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                           VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                           nullptr, 1, &Barrier);
+      VkBufferImageCopy Copy{};
+      Copy.bufferRowLength = RowPitch / 4;
+      Copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      Copy.imageSubresource.layerCount = 1;
+      Copy.imageExtent = {Width, Height, 1};
+      vkCmdCopyBufferToImage(Upload, Staging, Texture->Image,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &Copy);
+      Barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      Barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      Barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      Barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      vkCmdPipelineBarrier(Upload, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                           0, nullptr, 1, &Barrier);
+      if (!Check(vkEndCommandBuffer(Upload), "vkEndCommandBuffer(texture)"))
+        return false;
+      VkSubmitInfo Submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+      Submit.commandBufferCount = 1;
+      Submit.pCommandBuffers = &Upload;
+      if (!Check(vkQueueSubmit(Queue, 1, &Submit, VK_NULL_HANDLE),
+                 "vkQueueSubmit(texture)") ||
+          !Check(vkQueueWaitIdle(Queue), "vkQueueWaitIdle(texture)"))
+        return false;
+      VkImageViewCreateInfo ViewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+      ViewInfo.image = Texture->Image;
+      ViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+      ViewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+      ViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      ViewInfo.subresourceRange.levelCount = 1;
+      ViewInfo.subresourceRange.layerCount = 1;
+      if (!Check(vkCreateImageView(Device, &ViewInfo, nullptr, &Texture->View),
+                 "vkCreateImageView(texture)"))
+        return false;
+      VkDescriptorSetAllocateInfo SetInfo{
+          VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+      SetInfo.descriptorPool = DescriptorPool;
+      SetInfo.descriptorSetCount = 1;
+      SetInfo.pSetLayouts = &DescriptorLayout;
+      if (!Check(vkAllocateDescriptorSets(Device, &SetInfo,
+                                          &Texture->DescriptorSet),
+                 "vkAllocateDescriptorSets(texture)"))
+        return false;
+      VkDescriptorImageInfo ImageDescriptor{};
+      ImageDescriptor.imageView = Texture->View;
+      ImageDescriptor.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      VkDescriptorImageInfo SamplerDescriptor{};
+      SamplerDescriptor.sampler = Sampler;
+      VkWriteDescriptorSet Writes[2] = {
+          {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET},
+          {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
+      Writes[0].dstSet = Texture->DescriptorSet;
+      Writes[0].dstBinding = 0;
+      Writes[0].descriptorCount = 1;
+      Writes[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+      Writes[0].pImageInfo = &ImageDescriptor;
+      Writes[1].dstSet = Texture->DescriptorSet;
+      Writes[1].dstBinding = 1;
+      Writes[1].descriptorCount = 1;
+      Writes[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+      Writes[1].pImageInfo = &SamplerDescriptor;
+      vkUpdateDescriptorSets(Device, 2, Writes, 0, nullptr);
+      Texture->Width = Width;
+      Texture->Height = Height;
+      return true;
+    }();
+    if (Upload)
+      vkFreeCommandBuffers(Device, CommandPool, 1, &Upload);
+    if (Staging)
+      vkDestroyBuffer(Device, Staging, nullptr);
+    if (StagingMemory)
+      vkFreeMemory(Device, StagingMemory, nullptr);
+    if (!Success) {
+      DestroyTexture(Texture);
+      return nullptr;
+    }
+    Textures.push_back(Texture);
+    return Texture;
+  }
+
+  bool UploadVertices(const float *Vertices, uint32_t Count) {
+    if (!Vertices || !Count || Count > 1048576) {
+      LastError = "invalid textured vertex buffer";
+      return false;
+    }
+    if (!Check(vkDeviceWaitIdle(Device), "vkDeviceWaitIdle(vertices)"))
+      return false;
+    if (VertexBuffer)
+      vkDestroyBuffer(Device, VertexBuffer, nullptr);
+    if (VertexMemory)
+      vkFreeMemory(Device, VertexMemory, nullptr);
+    VertexBuffer = VK_NULL_HANDLE;
+    VertexMemory = VK_NULL_HANDLE;
+    VkBufferCreateInfo Info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    Info.size = static_cast<VkDeviceSize>(Count) * sizeof(float) * 4;
+    Info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    Info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (!Check(vkCreateBuffer(Device, &Info, nullptr, &VertexBuffer),
+               "vkCreateBuffer(vertices)"))
+      return false;
+    VkMemoryRequirements Requirements{};
+    vkGetBufferMemoryRequirements(Device, VertexBuffer, &Requirements);
+    const auto Type = MemoryType(Requirements.memoryTypeBits,
+                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (Type == UINT32_MAX) {
+      LastError = "no host-visible coherent vertex memory";
+      return false;
+    }
+    VkMemoryAllocateInfo Allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    Allocate.allocationSize = Requirements.size;
+    Allocate.memoryTypeIndex = Type;
+    if (!Check(vkAllocateMemory(Device, &Allocate, nullptr, &VertexMemory),
+               "vkAllocateMemory(vertices)") ||
+        !Check(vkBindBufferMemory(Device, VertexBuffer, VertexMemory, 0),
+               "vkBindBufferMemory(vertices)"))
+      return false;
+    void *Mapped = nullptr;
+    if (!Check(vkMapMemory(Device, VertexMemory, 0, Info.size, 0, &Mapped),
+               "vkMapMemory(vertices)"))
+      return false;
+    std::memcpy(Mapped, Vertices, static_cast<size_t>(Info.size));
+    vkUnmapMemory(Device, VertexMemory);
+    VertexCount = Count;
+    return true;
+  }
 
   ~VulkanWindow() {
     if (Device)
       vkDeviceWaitIdle(Device);
+    for (auto *Texture : Textures)
+      DestroyTexture(Texture);
+    if (VertexBuffer)
+      vkDestroyBuffer(Device, VertexBuffer, nullptr);
+    if (VertexMemory)
+      vkFreeMemory(Device, VertexMemory, nullptr);
+    if (DescriptorPool)
+      vkDestroyDescriptorPool(Device, DescriptorPool, nullptr);
+    if (Sampler)
+      vkDestroySampler(Device, Sampler, nullptr);
     if (CaptureBuffer)
       vkDestroyBuffer(Device, CaptureBuffer, nullptr);
     if (CaptureMemory)
@@ -60,6 +347,8 @@ struct VulkanWindow {
       vkDestroyPipeline(Device, Pipeline, nullptr);
     if (PipelineLayout)
       vkDestroyPipelineLayout(Device, PipelineLayout, nullptr);
+    if (DescriptorLayout)
+      vkDestroyDescriptorSetLayout(Device, DescriptorLayout, nullptr);
     for (auto Framebuffer : Framebuffers)
       vkDestroyFramebuffer(Device, Framebuffer, nullptr);
     if (RenderPass)
@@ -74,6 +363,27 @@ struct VulkanWindow {
       vkDestroySurfaceKHR(Instance, Surface, nullptr);
     if (Instance)
       vkDestroyInstance(Instance, nullptr);
+  }
+
+  void ReleaseTexture(VulkanTexture *Texture) {
+    auto Found = std::find(Textures.begin(), Textures.end(), Texture);
+    if (Found == Textures.end())
+      return;
+    vkDeviceWaitIdle(Device);
+    if (CurrentTexture == Texture)
+      CurrentTexture = nullptr;
+    DestroyTexture(Texture);
+    Textures.erase(Found);
+  }
+
+  bool SelectTexture(VulkanTexture *Texture) {
+    if (Texture && std::find(Textures.begin(), Textures.end(), Texture) ==
+                       Textures.end()) {
+      LastError = "texture does not belong to this Vulkan context";
+      return false;
+    }
+    CurrentTexture = Texture;
+    return true;
   }
 
   bool Initialize(HWND Window, const uint8_t *Vertex, size_t VertexSize,
@@ -321,6 +631,23 @@ struct VulkanWindow {
     Stages[1].pName = "main";
     VkPipelineVertexInputStateCreateInfo VertexInput{
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkVertexInputBindingDescription VertexBinding{};
+    VertexBinding.binding = 0;
+    VertexBinding.stride = sizeof(float) * 4;
+    VertexBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription VertexAttributes[2]{};
+    VertexAttributes[0].location = 0;
+    VertexAttributes[0].binding = 0;
+    VertexAttributes[0].format = VK_FORMAT_R32G32_SFLOAT;
+    VertexAttributes[0].offset = 0;
+    VertexAttributes[1].location = 1;
+    VertexAttributes[1].binding = 0;
+    VertexAttributes[1].format = VK_FORMAT_R32G32_SFLOAT;
+    VertexAttributes[1].offset = sizeof(float) * 2;
+    VertexInput.vertexBindingDescriptionCount = 1;
+    VertexInput.pVertexBindingDescriptions = &VertexBinding;
+    VertexInput.vertexAttributeDescriptionCount = 2;
+    VertexInput.pVertexAttributeDescriptions = VertexAttributes;
     VkPipelineInputAssemblyStateCreateInfo Assembly{
         VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     Assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -347,14 +674,73 @@ struct VulkanWindow {
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     Multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     VkPipelineColorBlendAttachmentState Blend{};
+    Blend.blendEnable = VK_TRUE;
+    Blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    Blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    Blend.colorBlendOp = VK_BLEND_OP_ADD;
+    Blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    Blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    Blend.alphaBlendOp = VK_BLEND_OP_ADD;
     Blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     VkPipelineColorBlendStateCreateInfo BlendState{
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     BlendState.attachmentCount = 1;
     BlendState.pAttachments = &Blend;
+    VkDescriptorSetLayoutBinding Bindings[2]{};
+    Bindings[0].binding = 0;
+    Bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    Bindings[0].descriptorCount = 1;
+    Bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    Bindings[1].binding = 1;
+    Bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    Bindings[1].descriptorCount = 1;
+    Bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo DescriptorInfo{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    DescriptorInfo.bindingCount = 2;
+    DescriptorInfo.pBindings = Bindings;
+    if (!Check(vkCreateDescriptorSetLayout(Device, &DescriptorInfo, nullptr,
+                                           &DescriptorLayout),
+               "vkCreateDescriptorSetLayout")) {
+      vkDestroyShaderModule(Device, VertexModule, nullptr);
+      vkDestroyShaderModule(Device, FragmentModule, nullptr);
+      return false;
+    }
+    VkSamplerCreateInfo SamplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    SamplerInfo.magFilter = VK_FILTER_LINEAR;
+    SamplerInfo.minFilter = VK_FILTER_LINEAR;
+    SamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    SamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    SamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    SamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    SamplerInfo.maxLod = 0.0f;
+    if (!Check(vkCreateSampler(Device, &SamplerInfo, nullptr, &Sampler),
+               "vkCreateSampler")) {
+      vkDestroyShaderModule(Device, VertexModule, nullptr);
+      vkDestroyShaderModule(Device, FragmentModule, nullptr);
+      return false;
+    }
+    VkDescriptorPoolSize PoolSizes[2] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 64},
+                                         {VK_DESCRIPTOR_TYPE_SAMPLER, 64}};
+    VkDescriptorPoolCreateInfo DescriptorPoolInfo{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    DescriptorPoolInfo.flags =
+        VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    DescriptorPoolInfo.maxSets = 64;
+    DescriptorPoolInfo.poolSizeCount = 2;
+    DescriptorPoolInfo.pPoolSizes = PoolSizes;
+    if (!Check(vkCreateDescriptorPool(Device, &DescriptorPoolInfo, nullptr,
+                                      &DescriptorPool),
+               "vkCreateDescriptorPool")) {
+      vkDestroyShaderModule(Device, VertexModule, nullptr);
+      vkDestroyShaderModule(Device, FragmentModule, nullptr);
+      return false;
+    }
     VkPipelineLayoutCreateInfo LayoutInfo{
         VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    LayoutInfo.setLayoutCount = 1;
+    LayoutInfo.pSetLayouts = &DescriptorLayout;
     bool Created = Check(
         vkCreatePipelineLayout(Device, &LayoutInfo, nullptr, &PipelineLayout),
         "vkCreatePipelineLayout");
@@ -523,6 +909,14 @@ struct VulkanWindow {
     Pass.pClearValues = &Clear;
     vkCmdBeginRenderPass(Commands, &Pass, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(Commands, VK_PIPELINE_BIND_POINT_GRAPHICS, Pipeline);
+    if (VertexBuffer) {
+      VkDeviceSize Offset = 0;
+      vkCmdBindVertexBuffers(Commands, 0, 1, &VertexBuffer, &Offset);
+    }
+    if (CurrentTexture)
+      vkCmdBindDescriptorSets(Commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              PipelineLayout, 0, 1,
+                              &CurrentTexture->DescriptorSet, 0, nullptr);
     vkCmdDraw(Commands, VertexCount, 1, 0, 0);
     vkCmdEndRenderPass(Commands);
     const char *CapturePath = std::getenv("KSTD_VULKAN_CAPTURE");
@@ -568,6 +962,34 @@ kstd_vulkan_create(HWND Window, const uint8_t *Vertex, size_t VertexSize,
 
 extern "C" __declspec(dllexport) int kstd_vulkan_draw(void *Context) {
   return Context ? static_cast<VulkanWindow *>(Context)->Draw() : 0;
+}
+
+extern "C" __declspec(dllexport) void *
+kstd_vulkan_texture_create(void *Context, const uint8_t *Pixels, uint32_t Width,
+                           uint32_t Height, uint32_t RowPitch) {
+  return Context ? static_cast<VulkanWindow *>(Context)->CreateTexture(
+                       Pixels, Width, Height, RowPitch)
+                 : nullptr;
+}
+
+extern "C" __declspec(dllexport) int kstd_vulkan_texture_select(void *Context,
+                                                                void *Texture) {
+  return Context && static_cast<VulkanWindow *>(Context)->SelectTexture(
+                        static_cast<VulkanTexture *>(Texture));
+}
+
+extern "C" __declspec(dllexport) int
+kstd_vulkan_vertices_upload(void *Context, const float *Vertices,
+                            uint32_t Count) {
+  return Context &&
+         static_cast<VulkanWindow *>(Context)->UploadVertices(Vertices, Count);
+}
+
+extern "C" __declspec(dllexport) void
+kstd_vulkan_texture_destroy(void *Context, void *Texture) {
+  if (Context)
+    static_cast<VulkanWindow *>(Context)->ReleaseTexture(
+        static_cast<VulkanTexture *>(Texture));
 }
 
 extern "C" __declspec(dllexport) void kstd_vulkan_destroy(void *Context) {

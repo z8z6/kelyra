@@ -1,0 +1,130 @@
+@cfg(os = os.Windows, arch = arch.X86_64)
+module std.graphics.vulkan.renderer;
+
+import std.win.library;
+
+// The Vulkan device and swapchain currently live in the small native window
+// adapter. This Kelyra object owns that context and exposes explicit texture
+// lifetimes. Texture pixels and shader modules are supplied by Kelyra code.
+pub alias Texture = *u8;
+
+pub class Renderer {
+  library           : *u8;
+  context           : *u8;
+  create_texture    : fn(*u8, *u8, u32, u32, u32) -> *u8;
+  select_texture    : fn(*u8, *u8) -> i32;
+  destroy_texture   : fn(*u8, *u8) -> void;
+  upload_vertex_data: fn(*u8, *f32, u32) -> i32;
+  draw_frame        : fn(*u8) -> i32;
+  destroy_context   : fn(*u8) -> void;
+  last_error_message: fn() -> *c.char;
+
+  pub init(window       : *u8,
+           vertex       : *u8,
+           vertex_size  : usize,
+           fragment     : *u8,
+           fragment_size: usize,
+           vertex_count : u32) {
+    library = load("kstd_vulkan_window.dll");
+    context = 0 as *u8;
+    create_texture = 0 as fn(*u8, *u8, u32, u32, u32) -> *u8;
+    select_texture = 0 as fn(*u8, *u8) -> i32;
+    destroy_texture = 0 as fn(*u8, *u8) -> void;
+    upload_vertex_data = 0 as fn(*u8, *f32, u32) -> i32;
+    draw_frame = 0 as fn(*u8) -> i32;
+    destroy_context = 0 as fn(*u8) -> void;
+    last_error_message = 0 as fn() -> *c.char;
+    if library as usize == 0 {
+      return;
+    }
+    let create = symbol(library, "kstd_vulkan_create") as fn(*u8, *u8, usize, *u8, usize, u32) -> *u8;
+    create_texture = symbol(library, "kstd_vulkan_texture_create") as fn(*u8, *u8, u32, u32, u32) -> *u8;
+    select_texture = symbol(library, "kstd_vulkan_texture_select") as fn(*u8, *u8) -> i32;
+    destroy_texture = symbol(library, "kstd_vulkan_texture_destroy") as fn(*u8, *u8) -> void;
+    upload_vertex_data = symbol(library, "kstd_vulkan_vertices_upload") as fn(*u8, *f32, u32) -> i32;
+    draw_frame = symbol(library, "kstd_vulkan_draw") as fn(*u8) -> i32;
+    destroy_context = symbol(library, "kstd_vulkan_destroy") as fn(*u8) -> void;
+    last_error_message = symbol(library, "kstd_vulkan_last_error") as fn() -> *c.char;
+    if create as usize == 0 ||
+      create_texture as usize == 0 ||
+      select_texture as usize == 0 ||
+      destroy_texture as usize == 0 ||
+      upload_vertex_data as usize == 0 ||
+      draw_frame as usize == 0 ||
+      destroy_context as usize == 0 ||
+      last_error_message as usize == 0 {
+      return;
+    }
+    context = create(window, vertex, vertex_size, fragment, fragment_size, vertex_count);
+  }
+
+  deinit() {
+    if context as usize != 0 && destroy_context as usize != 0 {
+      destroy_context(context);
+      context = 0 as *u8;
+    }
+    if library as usize != 0 {
+      close(library);
+      library = 0 as *u8;
+    }
+  }
+
+  pub fn valid() -> bool {
+    return context as usize != 0;
+  }
+
+  // The caller keeps pixels alive until this synchronous upload returns.
+  // The returned texture must be released before this Renderer is destroyed.
+  pub fn upload_rgba8(pixels   : *u8,
+                      width    : u32,
+                      height   : u32,
+                      row_pitch: u32) -> Texture {
+    if !valid() ||
+      pixels as usize == 0 ||
+      width == 0 ||
+      height == 0 ||
+      width > 16384 ||
+      height > 16384 ||
+      (row_pitch as u64) < (width as u64) * 4 ||
+      (row_pitch as u64) * (height as u64) > 268435456 {
+      return 0 as Texture;
+    }
+    return create_texture(context, pixels, width, height, row_pitch);
+  }
+
+  pub fn bind(texture: Texture) -> bool {
+    if !valid() {
+      return false;
+    }
+    return select_texture(context, texture) != 0;
+  }
+
+  pub fn release(texture: Texture) -> void {
+    if valid() && texture as usize != 0 {
+      destroy_texture(context, texture);
+    }
+  }
+
+  // Four f32 values per vertex: clip-space x/y followed by texture u/v.
+  pub fn upload_vertices(vertices: *f32, count: u32) -> bool {
+    if !valid() || vertices as usize == 0 || count == 0 {
+      return false;
+    }
+    return upload_vertex_data(context, vertices, count) != 0;
+  }
+
+  // 1 = drawn, 2 = swapchain out of date, 0 = error.
+  pub fn draw() -> i32 {
+    if !valid() {
+      return 0;
+    }
+    return draw_frame(context);
+  }
+
+  pub fn last_error() -> *c.char {
+    if last_error_message as usize == 0 {
+      return "Vulkan adapter unavailable";
+    }
+    return last_error_message();
+  }
+}

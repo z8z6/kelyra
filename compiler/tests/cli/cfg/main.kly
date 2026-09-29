@@ -1,17 +1,17 @@
 module cfg.main;
-@cfg(os="windows", arch="aarch64") import missing.windows_module;
+@cfg(os=os.Windows, arch=arch.AArch64) import missing.windows_module;
 
-@cfg(arch="x86_64")
+@cfg(arch.X86_64)
 fn architecture_selected() -> i32 {
   return 0;
 }
 
-@cfg(os="linux")
+@cfg(os.Linux)
 fn selected() -> i32 {
   return 42;
 }
 
-@cfg(os="windows")
+@cfg(os.Windows)
 fn selected() -> i32 {
   return 1;
 }

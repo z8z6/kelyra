@@ -125,6 +125,18 @@ class GlslShader {
     return It == Classes.end() ? nullptr : It->second;
   }
 
+  std::string ResourceKind(const Node &Class) const {
+    const auto *Resource = Annotation(Analysis, Class, "resource");
+    if (!Resource)
+      return {};
+    const auto Kind = AnnotationValue(*Resource);
+    if (Kind.ends_with("Texture2D"))
+      return "texture2d";
+    if (Kind.ends_with("SamplerState"))
+      return "sampler";
+    Fail(Class, "unsupported shader resource kind");
+  }
+
   std::string Type(const Node &TypeNode) const {
     if (TypeNode.kind != K::ast_type)
       Fail(TypeNode, "shader type must be a scalar or data class");
@@ -174,6 +186,8 @@ class GlslShader {
   }
 
   void VisitClass(const Node &Class) {
+    if (!ResourceKind(Class).empty())
+      return;
     const auto &Name = ClassNames.at(&Class);
     if (EmittedClasses.contains(Name))
       return;
@@ -484,9 +498,14 @@ class GlslShader {
       return Builder.getI1Type();
     case sema::BuiltinType::Class: {
       const auto Found = Classes.find(Value.ClassName);
-      if (Found != Classes.end())
+      if (Found != Classes.end()) {
+        const auto Kind = ResourceKind(*Found->second);
+        if (!Kind.empty())
+          return ir::ShaderResourceType::get(&Context,
+                                             Builder.getStringAttr(Kind));
         return ir::ShaderRecordType::get(
             &Context, Builder.getStringAttr(ClassName(*Found->second)));
+      }
       break;
     }
     default:
@@ -723,6 +742,20 @@ class GlslShader {
           Value += ":" + AnnotationValue(*Instance);
         Values.push_back(Builder.getStringAttr(Value));
       }
+    if (const auto *Binding = Annotation(Analysis, Target, "binding")) {
+      if (Binding->Arguments.size() != 2)
+        Fail(Target, "@std.graphics.binding requires set and slot");
+      const auto Set = Binding->Arguments[0].Value.Text;
+      const auto Slot = Binding->Arguments[1].Value.Text;
+      auto Numeric = [](const std::string &Text) {
+        return !Text.empty() &&
+               std::all_of(Text.begin(), Text.end(),
+                           [](unsigned char C) { return std::isdigit(C); });
+      };
+      if (!Numeric(Set) || !Numeric(Slot))
+        Fail(Target, "@std.graphics.binding requires literal unsigned numbers");
+      Values.push_back(Builder.getStringAttr("binding:" + Set + ":" + Slot));
+    }
     return Builder.getArrayAttr(Values);
   }
 
@@ -752,7 +785,20 @@ class GlslShader {
       llvm::SmallVector<mlir::Attribute> InputDecorations;
       for (const auto &Part : Function->children)
         if (Part->kind == K::ast_parameter) {
-          ParameterTypes.push_back(IRType(RequiredType(*Part)));
+          auto ParameterType = IRType(RequiredType(*Part));
+          const bool IsResource =
+              mlir::isa<ir::ShaderResourceType>(ParameterType);
+          const bool HasBinding =
+              Annotation(Analysis, *Part, "binding") != nullptr;
+          if (Function == &Entry && IsResource != HasBinding)
+            Fail(*Part,
+                 IsResource
+                     ? "shader resource parameter needs @std.graphics.binding"
+                     : "@std.graphics.binding requires a shader resource");
+          if (Function != &Entry && HasBinding)
+            Fail(*Part,
+                 "helper shader parameter cannot have @std.graphics.binding");
+          ParameterTypes.push_back(ParameterType);
           ParameterNames.push_back(Builder.getStringAttr(Part->text));
           InputDecorations.push_back(IRDecorations(*Part));
         }
@@ -1154,8 +1200,7 @@ public:
           // Kelyra clip space follows the Direct3D upward Y convention.
           // Vulkan's positive viewport height maps positive Y downward.
           Out << "  gl_Position.y = -gl_Position.y;\n";
-        }
-        else
+        } else
           Out << "  kelyra_out_" << Field->text << " = " << Value << ";\n";
       }
     Out << "}\n";
@@ -1193,13 +1238,12 @@ int driver::EmitShader(const ModuleLoader &Loader, const sema::Sema &Analysis) {
     }
     if (Option::EmitDxil || Option::EmitSpirv) {
       std::string Error;
-      const bool Succeeded = Option::EmitDxil
-                                 ? EmitDirectDxil(Program.GetIR(),
-                                                  Option::OutputFile.getValue(),
-                                                  Error)
-                                 : EmitDirectSpirv(Program.GetIR(),
-                                                   Option::OutputFile.getValue(),
-                                                   Error);
+      const bool Succeeded =
+          Option::EmitDxil
+              ? EmitDirectDxil(Program.GetIR(), Option::OutputFile.getValue(),
+                               Error)
+              : EmitDirectSpirv(Program.GetIR(), Option::OutputFile.getValue(),
+                                Error);
       if (!Succeeded)
         throw std::runtime_error(Error);
       return 0;

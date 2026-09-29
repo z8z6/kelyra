@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 
 const base = process.env.DOCS_BASE || '/'
 const kelyraGrammar = {
-  ...JSON.parse(readFileSync(new URL('../../kide/syntaxes/kelyra.tmLanguage.json', import.meta.url), 'utf8')),
+  ...JSON.parse(readFileSync(new URL('../../kide/vscode/syntaxes/kelyra.tmLanguage.json', import.meta.url), 'utf8')),
   name: 'kelyra'
 }
 

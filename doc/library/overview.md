@@ -16,7 +16,7 @@
 | 数学 | `std.math.basic` 与 `std.math.integer` |
 | 迭代与可选值 | `std.util.iterator`、`std.util.maybe` |
 | Windows 系统接口 | `std.win` 下按功能划分的模块 |
-| UI 组件 | `std.ui` |
+| UI 组件 | `std.graphics.ui` |
 | 图形与 Shader 数据 | `std.graphics` |
 
 标准库仍在完善；公共 API 请以[当前源码](https://github.com/z8z6/kelyra/tree/main/kstd/src)和编译测试为准。

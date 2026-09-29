@@ -1,4 +1,4 @@
-@cfg(os="linux", arch="x86_64") module std.alloc.linux;
+@cfg(os=os.Linux, arch=arch.X86_64) module std.alloc.linux;
 
 // One mmap per allocation. The first 16 bytes hold requested and mapped sizes.
 pub fn allocate(size: usize) -> *u8 {

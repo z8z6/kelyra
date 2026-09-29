@@ -1,0 +1,47 @@
+module texture_shaders;
+
+import std.graphics;
+
+pub class FragmentOutput {
+  @location(0)
+  pub color: Vec4;
+
+  pub init(color: Vec4) {
+    this.color = color;
+  }
+}
+
+pub class VertexOutput {
+  @position
+  pub position: Vec4;
+  @location(0)
+  pub uv      : Vec2;
+
+  pub init(position: Vec4, uv: Vec2) {
+    this.position = position;
+    this.uv = uv;
+  }
+}
+
+@fragment
+pub fn fragment_main(
+  @location(0)   uv     : Vec2,
+  @binding(0, 0) image  : Texture2D,
+  @binding(0, 1) sampler: SamplerState
+) -> FragmentOutput {
+  return FragmentOutput(sample_2d(image, sampler, uv));
+}
+
+@vertex
+pub fn vertex_main(@vertex_index index: u32) -> VertexOutput {
+  if index == 0 || index == 3 {
+    return VertexOutput(Vec4(-0.8, 0.8, 0.0, 1.0), Vec2(0.0, 0.0));
+  }
+  if index == 1 {
+    return VertexOutput(Vec4(0.8, 0.8, 0.0, 1.0), Vec2(1.0, 0.0));
+  }
+  if index == 2 || index == 4 {
+    return VertexOutput(Vec4(0.8, -0.8, 0.0, 1.0), Vec2(1.0, 1.0));
+  }
+  return VertexOutput(Vec4(-0.8, -0.8, 0.0, 1.0), Vec2(0.0, 1.0));
+}

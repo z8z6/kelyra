@@ -1,42 +1,42 @@
-@cfg(os="windows", arch="x86_64")
+@cfg(os=os.Windows, arch=arch.X86_64)
 import std.os;
-@cfg(os="windows", arch="x86_64")
-import std.ui;
-@cfg(os="windows", arch="x86_64")
-import std.ui.win;
+@cfg(os=os.Windows, arch=arch.X86_64)
+import std.graphics.ui;
+@cfg(os=os.Windows, arch=arch.X86_64)
+import std.graphics.ui.win;
 
-@cfg(os="windows", arch="x86_64")
-fn on_click(context: *u8, event: *std.ui.Event) -> void {
-  if event.kind == std.ui.EventKind.Click {
-    let button = context as *std.ui.Button;
+@cfg(os=os.Windows, arch=arch.X86_64)
+fn on_click(context: *u8, event: *std.graphics.ui.Event) -> void {
+  if event.kind == std.graphics.ui.EventKind.Click {
+    let button = context as *std.graphics.ui.Button;
     button.label = "Clicked!";
   }
 }
 
-@cfg(os="windows", arch="x86_64")
-fn on_drag(context: *u8, event: *std.ui.Event) -> void {
-  if event.kind == std.ui.EventKind.DragMove {
-    let panel = context as *std.ui.Panel;
+@cfg(os=os.Windows, arch=arch.X86_64)
+fn on_drag(context: *u8, event: *std.graphics.ui.Event) -> void {
+  if event.kind == std.graphics.ui.EventKind.DragMove {
+    let panel = context as *std.graphics.ui.Panel;
     panel.bounds.x = panel.bounds.x + event.delta_x;
     panel.bounds.y = panel.bounds.y + event.delta_y;
   }
 }
 
-@cfg(os="windows", arch="x86_64")
+@cfg(os=os.Windows, arch=arch.X86_64)
 @main
 pub fn main() -> i32 {
-  let window = std.ui.win.Window("Kelyra UI controls", 720, 480);
+  let window = std.graphics.ui.win.Window("Kelyra UI controls", 720, 480);
   if !window.valid() { return 1; }
 
-  let panel = std.ui.Panel(20, 20, 680, 440);
-  panel.set_anchors(std.ui.Anchor.Stretch, std.ui.Anchor.Stretch,
+  let panel = std.graphics.ui.Panel(20, 20, 680, 440);
+  panel.set_anchors(std.graphics.ui.Anchor.Stretch, std.graphics.ui.Anchor.Stretch,
                            20, 20);
-  let heading = std.ui.Label("Kelyra UI", 20, 22, 300, 32);
-  let button = std.ui.Button("Click me", 20, 80, 180, 44);
+  let heading = std.graphics.ui.Label("Kelyra UI", 20, 22, 300, 32);
+  let button = std.graphics.ui.Button("Click me", 20, 80, 180, 44);
   button.set_handler(on_click, (&button) as *u8);
-  let slider = std.ui.Slider(20, 160, 320, 28);
+  let slider = std.graphics.ui.Slider(20, 160, 320, 28);
   slider.set_value(0.35);
-  let draggable = std.ui.Panel(20, 230, 150, 70);
+  let draggable = std.graphics.ui.Panel(20, 230, 150, 70);
   draggable.draggable = true;
   draggable.background.red = 0.50;
   draggable.background.green = 0.28;

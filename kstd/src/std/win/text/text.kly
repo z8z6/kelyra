@@ -1,7 +1,7 @@
-@cfg(os="windows", arch="x86_64") module std.win.text;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.text;
 
 @extern("MultiByteToWideChar", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn utf8_to_wide(code_page: u32, flags: u32, source: *c.char,
                      source_length: i32, destination: *u16,
                      destination_length: i32) -> i32;

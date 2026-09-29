@@ -1,6 +1,6 @@
 module cfg.invalid_duplicate;
 
-@cfg(os="linux", os="windows")
+@cfg(os=os.Linux, os=os.Windows)
 @main
 fn main() -> i32 {
   return 0;

@@ -1,0 +1,23 @@
+@cfg(os=os.Windows, arch=arch.X86_64) module std.graphics.font.vulkan;
+
+import std.graphics.font;
+import std.graphics.vulkan.renderer;
+
+// The layout belongs to std.graphics.font; Vulkan only uploads its prepared
+// atlas and vertex data. Release the returned texture with Renderer.release.
+pub fn upload(renderer: *std.graphics.vulkan.renderer.Renderer,
+              layout: *std.graphics.font.TextLayout)
+              -> std.graphics.vulkan.renderer.Texture {
+  if !renderer.valid() || !layout.valid() {
+    return 0 as std.graphics.vulkan.renderer.Texture;
+  }
+  let texture = renderer.upload_rgba8(layout.pixels(), layout.atlas_width(),
+                                      layout.atlas_height(),
+                                      layout.atlas_width() * 4);
+  if texture as usize == 0 { return texture; }
+  if !renderer.upload_vertices(layout.vertices(), layout.vertex_count()) {
+    renderer.release(texture);
+    return 0 as std.graphics.vulkan.renderer.Texture;
+  }
+  return texture;
+}

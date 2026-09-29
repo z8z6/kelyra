@@ -561,7 +561,28 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
       } else {
         if (SawNamed)
           Invalid = true;
-        ++Positional;
+        std::optional<std::size_t> EnumIndex;
+        bool AmbiguousEnum = false;
+        for (std::size_t I = 0; I < Info->Parameters.size(); ++I) {
+          if (Values[I])
+            continue;
+          const auto Candidate = ParseAnnotationValue(
+              *Argument->children.front(), Info->Parameters[I].TypeName);
+          if (!Candidate || Candidate->Kind != AnnotationValueKind::Enum)
+            continue;
+          if (EnumIndex) {
+            AmbiguousEnum = true;
+            break;
+          }
+          EnumIndex = I;
+        }
+        if (AmbiguousEnum) {
+          Invalid = true;
+          Error(*Argument, lex::DiagnosticKind::InvalidAnnotation);
+          continue;
+        }
+        if (EnumIndex)
+          Index = *EnumIndex;
       }
       if (Index >= Info->Parameters.size() || Values[Index]) {
         Invalid = true;
@@ -573,6 +594,12 @@ void sema::Sema::CheckAnnotations(const lex::Node &Target) {
       if (!Values[Index]) {
         Invalid = true;
         Error(*Argument, lex::DiagnosticKind::InvalidAnnotation);
+      }
+      if (Argument->text.empty()) {
+        if (Index == Positional)
+          ++Positional;
+        while (Positional < Values.size() && Values[Positional])
+          ++Positional;
       }
     }
 

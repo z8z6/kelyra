@@ -1,0 +1,82 @@
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.input;
+
+import std.win.window;
+
+// Win32 packs signed client coordinates in the low and high words of LPARAM.
+pub fn low_signed(value: isize) -> i32 {
+  return (value as u16) as i16 as i32;
+}
+
+pub fn high_signed(value: isize) -> i32 {
+  return ((value as usize / 65536) as u16) as i16 as i32;
+}
+
+pub fn low_unsigned(value: usize) -> u32 {
+  return (value as u16) as u32;
+}
+
+pub fn high_unsigned(value: usize) -> u32 {
+  return ((value / 65536) as u16) as u32;
+}
+
+pub fn key_repeat_count(value: isize) -> u32 {
+  return low_unsigned(value as usize);
+}
+
+pub fn key_scan_code(value: isize) -> u32 {
+  return ((value as usize / 65536) as u8) as u32;
+}
+
+pub fn key_extended(value: isize) -> bool {
+  return ((value as usize / 16777216) as u8) % 2 != 0;
+}
+
+pub fn key_repeated(value: isize) -> bool {
+  return ((value as usize / 1073741824) as u8) % 2 != 0;
+}
+
+pub fn is_high_surrogate(value: u32) -> bool {
+  return value >= 55296 && value <= 56319;
+}
+
+pub fn is_low_surrogate(value: u32) -> bool {
+  return value >= 56320 && value <= 57343;
+}
+
+pub fn combine_surrogates(high: u32, low: u32) -> u32 {
+  return 65536 + (high - 55296) * 1024 + low - 56320;
+}
+
+@extern("SetCapture", "user32")
+@callconv(cc.System)
+pub fn set_capture(window: std.win.window.HWnd) -> std.win.window.HWnd;
+
+@extern("ReleaseCapture", "user32")
+@callconv(cc.System)
+pub fn release_capture() -> i32;
+
+@extern("ScreenToClient", "user32")
+@callconv(cc.System)
+pub fn screen_to_client(window: std.win.window.HWnd,
+                        point: *std.win.window.Point) -> i32;
+
+@extern("ClientToScreen", "user32")
+@callconv(cc.System)
+pub fn client_to_screen(window: std.win.window.HWnd,
+                        point: *std.win.window.Point) -> i32;
+
+@extern("GetKeyState", "user32")
+@callconv(cc.System)
+pub fn key_state(key: i32) -> i16;
+
+@extern("TrackMouseEvent", "user32")
+@callconv(cc.System)
+pub fn track_mouse_event(value: *TrackMouseEvent) -> i32;
+
+@layout(Layout.C)
+pub class TrackMouseEvent {
+  pub size: u32;
+  pub flags: u32;
+  pub window: std.win.window.HWnd;
+  pub hover_time: u32;
+}

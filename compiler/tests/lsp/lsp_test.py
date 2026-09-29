@@ -332,7 +332,7 @@ std_source = """module app.std_use;
 import std.math.integer;
 annotation local();
 @local fn declared() -> i64 { return 1; }
-@cfg(os="linux") fn platform() -> i64 {
+@cfg(os=os.Linux) fn platform() -> i64 {
   return std.math.integer.abs_i64(-4);
 }
 @std.annotation.main fn entry() {}
@@ -368,6 +368,18 @@ for request_id, needle, expected_suffix in [
     assert results, (request_id, needle)
     target = results[0]
     assert target["uri"].endswith(expected_suffix), target
+for request_id, offset, declaration, target_offset in [
+    (35, 1, "enum os", 5),
+    (36, 4, "Linux,", 0),
+]:
+    send({"jsonrpc": "2.0", "id": request_id,
+          "method": "textDocument/definition", "params": {
+              "textDocument": {"uri": std_uri},
+              "position": position_in(std_source, "os.Linux", offset)}})
+    found = receive(request_id)
+    assert found and found[0]["uri"] == annotation_uri, found
+    assert found[0]["range"]["start"] == position_in(
+        annotation_source, declaration, target_offset), found
 send({"jsonrpc": "2.0", "id": 29, "method": "textDocument/hover", "params": {
     "textDocument": {"uri": std_uri},
     "position": position_in(std_source, "abs_i64(-4)", 3)}})
@@ -392,6 +404,103 @@ send({"jsonrpc": "2.0", "id": 30, "method": "textDocument/definition", "params":
     "textDocument": {"uri": unimported_uri},
     "position": position_in(unimported, "abs_i64", 3)}})
 assert receive(30) == []
+
+# Members supplied by an annotation jump to their source declarations.
+annotation_members = """module app.annotation_members;
+@target(Target.Class T)
+pub annotation added() {
+  pub value: i32;
+  pub fn answer() -> i32 { return 42; }
+}
+@target(Target.Class T)
+pub annotation composed() = @added;
+"""
+annotation_members_path = workspace / "app/src/annotation_members.kly"
+annotation_members_path.write_text(annotation_members)
+annotation_members_uri = annotation_members_path.as_uri()
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": annotation_members_uri, "languageId": "kelyra",
+                     "version": 1, "text": annotation_members}}})
+injected_source = """module app.uses_annotation;
+import app.annotation_members;
+@composed class Box {}
+fn use() -> i32 {
+  let box = Box();
+  return box.value + Box.answer();
+}
+"""
+injected_uri = (workspace / "app/src/uses_annotation.kly").as_uri()
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": injected_uri, "languageId": "kelyra",
+                     "version": 1, "text": injected_source}}})
+for request_id, needle, target in [
+    (40, "box.value", "value: i32"),
+    (41, "Box.answer", "answer()"),
+]:
+    send({"jsonrpc": "2.0", "id": request_id,
+          "method": "textDocument/definition", "params": {
+              "textDocument": {"uri": injected_uri},
+              "position": position_in(injected_source, needle,
+                                      len(needle) - len(target.split("(")[0].split(":")[0]) + 1)}})
+    found = receive(request_id)
+    assert found and found[0]["uri"] == annotation_members_uri, (needle, found)
+    assert found[0]["range"]["start"] == position_in(
+        annotation_members, target, 0), (needle, found)
+
+enum_source = """module app.enums;
+pub enum Kind { First, Second }
+"""
+enum_path = workspace / "app/src/enums.kly"
+enum_path.write_text(enum_source)
+enum_uri = enum_path.as_uri()
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": enum_uri, "languageId": "kelyra",
+                     "version": 1, "text": enum_source}}})
+send({"jsonrpc": "2.0", "id": 44, "method": "textDocument/documentSymbol",
+      "params": {"textDocument": {"uri": enum_uri}}})
+enum_symbols = receive(44)
+assert enum_symbols[0]["name"] == "Kind"
+assert [member["name"] for member in enum_symbols[0]["children"]] == [
+    "First", "Second"]
+enum_use = """module app.enum_use;
+import app.enums;
+fn get() -> Kind { return Kind.Second; }
+"""
+enum_use_uri = (workspace / "app/src/enum_use.kly").as_uri()
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": enum_use_uri, "languageId": "kelyra",
+                     "version": 1, "text": enum_use}}})
+for request_id, source_needle, target_needle, offset in [
+    (42, "-> Kind", "Kind {", 4),
+    (43, "Kind.Second", "Second }", 7),
+]:
+    send({"jsonrpc": "2.0", "id": request_id,
+          "method": "textDocument/definition", "params": {
+              "textDocument": {"uri": enum_use_uri},
+              "position": position_in(enum_use, source_needle, offset)}})
+    found = receive(request_id)
+    assert found and found[0]["uri"] == enum_uri, (source_needle, found)
+    assert found[0]["range"]["start"] == position_in(
+        enum_source, target_needle, 0), (source_needle, found)
+
+accessor_source = """module app.accessor_use;
+class Actor {
+  @accessors
+  pub health: i32;
+}
+fn read(actor: *Actor) -> i32 { return actor.get_health(); }
+"""
+accessor_uri = (workspace / "app/src/accessor_use.kly").as_uri()
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+    "textDocument": {"uri": accessor_uri, "languageId": "kelyra",
+                     "version": 1, "text": accessor_source}}})
+send({"jsonrpc": "2.0", "id": 45, "method": "textDocument/definition",
+      "params": {"textDocument": {"uri": accessor_uri},
+                 "position": position_in(accessor_source, "get_health", 2)}})
+accessor_definition = receive(45)
+assert accessor_definition and accessor_definition[0]["uri"] == annotation_uri
+assert accessor_definition[0]["range"]["start"] == position_in(
+    annotation_source, "get_${F.name}", 0)
 
 send({"jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": None})
 receive(6)

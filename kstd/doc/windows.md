@@ -2,12 +2,13 @@
 
 The Windows x64 declarations live under `std.win`. Import only the modules
 needed by a program. These modules are ordinary Kelyra source files using
-`@layout(Layout.C)`, function pointer fields, `@callconv(CallingConvention.System)`,
+`@layout(Layout.C)`, function pointer fields, `@callconv(cc.System)`,
 and `@extern("symbol", "import-library")`.
 
 | Module | First-version coverage |
 | --- | --- |
 | `std.win.window` | Window classes, wide-character window creation, window procedure, message loop, client rectangle. |
+| `std.win.message`, `input` | Named window-message codes, send/post helpers, packed mouse and keyboard data, capture and coordinate conversion. |
 | `std.win.thread`, `event`, `wait`, `handle` | Native thread callback and handle, thread ID, address wait/wake, events, object waits, handle closing. |
 | `std.win.guid`, `com` | GUID storage, `IUnknown` vtable, reference counting, apartment initialization, instance creation, COM task memory, GUID conversion. |
 | `std.win.dxgi` | Factory, WARP adapter, window swap chain, presentation, buffers. |
@@ -40,9 +41,15 @@ for Kernel32, User32, Ole32, DXGI and D3D12.
 
 Applications can use `std.graphics.window.run_backend` to select Direct3D12 or
 Vulkan on Windows. Its Win32 host and UI event loop are written in Kelyra.
-Direct3D12 uses `std.win.graphics.window`; Vulkan uses `std.ui.win.Window` and
+Direct3D12 uses `std.win.graphics.window`; Vulkan uses `std.graphics.ui.win.Window` and
 the native Vulkan adapter. The shader bytecode is DXIL or SPIR-V respectively.
 Linux window presentation remains future work.
+
+The component host at `std.graphics.ui.win.Window` receives sent and posted
+Win32 messages in its window procedure, then delivers typed `std.graphics.ui.Event`
+values during `poll()`. Raw Win32 messages remain available through
+`std.win.window.Message`. `kstd/tests/ui.ps1` builds and runs the UI behavior
+and native input examples on Windows.
 
 Build and run the pure Kelyra triangle sample from PowerShell:
 

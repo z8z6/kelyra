@@ -1,9 +1,0 @@
-.git/**
-.gitignore
-AGENTS.md
-.gradle/**
-jetbrains/**
-test/**
-grammar/**
-*.vsix
-assets/1.png

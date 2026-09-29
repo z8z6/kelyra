@@ -3,9 +3,12 @@
 /kstd/build/
 /kstd/.kelp/
 /kelp/build/
-/kide/build/
-/kide/node_modules/
-/kide/.npm-cache/
+/kide/vscode/build/
+/kide/vscode/node_modules/
+/kide/vscode/.npm-cache/
+/kide/jetbrains/build/
+/kide/jetbrains/.gradle/
+/kide/jetbrains/.intellijPlatform/
 /doc/node_modules/
 /doc/.npm-cache/
 /doc/.vitepress/dist/
@@ -15,3 +18,5 @@
 .vscode/
 idea-build/
 doc/.npm-cache
+cmake-build-debug/
+.kelp/

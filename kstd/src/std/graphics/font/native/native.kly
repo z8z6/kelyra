@@ -1,0 +1,190 @@
+@cfg(os=os.Windows, arch=arch.X86_64) module std.graphics.font.native;
+
+// These declarations mirror the public FreeType, HarfBuzz and ICU C ABIs.
+// No layout or rendering algorithm lives in a native adapter.
+
+@layout(Layout.C)
+pub class FtGeneric {
+  pub data: *u8;
+  pub finalizer: *u8;
+}
+
+@layout(Layout.C)
+pub class FtBox {
+  pub x_min: c.long;
+  pub y_min: c.long;
+  pub x_max: c.long;
+  pub y_max: c.long;
+}
+
+@layout(Layout.C)
+pub class FtSizeMetrics {
+  pub x_ppem: u16;
+  pub y_ppem: u16;
+  pub x_scale: c.long;
+  pub y_scale: c.long;
+  pub ascender: c.long;
+  pub descender: c.long;
+  pub height: c.long;
+  pub max_advance: c.long;
+}
+
+@layout(Layout.C)
+pub class FtSize {
+  pub face: *u8;
+  pub generic: FtGeneric;
+  pub metrics: FtSizeMetrics;
+}
+
+@layout(Layout.C)
+pub class FtFace {
+  pub num_faces: c.long;
+  pub face_index: c.long;
+  pub face_flags: c.long;
+  pub style_flags: c.long;
+  pub num_glyphs: c.long;
+  pub family_name: *c.char;
+  pub style_name: *c.char;
+  pub num_fixed_sizes: c.int;
+  pub available_sizes: *u8;
+  pub num_charmaps: c.int;
+  pub charmaps: *u8;
+  pub generic: FtGeneric;
+  pub bbox: FtBox;
+  pub units_per_em: u16;
+  pub ascender: i16;
+  pub descender: i16;
+  pub height: i16;
+  pub max_advance_width: i16;
+  pub max_advance_height: i16;
+  pub underline_position: i16;
+  pub underline_thickness: i16;
+  pub glyph: *FtGlyphSlot;
+  pub size: *FtSize;
+}
+
+@layout(Layout.C)
+pub class FtGlyphMetrics {
+  pub width: c.long;
+  pub height: c.long;
+  pub hori_bearing_x: c.long;
+  pub hori_bearing_y: c.long;
+  pub hori_advance: c.long;
+  pub vert_bearing_x: c.long;
+  pub vert_bearing_y: c.long;
+  pub vert_advance: c.long;
+}
+
+@layout(Layout.C)
+pub class FtVector {
+  pub x: c.long;
+  pub y: c.long;
+}
+
+@layout(Layout.C)
+pub class FtBitmap {
+  pub rows: u32;
+  pub width: u32;
+  pub pitch: c.int;
+  pub buffer: *u8;
+  pub num_grays: u16;
+  pub pixel_mode: u8;
+  pub palette_mode: u8;
+  pub palette: *u8;
+}
+
+@layout(Layout.C)
+pub class FtGlyphSlot {
+  pub library: *u8;
+  pub face: *FtFace;
+  pub next: *FtGlyphSlot;
+  pub glyph_index: u32;
+  pub generic: FtGeneric;
+  pub metrics: FtGlyphMetrics;
+  pub linear_hori_advance: c.long;
+  pub linear_vert_advance: c.long;
+  pub advance: FtVector;
+  pub format: u32;
+  pub bitmap: FtBitmap;
+  pub bitmap_left: c.int;
+  pub bitmap_top: c.int;
+}
+
+@layout(Layout.C)
+pub class HbGlyphInfo {
+  pub codepoint: u32;
+  pub mask: u32;
+  pub cluster: u32;
+  pub var1: u32;
+  pub var2: u32;
+}
+
+@layout(Layout.C)
+pub class HbGlyphPosition {
+  pub x_advance: i32;
+  pub y_advance: i32;
+  pub x_offset: i32;
+  pub y_offset: i32;
+  pub var: u32;
+}
+
+@extern("FT_Init_FreeType") pub fn ft_init(library: **u8) -> i32;
+@extern("FT_Done_FreeType") pub fn ft_done(library: *u8) -> i32;
+@extern("FT_New_Face")
+pub fn ft_new_face(library: *u8, path: *c.char, index: c.long,
+                   face: **FtFace) -> i32;
+@extern("FT_Done_Face") pub fn ft_done_face(face: *FtFace) -> i32;
+@extern("FT_Set_Pixel_Sizes")
+pub fn ft_set_pixel_sizes(face: *FtFace, width: u32, height: u32) -> i32;
+@extern("FT_Get_Char_Index")
+pub fn ft_get_char_index(face: *FtFace, scalar: c.long) -> u32;
+@extern("FT_Load_Glyph")
+pub fn ft_load_glyph(face: *FtFace, glyph: u32, flags: i32) -> i32;
+@extern("FT_Render_Glyph")
+pub fn ft_render_glyph(slot: *FtGlyphSlot, mode: i32) -> i32;
+
+@extern("hb_ft_font_create_referenced")
+pub fn hb_ft_font(face: *FtFace) -> *u8;
+@extern("hb_font_destroy") pub fn hb_font_destroy(font: *u8) -> void;
+@extern("hb_buffer_create") pub fn hb_buffer_create() -> *u8;
+@extern("hb_buffer_destroy") pub fn hb_buffer_destroy(buffer: *u8) -> void;
+@extern("hb_buffer_add_utf16")
+pub fn hb_buffer_add_utf16(buffer: *u8, text: *u16, length: i32,
+                           offset: u32, count: i32) -> void;
+@extern("hb_buffer_set_direction")
+pub fn hb_buffer_set_direction(buffer: *u8, direction: i32) -> void;
+@extern("hb_buffer_guess_segment_properties")
+pub fn hb_buffer_guess_segment_properties(buffer: *u8) -> void;
+@extern("hb_shape")
+pub fn hb_shape(font: *u8, buffer: *u8, features: *u8,
+                feature_count: u32) -> void;
+@extern("hb_buffer_get_glyph_infos")
+pub fn hb_buffer_glyph_infos(buffer: *u8, count: *u32) -> *HbGlyphInfo;
+@extern("hb_buffer_get_glyph_positions")
+pub fn hb_buffer_glyph_positions(buffer: *u8, count: *u32)
+                              -> *HbGlyphPosition;
+
+@extern("u_strFromUTF8_78")
+pub fn utf8_to_utf16(target: *u16, capacity: i32, length: *i32,
+                     source: *c.char, source_length: i32,
+                     status: *i32) -> *u16;
+@extern("ubrk_open_78")
+pub fn break_open(kind: i32, locale: *c.char, text: *u16,
+                  length: i32, status: *i32) -> *u8;
+@extern("ubrk_close_78") pub fn break_close(value: *u8) -> void;
+@extern("ubrk_next_78") pub fn break_next(value: *u8) -> i32;
+@extern("ubrk_following_78")
+pub fn break_following(value: *u8, offset: i32) -> i32;
+@extern("ubrk_getRuleStatus_78")
+pub fn break_status(value: *u8) -> i32;
+@extern("ubidi_openSized_78")
+pub fn bidi_open(length: i32, run_count: i32, status: *i32) -> *u8;
+@extern("ubidi_close_78") pub fn bidi_close(value: *u8) -> void;
+@extern("ubidi_setPara_78")
+pub fn bidi_set_para(value: *u8, text: *u16, length: i32,
+                     level: u8, embedding: *u8, status: *i32) -> void;
+@extern("ubidi_countRuns_78")
+pub fn bidi_run_count(value: *u8, status: *i32) -> i32;
+@extern("ubidi_getVisualRun_78")
+pub fn bidi_visual_run(value: *u8, index: i32, start: *i32,
+                       length: *i32) -> i32;

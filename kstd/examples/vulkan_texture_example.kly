@@ -1,0 +1,93 @@
+@cfg(os = os.Windows, arch = arch.X86_64)
+module vulkan_texture_example;
+
+import std.graphics.ui.win;
+import std.graphics.vulkan.renderer;
+import std.io;
+import std.io.file;
+import std.os;
+
+@main
+pub fn main() -> i32 {
+  let vertex: [8192]u8;
+  let fragment: [8192]u8;
+  let vertex_size = read_shader("build/vulkan_texture.vert.spv", &vertex[0], 8192);
+  let fragment_size = read_shader("build/vulkan_texture.frag.spv", &fragment[0], 8192);
+  if vertex_size <= 0 || fragment_size <= 0 {
+    println("Cannot read compiled Kelyra texture shaders");
+    return 1;
+  }
+  let window = Window("Kelyra Vulkan texture", 800, 600);
+  if !window.valid() {
+    return 2;
+  }
+  let renderer = Renderer(window.handle(), &vertex[0], vertex_size as usize, &fragment[0], fragment_size as usize, 6);
+  if !renderer.valid() {
+    println(renderer.last_error());
+    return 3;
+  }
+  // RGBA8 rows: red, green, blue, yellow quadrants. The image is generated
+  // entirely by Kelyra host code, then uploaded through the Vulkan backend.
+  let pixels: [64]u8;
+  let y: usize = 0;
+  while y < 4 {
+    let x: usize = 0;
+    while x < 4 {
+      let offset = (y * 4 + x) * 4;
+      pixels[offset] = 0;
+      pixels[offset + 1] = 0;
+      pixels[offset + 2] = 0;
+      pixels[offset + 3] = 255;
+      if y < 2 {
+        if x < 2 {
+          pixels[offset] = 255;
+        } else {
+          pixels[offset + 1] = 255;
+        }
+      } else {
+        if x < 2 {
+          pixels[offset + 2] = 255;
+        } else {
+          pixels[offset] = 255;
+          pixels[offset + 1] = 255;
+        }
+      }
+      x = x + 1;
+    }
+    y = y + 1;
+  }
+  let texture = renderer.upload_rgba8(&pixels[0], 4, 4, 16);
+  if texture as usize == 0 {
+    println(renderer.last_error());
+    return 4;
+  }
+  if !renderer.bind(texture) {
+    renderer.release(texture);
+    return 5;
+  }
+  let result = 0;
+  while window.poll() {
+    let status = renderer.draw();
+    if status == 0 {
+      result = 6;
+      break;
+    }
+    if status == 2 {
+      result = 7;
+      break;
+    }
+    sleep_millis(16);
+  }
+  renderer.release(texture);
+  return result;
+}
+
+fn read_shader(path: *c.char, output: *u8, capacity: usize) -> i64 {
+  let handle = open(path, 0);
+  if handle < 0 {
+    return handle;
+  }
+  let length = read(handle, output, capacity);
+  close(handle);
+  return length;
+}

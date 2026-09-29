@@ -1,4 +1,4 @@
-@cfg(os="linux", arch="x86_64") module std.io.linux;
+@cfg(os=os.Linux, arch=arch.X86_64) module std.io.linux;
 
 pub fn read_stdin(output: *u8, capacity: usize) -> i64 {
   let descriptor: i64 = 0;

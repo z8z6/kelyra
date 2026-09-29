@@ -3,25 +3,23 @@ import std.graphics.vulkan;
 @main
 fn main() -> i32 {
   let version: u32 = 0;
-  if std.graphics.vulkan.enumerate_instance_version(&version) != 0 {
+  if enumerate_instance_version(&version) != 0 {
     return 1;
   }
-  if std.graphics.vulkan.api_version_major(version) == 0 {
+  if api_version_major(version) == 0 {
     return 2;
   }
-
-  let application = std.graphics.vulkan.ApplicationInfo();
+  let application = ApplicationInfo();
   application.application_name = "Kelyra Vulkan";
-  let info = std.graphics.vulkan.InstanceCreateInfo();
+  let info = InstanceCreateInfo();
   info.application_info = &application;
-  let instance: std.graphics.vulkan.Instance = 0 as *u8;
-  if std.graphics.vulkan.create_instance(&info, &instance) != 0 {
+  let instance: Instance = 0 as *u8;
+  if create_instance(&info, &instance) != 0 {
     return 3;
   }
   let count: u32 = 0;
-  let result = std.graphics.vulkan.enumerate_physical_devices(
-      instance, &count, 0 as *std.graphics.vulkan.PhysicalDevice);
-  std.graphics.vulkan.destroy_instance(instance);
+  let result = enumerate_physical_devices(instance, &count, 0 as *PhysicalDevice);
+  destroy_instance(instance);
   if result != 0 {
     return 4;
   }

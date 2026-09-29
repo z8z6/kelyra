@@ -1,17 +1,17 @@
 module std.alloc;
 
-@cfg(os="linux", arch="x86_64")
+@cfg(os=os.Linux, arch=arch.X86_64)
 import std.alloc.linux;
-@cfg(os="windows", arch="x86_64")
+@cfg(os=os.Windows, arch=arch.X86_64)
 import std.win.memory;
 
 // Allocates `size` bytes. The result is null when the request cannot be met.
-@cfg(os="linux", arch="x86_64")
+@cfg(os=os.Linux, arch=arch.X86_64)
 pub fn allocate(size: usize) -> *u8 {
   return std.alloc.linux.allocate(size);
 }
 
-@cfg(os="windows", arch="x86_64")
+@cfg(os=os.Windows, arch=arch.X86_64)
 pub fn allocate(size: usize) -> *u8 {
   return std.win.memory.allocate(size);
 }
@@ -37,12 +37,12 @@ pub fn reallocate(pointer: *u8, size: usize) -> *u8 {
 }
 
 // Releases memory returned by allocate or reallocate. Null is accepted.
-@cfg(os="linux", arch="x86_64")
+@cfg(os=os.Linux, arch=arch.X86_64)
 pub fn release(pointer: *u8) -> void {
   std.alloc.linux.release(pointer);
 }
 
-@cfg(os="windows", arch="x86_64")
+@cfg(os=os.Windows, arch=arch.X86_64)
 pub fn release(pointer: *u8) -> void {
   std.win.memory.release(pointer);
 }

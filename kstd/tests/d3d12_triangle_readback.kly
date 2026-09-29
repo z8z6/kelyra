@@ -1,4 +1,4 @@
-@cfg(os="windows", arch="x86_64") module d3d12_triangle_readback;
+@cfg(os=os.Windows, arch=arch.X86_64) module d3d12_triangle_readback;
 
 import std.io;
 import std.io.file;

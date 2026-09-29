@@ -72,7 +72,7 @@ TEST(Frontend, Format) {
                                "import math.vector;\n\n"
                                "@Vertex\n"
                                "class Pair {\n"
-                               "  left: i32;\n"
+                               "  left : i32;\n"
                                "  right: [4]i32;\n"
                                "}\n\n"
                                "pub fn main() -> i32 {\n"
@@ -285,8 +285,159 @@ TEST(Frontend, ForwardConstructorSyntaxAndFormatting) {
   EXPECT_NE(Ast.find("Spread"), std::string::npos);
   const auto Formatted = Format(Parsed);
   EXPECT_NE(
-      Formatted.find("init<Args...>(\n    @forward\n    args: ...Args\n  )"),
+      Formatted.find("init<Args...>(@forward args: ...Args)"),
       std::string::npos);
+  const auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, FormatFieldsAndAnnotatedParameters) {
+  const auto Parsed = lexer.parse(R"(
+class Thing {
+  pub x:i32;
+  pub longer_name: f64 ;
+  @tag pub fn run(@forward first:i32,
+                  second:f64) -> void { return; }
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("  pub x          : i32;\n"
+                           "  pub longer_name: f64;\n\n"
+                           "  @tag\n  pub fn run(\n"
+                           "    @forward first : i32,\n"
+                           "             second: f64\n  )"),
+            std::string::npos)
+      << Formatted;
+  const auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, FormatShaderParameterAnnotations) {
+  const auto Parsed = lexer.parse(R"(
+@fragment
+pub fn fragment_main(@location(0) uv: Vec2,
+                   @binding(0,0) image: Texture2D,
+                   @binding(0, 1) sampler: SamplerState) -> FragmentOutput {
+  return FragmentOutput(sample_2d(image, sampler, uv));
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("pub fn fragment_main(\n"
+                           "  @location(0)   uv     : Vec2,\n"
+                           "  @binding(0, 0) image  : Texture2D,\n"
+                           "  @binding(0, 1) sampler: SamplerState\n"
+                           ") -> FragmentOutput"),
+            std::string::npos)
+      << Formatted;
+  const auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, FormatLongFirstParameterOnNewLine) {
+  const auto Parsed = lexer.parse(
+      "fn format_a_very_long_function_name_with_many_descriptive_words("
+      "first_argument:i32, second_argument:i32) -> void { return; }");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("(\n  first_argument : i32,\n"
+                           "  second_argument: i32\n)"),
+            std::string::npos)
+      << Formatted;
+  const auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, FormatPointerCasts) {
+  const auto Parsed = lexer.parse(R"(
+fn worker(context: *u8) -> *u8 {
+  let slot = context as*usize;
+  *slot = Counter.instance() as usize;
+  return 0 as*u8;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("let slot = context as *usize;"),
+            std::string::npos);
+  EXPECT_NE(Formatted.find("*slot = Counter.instance() as usize;"),
+            std::string::npos);
+  EXPECT_NE(Formatted.find("return 0 as *u8;"), std::string::npos);
+  const auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, FormatLongLogicalConditionAndBlankLines) {
+  const auto Parsed = lexer.parse(R"(
+fn check(box: *u8, other: *u8, same: *u8) -> i32 {
+  if box as usize == 0 || other as usize == 0 || box as usize != same as usize || box as usize == other as usize {
+    return 3;
+  }
+
+  let first = 1;
+
+  let second = 2;
+  return first + second;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("  if box as usize == 0 ||\n"
+                           "    other as usize == 0 ||\n"
+                           "    box as usize != same as usize ||\n"
+                           "    box as usize == other as usize {"),
+            std::string::npos)
+      << Formatted;
+  EXPECT_NE(Formatted.find("  }\n\n  let first = 1;\n\n"
+                           "  let second = 2;"),
+            std::string::npos)
+      << Formatted;
+  const auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, FormatAnnotatedFieldNamesAndColons) {
+  const auto Parsed = lexer.parse(R"(
+@reflect
+class Actor {
+  pub health: i32;
+  hidden: i32;
+  @reflect
+  id: u64;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("  pub health: i32;\n"
+                           "      hidden: i32;\n"
+                           "  @reflect\n"
+                           "      id    : u64;"),
+            std::string::npos)
+      << Formatted;
+  const auto Again = lexer.parse(Formatted);
+  ASSERT_TRUE(Again.ok());
+  EXPECT_EQ(Format(Again), Formatted);
+}
+
+TEST(Frontend, PreserveBlankLineBetweenParameters) {
+  const auto Parsed = lexer.parse(R"(
+fn sum(first: i32,
+
+       second: i32) -> i32 {
+  return first + second;
+}
+)");
+  ASSERT_TRUE(Parsed.ok());
+  const auto Formatted = Format(Parsed);
+  EXPECT_NE(Formatted.find("first : i32,\n\n"), std::string::npos)
+      << Formatted;
   const auto Again = lexer.parse(Formatted);
   ASSERT_TRUE(Again.ok());
   EXPECT_EQ(Format(Again), Formatted);
@@ -328,31 +479,31 @@ TEST(Frontend, InterfaceDeclaration) {
 }
 
 TEST(Frontend, ModuleTargetCondition) {
-  auto Parsed = lexer.parse("@cfg(os=\"linux\") module platform.linux;\nfn "
+  auto Parsed = lexer.parse("@cfg(os.Linux) module platform.linux;\nfn "
                             "value() -> i32 { return 1; }");
   ASSERT_TRUE(Parsed.ok());
   const auto Ast = lexer.dumpAst(*Parsed.root);
   EXPECT_NE(Ast.find("(ModuleDecl \"platform.linux\" (Annotation \"cfg\""),
             std::string::npos);
   const auto Formatted = Format(Parsed);
-  EXPECT_NE(Formatted.find("@cfg(os = \"linux\")\nmodule platform.linux;"),
+  EXPECT_NE(Formatted.find("@cfg(os.Linux)\nmodule platform.linux;"),
             std::string::npos);
   EXPECT_TRUE(lexer.parse(Formatted).ok());
   EXPECT_TRUE(lexer.parseExpression("meta(std.annotation.main)").ok());
 }
 
 TEST(Frontend, FormatEachAnnotationOnOwnLine) {
-  auto Parsed = lexer.parse("@cfg(os=\"linux\") @trace module sample; "
-                            "@cfg(os=\"linux\") import math; "
+  auto Parsed = lexer.parse("@cfg(os.Linux) @trace module sample; "
+                            "@cfg(os.Linux) import math; "
                             "@tag @mark pub class Thing { "
                             "@tag @mark pub value:i32; "
                             "@tag @mark pub fn run()->i32{return 1;} "
                             "} @extern fn external()->i32;");
   ASSERT_TRUE(Parsed.ok());
   const auto Formatted = Format(Parsed);
-  EXPECT_NE(Formatted.find("@cfg(os = \"linux\")\n@trace\nmodule sample;"),
+  EXPECT_NE(Formatted.find("@cfg(os.Linux)\n@trace\nmodule sample;"),
             std::string::npos);
-  EXPECT_NE(Formatted.find("@cfg(os = \"linux\")\nimport math;"),
+  EXPECT_NE(Formatted.find("@cfg(os.Linux)\nimport math;"),
             std::string::npos);
   EXPECT_NE(Formatted.find("@tag\n@mark\npub class Thing {"),
             std::string::npos);
@@ -433,14 +584,14 @@ TEST(Frontend, FormatImportsKeepsCommentsAttached) {
 }
 
 TEST(Frontend, FormatImportsKeepAnnotationsAttached) {
-  auto Parsed = lexer.parse("@cfg(os=\"linux\") import zebra; "
-                            "@cfg(os=\"windows\") import alpha; "
+  auto Parsed = lexer.parse("@cfg(os.Linux) import zebra; "
+                            "@cfg(os.Windows) import alpha; "
                             "fn main() { return; }");
   ASSERT_TRUE(Parsed.ok());
   const auto Formatted = Format(Parsed);
-  EXPECT_NE(Formatted.find("@cfg(os = \"windows\")\nimport alpha;"),
+  EXPECT_NE(Formatted.find("@cfg(os.Windows)\nimport alpha;"),
             std::string::npos);
-  EXPECT_NE(Formatted.find("@cfg(os = \"linux\")\nimport zebra;"),
+  EXPECT_NE(Formatted.find("@cfg(os.Linux)\nimport zebra;"),
             std::string::npos);
   EXPECT_LT(Formatted.find("import alpha;"), Formatted.find("import zebra;"));
   auto Reparsed = lexer.parse(Formatted);

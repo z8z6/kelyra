@@ -3,16 +3,16 @@ import std.sync.signal.hosted;
 import std.sync.thread;
 import std.sync.thread.hosted;
 
-@cfg(os="linux", arch="x86_64")
+@cfg(os=os.Linux, arch=arch.X86_64)
 fn increment(context: *u8) -> *u8 {
   *context = *context + 1;
   return context;
 }
 
-@cfg(os="linux", arch="x86_64")
+@cfg(os=os.Linux, arch=arch.X86_64)
 fn handle_signal(number: i32) -> void { return; }
 
-@cfg(os="linux", arch="x86_64")
+@cfg(os=os.Linux, arch=arch.X86_64)
 @main
 pub fn main() -> i32 {
   let value: u8 = 41;

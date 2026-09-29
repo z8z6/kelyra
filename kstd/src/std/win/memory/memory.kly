@@ -1,12 +1,12 @@
-@cfg(os="windows", arch="x86_64") module std.win.memory;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.memory;
 
 @extern("VirtualAlloc", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn virtual_alloc(address: *u8, size: usize, allocation_type: u32,
                  protection: u32) -> *u8;
 
 @extern("VirtualFree", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn virtual_free(address: *u8, size: usize, free_type: u32) -> i32;
 
 // One VirtualAlloc region per allocation. The first 16 bytes hold metadata.

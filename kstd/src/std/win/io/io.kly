@@ -1,9 +1,9 @@
-@cfg(os="windows", arch="x86_64") module std.win.io;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.io;
 
 import std.win.file;
 
 @extern("GetStdHandle", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn get_std_handle(which: i32) -> *u8;
 
 pub fn read_stdin(output: *u8, capacity: usize) -> i64 {

@@ -1,0 +1,572 @@
+module std.graphics.ui;
+
+// UI coordinates are logical client-area pixels. The application supplies a
+// painter; a graphics backend can implement these callbacks without changing
+// controls or event dispatch.
+pub class Rect {
+  pub x: i32;
+  pub y: i32;
+  pub width: i32;
+  pub height: i32;
+}
+
+pub class Size {
+  pub width: i32;
+  pub height: i32;
+}
+
+pub class Color {
+  pub red: f32;
+  pub green: f32;
+  pub blue: f32;
+  pub alpha: f32;
+}
+
+pub enum EventKind {
+  PointerMove,
+  PointerDown,
+  PointerUp,
+  PointerDoubleClick,
+  Click,
+  DragStart,
+  DragMove,
+  DragEnd,
+  KeyDown,
+  KeyUp,
+  TextInput,
+  PointerWheel,
+  PointerLeave,
+  Focus,
+  Blur,
+  CaptureLost,
+  Resize,
+  Close,
+}
+
+pub enum MouseButton { None, Left, Right, Middle, X1, X2 }
+
+pub class Event {
+  pub kind: EventKind;
+  pub x: i32;
+  pub y: i32;
+  pub delta_x: i32;
+  pub delta_y: i32;
+  pub key: u32;
+  pub character: u32;
+  pub button: MouseButton;
+  pub wheel_x: i32;
+  pub wheel_y: i32;
+  pub modifiers: u32;
+  pub scan_code: u32;
+  pub repeat_count: u32;
+  pub repeated: bool;
+  pub extended: bool;
+  pub width: i32;
+  pub height: i32;
+  pub handled: bool;
+}
+
+pub alias EventHandler = fn(*u8, *Event) -> void;
+
+@interface pub class Painter {
+  pub fn fill(bounds: *Rect, color: *Color) -> void;
+  pub fn text(bounds: *Rect, content: *c.char, color: *Color) -> void;
+}
+@interface pub class Layoutable {
+  pub fn measure(available: *Size, desired: *Size) -> void;
+  pub fn arrange(frame: *Rect) -> void;
+}
+@interface pub class Renderable {
+  pub fn paint(painter: *Painter) -> void;
+}
+@interface pub class EventTarget {
+  pub fn on_event(event: *Event) -> void;
+}
+@interface pub class Component: Layoutable, Renderable, EventTarget {}
+
+pub enum Anchor {
+  Start,
+  End,
+  Stretch,
+}
+
+// A Widget is the common object embedded by each control. Its parent owns the
+// association; controls and their text remain owned by application code.
+pub class Widget: Component {
+  pub bounds: Rect;
+  pub frame: Rect;
+  pub visible: bool;
+  pub enabled: bool;
+  pub focusable: bool;
+  pub draggable: bool;
+  pub left_anchor: Anchor;
+  pub top_anchor: Anchor;
+  pub right_margin: i32;
+  pub bottom_margin: i32;
+  pub parent: *Widget;
+  pub first_child: *Widget;
+  pub next_sibling: *Widget;
+  owner: *u8;
+  pub handler: EventHandler;
+  pub handler_context: *u8;
+  pub background: Color;
+  pub foreground: Color;
+
+  pub init(x: i32, y: i32, width: i32, height: i32) {
+    bounds = Rect();
+    frame = Rect();
+    visible = true;
+    enabled = true;
+    focusable = false;
+    draggable = false;
+    left_anchor = Anchor.Start;
+    top_anchor = Anchor.Start;
+    right_margin = 0;
+    bottom_margin = 0;
+    parent = 0 as *Widget;
+    first_child = 0 as *Widget;
+    next_sibling = 0 as *Widget;
+    owner = 0 as *u8;
+    handler = 0 as EventHandler;
+    handler_context = 0 as *u8;
+    background = Color();
+    foreground = Color();
+    foreground.red = 1.0;
+    foreground.green = 1.0;
+    foreground.blue = 1.0;
+    foreground.alpha = 1.0;
+    bounds.x = x;
+    bounds.y = y;
+    bounds.width = width;
+    bounds.height = height;
+    frame.x = x;
+    frame.y = y;
+    frame.width = width;
+    frame.height = height;
+  }
+
+  deinit() {
+    detach();
+    let child = first_child;
+    while child as usize != 0 {
+      let next = child.next_sibling;
+      child.parent = 0 as *Widget;
+      child.next_sibling = 0 as *Widget;
+      set_owner(child, 0 as *u8);
+      child = next;
+    }
+    first_child = 0 as *Widget;
+  }
+
+  pub fn add(child: *Widget) -> bool {
+    if child as usize == 0 || child as usize == this as usize ||
+        child.parent as usize != 0 {
+      return false;
+    }
+    let ancestor = this;
+    while ancestor as usize != 0 {
+      if ancestor as usize == child as usize { return false; }
+      ancestor = ancestor.parent;
+    }
+    child.parent = this;
+    child.next_sibling = first_child;
+    first_child = child;
+    set_owner(child, owner);
+    layout_child(this, child);
+    return true;
+  }
+
+  pub fn detach() -> void {
+    if parent as usize == 0 { return; }
+    if owner as usize != 0 { (owner as *Window).forget(this); }
+    let link = parent.first_child;
+    let prior = 0 as *Widget;
+    while link as usize != 0 {
+      if link as usize == this as usize {
+        if prior as usize == 0 { parent.first_child = next_sibling; }
+        else { prior.next_sibling = next_sibling; }
+        break;
+      }
+      prior = link;
+      link = link.next_sibling;
+    }
+    parent = 0 as *Widget;
+    next_sibling = 0 as *Widget;
+    set_owner(this, 0 as *u8);
+  }
+
+  pub fn set_handler(callback: EventHandler, context: *u8) -> void {
+    handler = callback;
+    handler_context = context;
+  }
+
+  pub fn set_anchors(horizontal: Anchor, vertical: Anchor,
+                     right: i32, bottom: i32) -> void {
+    left_anchor = horizontal;
+    top_anchor = vertical;
+    right_margin = right;
+    bottom_margin = bottom;
+  }
+
+  @virtual pub fn measure(available: *Size, desired: *Size) -> void {
+    desired.width = bounds.width;
+    desired.height = bounds.height;
+  }
+  @virtual pub fn arrange(new_frame: *Rect) -> void {
+    frame.x = new_frame.x;
+    frame.y = new_frame.y;
+    frame.width = new_frame.width;
+    frame.height = new_frame.height;
+    let child = first_child;
+    while child as usize != 0 {
+      layout_child(this, child);
+      child = child.next_sibling;
+    }
+  }
+  @virtual pub fn paint(painter: *Painter) -> void {
+    if !visible { return; }
+    if background.alpha > 0.0 { painter.fill(&frame, &background); }
+    paint_children(first_child, painter);
+  }
+  @virtual pub fn on_event(event: *Event) -> void {
+    if handler as usize != 0 { handler(handler_context, event); }
+  }
+}
+
+pub class Panel: Widget {
+  pub init(x: i32, y: i32, width: i32, height: i32) {
+    super(x, y, width, height);
+    this.background.red = 0.12;
+    this.background.green = 0.14;
+    this.background.blue = 0.18;
+    this.background.alpha = 1.0;
+  }
+}
+
+pub class Label: Widget {
+  pub label: *c.char;
+  pub init(text: *c.char, x: i32, y: i32, width: i32, height: i32) {
+    super(x, y, width, height);
+    label = text;
+  }
+  @override pub fn paint(painter: *Painter) -> void {
+    if !this.visible { return; }
+    super.paint(painter);
+    if label as usize != 0 { painter.text(&this.frame, label, &this.foreground); }
+  }
+}
+
+pub class Button: Widget {
+  pub label: *c.char;
+  pub init(text: *c.char, x: i32, y: i32, width: i32, height: i32) {
+    super(x, y, width, height);
+    label = text;
+    this.focusable = true;
+    this.background.red = 0.23;
+    this.background.green = 0.31;
+    this.background.blue = 0.48;
+    this.background.alpha = 1.0;
+  }
+  @override pub fn paint(painter: *Painter) -> void {
+    if !this.visible { return; }
+    super.paint(painter);
+    if label as usize != 0 { painter.text(&this.frame, label, &this.foreground); }
+  }
+  @override pub fn on_event(event: *Event) -> void {
+    if event.kind == EventKind.KeyDown && (event.key == 13 || event.key == 32) {
+      let click = Event();
+      click.kind = EventKind.Click;
+      super.on_event(&click);
+      event.handled = true;
+    }
+    super.on_event(event);
+  }
+}
+
+pub class Slider: Widget {
+  value: f32;
+  pressed: bool;
+  pub init(x: i32, y: i32, width: i32, height: i32) {
+    super(x, y, width, height);
+    value = 0.0;
+    pressed = false;
+    this.focusable = true;
+    this.background.red = 0.24;
+    this.background.green = 0.24;
+    this.background.blue = 0.24;
+    this.background.alpha = 1.0;
+  }
+
+  pub fn set_value(new_value: f32) -> void {
+    if new_value < 0.0 { value = 0.0; }
+    else if new_value > 1.0 { value = 1.0; }
+    else { value = new_value; }
+  }
+
+  pub fn get_value() -> f32 { return value; }
+  @override pub fn paint(painter: *Painter) -> void {
+    if !this.visible { return; }
+    super.paint(painter);
+    let progress = Rect();
+    progress.x = this.frame.x;
+    progress.y = this.frame.y;
+    progress.width = (this.frame.width as f32 * value) as i32;
+    progress.height = this.frame.height;
+    painter.fill(&progress, &this.foreground);
+    if this.frame.width >= 10 {
+      let thumb = Rect();
+      thumb.x = progress.x + progress.width - 5;
+      if thumb.x < this.frame.x { thumb.x = this.frame.x; }
+      if thumb.x > this.frame.x + this.frame.width - 10 {
+        thumb.x = this.frame.x + this.frame.width - 10;
+      }
+      thumb.y = this.frame.y;
+      thumb.width = 10;
+      thumb.height = this.frame.height;
+      painter.fill(&thumb, &this.foreground);
+    }
+  }
+  @override pub fn on_event(event: *Event) -> void {
+    if event.kind == EventKind.PointerDown && event.button == MouseButton.Left {
+      pressed = true;
+    }
+    if event.kind == EventKind.PointerUp && event.button == MouseButton.Left {
+      pressed = false;
+    }
+    if (event.kind == EventKind.PointerDown ||
+        event.kind == EventKind.PointerMove && pressed) &&
+        (event.kind != EventKind.PointerDown ||
+         event.button == MouseButton.Left) &&
+        this.frame.width > 0 {
+      let position = event.x - this.frame.x;
+      if position <= 0 { value = 0.0; }
+      else if position >= this.frame.width { value = 1.0; }
+      else { value = position as f32 / this.frame.width as f32; }
+      event.handled = true;
+    }
+    super.on_event(event);
+  }
+}
+
+fn contains(bounds: *Rect, x: i32, y: i32) -> bool {
+  return x >= bounds.x && y >= bounds.y &&
+         x < bounds.x + bounds.width && y < bounds.y + bounds.height;
+}
+
+fn paint_children(node: *Widget, painter: *Painter) -> void {
+  if node as usize == 0 { return; }
+  paint_children(node.next_sibling, painter);
+  node.paint(painter);
+}
+
+fn find_hit(node: *Widget, x: i32, y: i32) -> *Widget {
+  if node as usize == 0 || !node.visible || !contains(&node.frame, x, y) {
+    return 0 as *Widget;
+  }
+  let child = node.first_child;
+  while child as usize != 0 {
+    let hit = find_hit(child, x, y);
+    if hit as usize != 0 { return hit; }
+    child = child.next_sibling;
+  }
+  if node.enabled { return node; }
+  return 0 as *Widget;
+}
+
+fn deliver(node: *Widget, event: *Event) -> void {
+  if node as usize != 0 { node.on_event(event); }
+}
+
+fn within(node: *Widget, ancestor: *Widget) -> bool {
+  let current = node;
+  while current as usize != 0 {
+    if current as usize == ancestor as usize { return true; }
+    current = current.parent;
+  }
+  return false;
+}
+
+fn set_owner(node: *Widget, new_owner: *u8) -> void {
+  node.owner = new_owner;
+  let child = node.first_child;
+  while child as usize != 0 {
+    set_owner(child, new_owner);
+    child = child.next_sibling;
+  }
+}
+
+fn layout_child(parent: *Widget, child: *Widget) -> void {
+  let local = child.bounds;
+  if child.left_anchor == Anchor.End {
+    local.x = parent.frame.width - child.right_margin - local.width;
+  } else if child.left_anchor == Anchor.Stretch {
+    local.width = parent.frame.width - local.x - child.right_margin;
+    if local.width < 0 { local.width = 0; }
+  }
+  if child.top_anchor == Anchor.End {
+    local.y = parent.frame.height - child.bottom_margin - local.height;
+  } else if child.top_anchor == Anchor.Stretch {
+    local.height = parent.frame.height - local.y - child.bottom_margin;
+    if local.height < 0 { local.height = 0; }
+  }
+  child.bounds.x = local.x;
+  child.bounds.y = local.y;
+  child.bounds.width = local.width;
+  child.bounds.height = local.height;
+  local.x = parent.frame.x + local.x;
+  local.y = parent.frame.y + local.y;
+  child.arrange(&local);
+}
+
+// UI Window is a backend-independent controller. A native host forwards
+// pointer/keyboard/resize events and calls paint within its render loop.
+pub class Window {
+  pub root: Widget;
+  pub focused: *Widget;
+  pub capture: *Widget;
+  pub last_x: i32;
+  pub last_y: i32;
+  pub dragging: bool;
+
+  pub init(width: i32, height: i32) {
+    root = Widget(0, 0, width, height);
+    focused = 0 as *Widget;
+    capture = 0 as *Widget;
+    last_x = 0;
+    last_y = 0;
+    dragging = false;
+    root.owner = this as *u8;
+  }
+
+  pub fn add(child: *Widget) -> bool { return root.add(child); }
+  pub fn remove(child: *Widget) -> void {
+    if child as usize != 0 && child.owner as usize == this as usize {
+      child.detach();
+    }
+  }
+  pub fn forget(node: *Widget) -> void {
+    if focused as usize != 0 && within(focused, node) {
+      focused = 0 as *Widget;
+    }
+    if capture as usize != 0 && within(capture, node) {
+      capture = 0 as *Widget;
+      dragging = false;
+    }
+  }
+
+  pub fn resize(width: i32, height: i32) -> void {
+    root.bounds.width = width;
+    root.bounds.height = height;
+    let frame = Rect();
+    frame.width = width;
+    frame.height = height;
+    root.arrange(&frame);
+    let event = Event();
+    event.kind = EventKind.Resize;
+    event.width = width;
+    event.height = height;
+    deliver(&root, &event);
+  }
+
+  pub fn relayout() -> void {
+    let area = root.frame;
+    root.arrange(&area);
+  }
+
+  pub fn pointer(kind: EventKind, x: i32, y: i32) -> void {
+    let event = Event();
+    event.kind = kind;
+    event.x = x;
+    event.y = y;
+    event.button = MouseButton.Left;
+    pointer_event(&event);
+  }
+
+  pub fn pointer_event(event: *Event) -> void {
+    let kind = event.kind;
+    let x = event.x;
+    let y = event.y;
+    event.delta_x = x - last_x;
+    event.delta_y = y - last_y;
+    let hit = find_hit(&root, x, y);
+    let target = hit;
+    if capture as usize != 0 { target = capture; }
+    if (kind == EventKind.PointerDown ||
+        kind == EventKind.PointerDoubleClick) &&
+        event.button == MouseButton.Left {
+      capture = hit;
+      dragging = false;
+      if hit as usize != 0 && hit.focusable { focused = hit; }
+    } else if kind == EventKind.PointerMove && capture as usize != 0 &&
+              capture.draggable {
+      if !dragging && (event.delta_x != 0 || event.delta_y != 0) {
+        dragging = true;
+        event.kind = EventKind.DragStart;
+        deliver(capture, event);
+      }
+      event.kind = EventKind.DragMove;
+      deliver(capture, event);
+      event.kind = EventKind.PointerMove;
+    }
+    deliver(target, event);
+    if kind == EventKind.PointerUp && event.button == MouseButton.Left &&
+       capture as usize != 0 {
+      if dragging {
+        event.kind = EventKind.DragEnd;
+        deliver(capture, event);
+      } else if hit as usize == capture as usize {
+        event.kind = EventKind.Click;
+        deliver(capture, event);
+      }
+      capture = 0 as *Widget;
+      dragging = false;
+    }
+    if kind != EventKind.PointerLeave && kind != EventKind.CaptureLost {
+      last_x = x;
+      last_y = y;
+    }
+    relayout();
+  }
+
+  pub fn keyboard(kind: EventKind, key: u32, character: u32) -> void {
+    let event = Event();
+    event.kind = kind;
+    event.key = key;
+    event.character = character;
+    keyboard_event(&event);
+  }
+
+  pub fn keyboard_event(event: *Event) -> void {
+    if focused as usize != 0 {
+      deliver(focused, event);
+    }
+    else { deliver(&root, event); }
+  }
+
+  pub fn capture_lost() -> void {
+    if capture as usize == 0 { return; }
+    let event = Event();
+    event.kind = EventKind.CaptureLost;
+    deliver(capture, &event);
+    capture = 0 as *Widget;
+    dragging = false;
+  }
+
+  pub fn paint(painter: *Painter) -> void {
+    relayout();
+    root.paint(painter);
+  }
+
+  pub fn close() -> void {
+    let event = Event();
+    event.kind = EventKind.Close;
+    deliver(&root, &event);
+  }
+
+  pub fn request_close() -> bool {
+    let event = Event();
+    event.kind = EventKind.Close;
+    deliver(&root, &event);
+    return !event.handled;
+  }
+}

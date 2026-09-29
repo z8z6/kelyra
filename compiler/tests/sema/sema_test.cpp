@@ -420,7 +420,7 @@ class Callbacks {
 TEST(Sema, ExternLinkLibrary) {
   auto Parsed = lex::Lexer().parse(R"(
 @extern("CreateWindowExW", "user32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn create_window() -> *u8;
 )");
   ASSERT_TRUE(Parsed.ok());
@@ -435,6 +435,29 @@ fn create_window() -> *u8;
 )");
   ASSERT_TRUE(Invalid.ok());
   EXPECT_FALSE(Analysis.Check(*Invalid.root));
+}
+
+TEST(Sema, AnnotationEnumArgumentsBindByType) {
+  auto Parsed = lex::Lexer().parse(R"(
+enum First { A }
+enum Second { B }
+annotation tagged(first: First = First.A, second: Second = Second.B);
+@tagged(Second.B, First.A)
+fn use() -> i32 { return 1; }
+)");
+  ASSERT_TRUE(Parsed.ok());
+  sema::Sema Analysis;
+  EXPECT_TRUE(Analysis.Check(*Parsed.root));
+
+  auto Ambiguous = lex::Lexer().parse(R"(
+enum Choice { A }
+annotation duplicate(first: Choice, second: Choice);
+@duplicate(Choice.A)
+fn use() -> i32 { return 1; }
+)");
+  ASSERT_TRUE(Ambiguous.ok());
+  sema::Sema InvalidAnalysis;
+  EXPECT_FALSE(InvalidAnalysis.Check(*Ambiguous.root));
 }
 
 TEST(Sema, EnumAnnotationsAndMatchValidation) {

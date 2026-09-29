@@ -1,4 +1,4 @@
-@cfg(os="linux", arch="x86_64")
+@cfg(os=os.Linux, arch=arch.X86_64)
 module std.graphics.vulkan;
 
 // Vulkan handles are opaque. The caller owns an Instance returned by
@@ -67,20 +67,20 @@ pub class InstanceCreateInfo {
 }
 
 @extern("vkEnumerateInstanceVersion")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn vk_enumerate_instance_version(version: *u32) -> Result;
 
 @extern("vkCreateInstance")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn vk_create_instance(info: *InstanceCreateInfo, allocator: *u8,
                       instance: *Instance) -> Result;
 
 @extern("vkDestroyInstance")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn vk_destroy_instance(instance: Instance, allocator: *u8) -> void;
 
 @extern("vkEnumeratePhysicalDevices")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn vk_enumerate_physical_devices(instance: Instance, count: *u32,
                                  devices: *PhysicalDevice) -> Result;
 

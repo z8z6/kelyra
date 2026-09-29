@@ -1,22 +1,24 @@
 import std.sync.singleton;
 
 @singleton
+pub class Box<T> {
+  pub value: T;
+
+  init() {
+    value = 0;
+  }
+}
+
+@singleton
 pub class Counter {
   pub value: i32;
+
   init() {
     value = 0;
   }
   pub fn next() -> i32 {
     value = value + 1;
     return value;
-  }
-}
-
-@singleton
-pub class Box<T> {
-  pub value: T;
-  init() {
-    value = 0;
   }
 }
 
@@ -33,7 +35,10 @@ fn main() -> i32 {
   let box = Box<i32>.instance();
   let same = Box<i32>.instance();
   let other = Box<u8>.instance();
-  if box as usize == 0 || other as usize == 0 || box as usize != same as usize || box as usize == other as usize {
+  if box as usize == 0 ||
+    other as usize == 0 ||
+    box as usize != same as usize ||
+    box as usize == other as usize {
     return 3;
   }
   box.value = 42;

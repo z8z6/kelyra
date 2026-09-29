@@ -365,6 +365,8 @@ TEST(CLI, RejectInvalidTargetCondition) {
       "invalid @cfg annotation");
   run({"--check", KELYRA_TEST_DIR "/cfg/invalid_duplicate.kly"}, 1, "",
       "invalid @cfg annotation");
+  run({"--check", KELYRA_TEST_DIR "/cfg/invalid_string.kly"}, 1, "",
+      "invalid @cfg annotation");
 }
 
 TEST(CLI, WarnModulePathMismatch) {

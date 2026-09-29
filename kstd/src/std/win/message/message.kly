@@ -1,0 +1,59 @@
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.message;
+
+import std.win.window;
+
+// Values match Win32 WM_* constants. Keep Message.message as u32 so an
+// application can also receive newer or application-defined message codes.
+pub enum Code: u32 {
+  Null = 0,
+  Create = 1,
+  Destroy = 2,
+  Move = 3,
+  Size = 5,
+  SetFocus = 7,
+  KillFocus = 8,
+  Paint = 15,
+  Close = 16,
+  Quit = 18,
+  EraseBackground = 20,
+  ShowWindow = 24,
+  SetCursor = 32,
+  NcCreate = 129,
+  NcDestroy = 130,
+  KeyDown = 256,
+  KeyUp = 257,
+  Character = 258,
+  DeadCharacter = 259,
+  SystemKeyDown = 260,
+  SystemKeyUp = 261,
+  SystemCharacter = 262,
+  MouseMove = 512,
+  LeftButtonDown = 513,
+  LeftButtonUp = 514,
+  LeftButtonDoubleClick = 515,
+  RightButtonDown = 516,
+  RightButtonUp = 517,
+  RightButtonDoubleClick = 518,
+  MiddleButtonDown = 519,
+  MiddleButtonUp = 520,
+  MiddleButtonDoubleClick = 521,
+  MouseWheel = 522,
+  XButtonDown = 523,
+  XButtonUp = 524,
+  XButtonDoubleClick = 525,
+  MouseHorizontalWheel = 526,
+  CaptureChanged = 533,
+  MouseLeave = 675,
+  DpiChanged = 736,
+}
+
+pub fn send(window: std.win.window.HWnd, code: Code,
+            w_param: usize, l_param: isize) -> isize {
+  return std.win.window.send_message(window, code as u32, w_param, l_param);
+}
+
+pub fn post(window: std.win.window.HWnd, code: Code,
+            w_param: usize, l_param: isize) -> bool {
+  return std.win.window.post_message(window, code as u32,
+                                      w_param, l_param) != 0;
+}

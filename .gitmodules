@@ -8,3 +8,15 @@
 	url = https://github.com/google/googletest.git
 	branch = main
 	shallow = true
+[submodule "third_party/freetype"]
+	path = third_party/freetype
+	url = https://github.com/freetype/freetype.git
+	shallow = true
+[submodule "third_party/harfbuzz"]
+	path = third_party/harfbuzz
+	url = https://github.com/harfbuzz/harfbuzz.git
+	shallow = true
+[submodule "third_party/icu"]
+	path = third_party/icu
+	url = https://github.com/unicode-org/icu.git
+	shallow = true

@@ -1,13 +1,13 @@
 module std.graphics.window;
 
-@cfg(os="windows", arch="x86_64")
+@cfg(os=os.Windows, arch=arch.X86_64)
 import std.win.graphics.window;
-@cfg(os="windows", arch="x86_64")
+@cfg(os=os.Windows, arch=arch.X86_64)
 import std.win.graphics.vulkan;
 pub enum Backend { Direct3D12, Vulkan }
 
 // The caller chooses shader bytecode for the requested backend.
-@cfg(os="windows", arch="x86_64")
+@cfg(os=os.Windows, arch=arch.X86_64)
 pub fn run_backend(backend: Backend, title_utf8: *c.char,
            width: i32, height: i32,
            vertex: *u8, vertex_size: usize,
@@ -23,7 +23,7 @@ pub fn run_backend(backend: Backend, title_utf8: *c.char,
                                      fragment, fragment_size, vertex_count);
 }
 
-@cfg(os="windows", arch="x86_64")
+@cfg(os=os.Windows, arch=arch.X86_64)
 pub fn run(title_utf8: *c.char, width: i32, height: i32,
            vertex: *u8, vertex_size: usize,
            fragment: *u8, fragment_size: usize,

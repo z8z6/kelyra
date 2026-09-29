@@ -23,7 +23,7 @@ fn main() -> i32 {
 
 ```kelyra
 @extern("getpid", "c")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn process_id() -> c.int;
 ```
 

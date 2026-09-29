@@ -150,7 +150,7 @@ Kelyra 函数会使用包含模块路径的符号名；`@main` 函数无论源�
 构造函数重载及同名泛型函数模板尚未支持；嵌套调用也不能仅依赖外层返回类型
 消除重载歧义。普通函数与方法的导出符号始终编码参数类型，旧版预编译模块需要重编。
 
-顶层 `@cfg(os="linux")` 或 `@cfg(os="windows", arch="x86_64")` 可标注
+顶层 `@cfg(os=os.Linux)` 或 `@cfg(os=os.Windows, arch=arch.X86_64)` 可标注
 `module`、`import`、函数、class 或注解声明。`os`、`arch` 均可单独使用；同时指定时须
 全部匹配，且同一参数不能重复。
 不满足条件的节点在加载依赖与语义检查前移除，因此可以引用仅在目标平台存在的
@@ -163,7 +163,7 @@ Kelyra 函数会使用包含模块路径的符号名；`@main` 函数无论源�
 
 ```kelyra
 @extern("getpid")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn process_id() -> c.int;
 ```
 

@@ -1,4 +1,4 @@
-@cfg(os="windows", arch="x86_64") module std.win.d3d12;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.d3d12;
 
 import std.win.com;
 import std.win.dxgi;
@@ -295,7 +295,7 @@ pub fn iid_fence(value: *std.win.guid.Guid) -> void {
 }
 
 @extern("D3D12CreateDevice", "d3d12")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn create_device_raw(adapter: *u8, feature_level: u32,
                      iid: *std.win.guid.Guid, device: **u8) -> i32;
 
@@ -306,7 +306,7 @@ pub fn create_device(adapter: *u8, device: **u8) -> i32 {
 }
 
 @extern("D3D12SerializeRootSignature", "d3d12")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn serialize_root_signature(desc: *RootSignatureDesc, version: u32,
                                 blob: **u8, errors: **u8) -> i32;
 

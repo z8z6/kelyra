@@ -1,0 +1,37 @@
+@cfg(os=os.Windows, arch=arch.X86_64) module std.graphics.font.win;
+
+import std.util.string;
+
+@extern("GetWindowsDirectoryA", "kernel32")
+@callconv(cc.System)
+fn windows_directory(output: *c.char, capacity: u32) -> u32;
+
+@extern("GetFileAttributesA", "kernel32")
+@callconv(cc.System)
+fn file_attributes(path: *c.char) -> u32;
+
+fn append_if_available(result: *std.util.string.String,
+                       directory: *c.char, name: *c.char) -> void {
+  let path = std.util.string.String(directory);
+  path.append("\\Fonts\\");
+  path.append(name);
+  if file_attributes(path.data_pointer()) != 4294967295 {
+    if !result.empty() { result.append(";"); }
+    result.append(path.data_pointer());
+  }
+}
+
+// Returns available system font files in fallback order. The layout engine
+// receives explicit paths and has no platform-dependent font discovery logic.
+pub fn system_font_paths() -> std.util.string.String {
+  let directory: [260]c.char;
+  let length = windows_directory(&directory[0], 260);
+  let result = std.util.string.String("");
+  if length == 0 || length >= 260 { return result; }
+
+  append_if_available(&result, &directory[0], "segoeui.ttf");
+  append_if_available(&result, &directory[0], "msyh.ttc");
+  append_if_available(&result, &directory[0], "seguiemj.ttf");
+  append_if_available(&result, &directory[0], "arial.ttf");
+  return result;
+}

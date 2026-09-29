@@ -21,8 +21,21 @@ pub annotation meta();
 
 // Compiler-recognized annotations. Their declarations are ordinary Kelyra
 // metadata; the compiler supplies the compile-time behavior.
-// Additional load-time rule: @cfg requires at least one of os or arch.
-pub annotation cfg(os: StringSlice = "", arch: StringSlice = "");
+pub enum os {
+  Any,
+  Windows,
+  Linux,
+  MacOS,
+}
+
+pub enum arch {
+  Any,
+  X86_64,
+  AArch64,
+}
+
+// Additional load-time rule: @cfg requires a non-Any os or arch.
+pub annotation cfg(os: os = os.Any, arch: arch = arch.Any);
 
 @target(Target.Class)
 pub annotation interface();
@@ -72,7 +85,7 @@ pub enum Layout {
   C,
 }
 
-pub enum CallingConvention {
+pub enum cc {
   C,
   System,
 }
@@ -98,7 +111,7 @@ pub annotation extern(symbol: StringSlice, library: StringSlice = "");
 pub annotation intrinsic(operation: StringSlice = "");
 
 @target(Target.Function)
-pub annotation callconv(abi: CallingConvention);
+pub annotation callconv(abi: cc);
 
 @target(Target.Function)
 pub annotation main();

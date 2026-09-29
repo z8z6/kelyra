@@ -1,7 +1,7 @@
-@cfg(os="windows", arch="x86_64") module std.win.d3dcompiler;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.d3dcompiler;
 
 @extern("D3DCompile", "d3dcompiler")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn compile_raw(source: *u8, source_size: usize, source_name: *c.char,
                defines: *u8, include: *u8, entry: *c.char,
                target: *c.char, flags: u32, effect_flags: u32,

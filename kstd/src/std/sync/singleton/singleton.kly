@@ -12,14 +12,14 @@ pub annotation singleton() {
   __singleton_value: *T;
   @static
   pub fn instance() -> *T {
-    let once = std.sync.once.Once(&__singleton_state);
+    let once = Once(&__singleton_state);
     if once.begin() {
-      let storage = std.alloc.allocate(std.memory.size_of<T>(0 as*T)) as*T;
+      let storage = allocate(size_of<T>(0 as *T)) as *T;
       if storage as usize == 0 {
         once.finish(false);
         return storage;
       }
-      std.memory.init_default<T>(storage);
+      init_default<T>(storage);
       __singleton_value = storage;
       once.finish(true);
     }

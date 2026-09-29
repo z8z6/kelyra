@@ -1,0 +1,394 @@
+{
+  "name": "kelyra",
+  "displayName": "Kelyra",
+  "description": "Kelyra language and Kelp project support",
+  "version": "0.10.5",
+  "publisher": "z8z6",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/z8z6/kelyra.git"
+  },
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "activationEvents": [
+    "onLanguage:kelyra",
+    "onLanguage:kelp",
+    "onView:kelp.actions",
+    "onView:kelp.projects"
+  ],
+  "main": "./src/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Kelp runs workspace-configured compiler and debugger executables."
+    }
+  },
+  "scripts": {
+    "test": "node --check src/extension.js && node test/tree.js && node test/analysis.js && node test/smoke.js && node test/grammar.js && node test/debug.js && node test/activate.js",
+    "build:grammar": "cd grammar/tree-sitter-kelyra && tree-sitter generate && tree-sitter build --wasm --output ../../assets/tree-sitter-kelyra.wasm"
+  },
+  "contributes": {
+    "breakpoints": [
+      {
+        "language": "kelyra"
+      }
+    ],
+    "languages": [
+      {
+        "id": "kelyra",
+        "aliases": [
+          "Kelyra",
+          "kelyra"
+        ],
+        "extensions": [
+          ".kly"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/kelyra-light.svg",
+          "dark": "./icons/kelyra-dark.svg"
+        }
+      },
+      {
+        "id": "kelp",
+        "aliases": [
+          "Kelp"
+        ],
+        "filenames": [
+          "kelp.toml"
+        ],
+        "configuration": "./kelp-language-configuration.json",
+        "icon": {
+          "light": "./icons/kelp-light.svg",
+          "dark": "./icons/kelp-dark.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kelyra",
+        "scopeName": "source.kelyra",
+        "path": "./syntaxes/kelyra.tmLanguage.json"
+      },
+      {
+        "language": "kelp",
+        "scopeName": "source.kelp.toml",
+        "path": "./syntaxes/kelp.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "kelyra",
+        "path": "./snippets/kelyra.json"
+      },
+      {
+        "language": "kelp",
+        "path": "./snippets/kelp.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[kelyra]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.defaultFormatter": "z8z6.kelyra",
+        "editor.formatOnSave": true,
+        "editor.inlayHints.fontSize": 11,
+        "editor.inlayHints.padding": true
+      },
+      "[kelp]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      }
+    },
+    "commands": [
+      {
+        "command": "kelp.check",
+        "title": "Kelp: Check",
+        "icon": "$(check)"
+      },
+      {
+        "command": "kelp.build",
+        "title": "Kelp: Compile",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "kelp.debug",
+        "title": "Kelp: Debug",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "kelp.run",
+        "title": "Kelp: Run",
+        "icon": "$(play)"
+      },
+      {
+        "command": "kelp.test",
+        "title": "Kelp: Test",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "kelp.package",
+        "title": "Kelp: Package",
+        "icon": "$(package)"
+      },
+      {
+        "command": "kelp.members",
+        "title": "Kelp: Members",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "kelp.refreshProjects",
+        "title": "Kelp: Refresh Projects",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "kelp.openManifest",
+        "title": "Kelp: Open Manifest",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "kelp.revealProject",
+        "title": "Kelp: Reveal Project",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "kelp.output",
+        "title": "Kelp: Show Output Path",
+        "icon": "$(file-binary)"
+      },
+      {
+        "command": "kelyra.applyTokenColors",
+        "title": "Select Color Scheme",
+        "category": "Kelyra",
+        "icon": "$(symbol-color)"
+      },
+      {
+        "command": "kelyra.showInheritors",
+        "title": "Show Inheriting Classes",
+        "category": "Kelyra"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "kelp",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The Kelp command to run."
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "kelyra",
+        "owner": "kelyra",
+        "source": "kelyra",
+        "fileLocation": "auto",
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+): error: (.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "message": 4
+        }
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "kelp",
+          "title": "Kelp",
+          "icon": "assets/kelp.svg"
+        }
+      ]
+    },
+    "views": {
+      "kelp": [
+        {
+          "id": "kelp.projects",
+          "name": "Projects"
+        },
+        {
+          "id": "kelp.actions",
+          "name": "Project Actions"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "kelp.build",
+          "when": "view == kelp.actions",
+          "group": "navigation@0"
+        },
+        {
+          "command": "kelp.debug",
+          "when": "view == kelp.actions",
+          "group": "navigation@2"
+        },
+        {
+          "command": "kelp.run",
+          "when": "view == kelp.actions",
+          "group": "navigation@3"
+        },
+        {
+          "command": "kelp.test",
+          "when": "view == kelp.actions",
+          "group": "navigation@4"
+        },
+        {
+          "command": "kelp.package",
+          "when": "view == kelp.actions",
+          "group": "navigation@5"
+        },
+        {
+          "command": "kelp.members",
+          "when": "view == kelp.actions",
+          "group": "navigation@6"
+        },
+        {
+          "command": "kelp.refreshProjects",
+          "when": "view == kelp.projects",
+          "group": "navigation@0"
+        },
+        {
+          "command": "kelp.build",
+          "when": "view == kelp.projects",
+          "group": "navigation@1"
+        },
+        {
+          "command": "kelp.members",
+          "when": "view == kelp.projects",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "kelp.build",
+          "when": "view == kelp.projects && viewItem == kelp.project",
+          "group": "inline@0"
+        },
+        {
+          "command": "kelp.run",
+          "when": "view == kelp.projects && viewItem == kelp.project",
+          "group": "inline@1"
+        },
+        {
+          "command": "kelp.debug",
+          "when": "view == kelp.projects && viewItem == kelp.project",
+          "group": "inline@2"
+        },
+        {
+          "command": "kelp.check",
+          "when": "view == kelp.projects && viewItem == kelp.project",
+          "group": "1_actions@0"
+        },
+        {
+          "command": "kelp.test",
+          "when": "view == kelp.projects && viewItem == kelp.project",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "kelp.package",
+          "when": "view == kelp.projects && viewItem == kelp.project",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "kelp.output",
+          "when": "view == kelp.projects && viewItem == kelp.project",
+          "group": "1_actions@3"
+        },
+        {
+          "command": "kelp.openManifest",
+          "when": "view == kelp.projects && viewItem == kelp.project",
+          "group": "2_open@0"
+        },
+        {
+          "command": "kelp.revealProject",
+          "when": "view == kelp.projects && viewItem == kelp.project",
+          "group": "2_open@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Kelyra",
+      "properties": {
+        "kelyra.formatter.path": {
+          "type": "string",
+          "default": "kelyra-format",
+          "description": "Path to kelyra-format. The default also searches build/bin and kelyra/build/bin in workspace ancestors."
+        },
+        "kelyra.languageServer.path": {
+          "type": "string",
+          "default": "kelyra-ls",
+          "description": "Path to the kelyra-ls executable."
+        },
+        "kelyra.colorScheme": {
+          "type": "string",
+          "enum": [
+            "off",
+            "laevatain",
+            "jue",
+            "perlica"
+          ],
+          "enumDescriptions": [
+            "Use colors from the active VS Code theme.",
+            "Fiery red, molten gold, and violet inspired by Laevatain.",
+            "Cyan, jade, and silver inspired by Jue.",
+            "Electric blue, signal yellow, and silver inspired by Perlica."
+          ],
+          "default": "laevatain",
+          "description": "Kelyra-only syntax color scheme."
+        },
+        "kelp.path": {
+          "type": "string",
+          "default": "kelp",
+          "description": "Path to the kelp executable."
+        },
+        "kelp.debug.gdbPath": {
+          "type": "string",
+          "default": "gdb",
+          "description": "Local GDB executable (from PATH or an absolute path). Requires the Microsoft C/C++ debug adapter."
+        },
+        "kelp.debug.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Arguments passed to the program by Kelp: Debug."
+        },
+        "kelyra.inlayHints.parameterNames": {
+          "type": "string",
+          "enum": [
+            "off",
+            "literals",
+            "all"
+          ],
+          "default": "literals",
+          "markdownDescription": "Show parameter name inlay hints at call sites: `off`, `literals` (only literal arguments), or `all`. Workspace modules are indexed to resolve signatures."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^10.1.1",
+    "web-tree-sitter": "^0.25.10"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "4.0.0",
+    "tree-sitter-cli": "^0.26.13",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
+  }
+}

@@ -1,16 +1,16 @@
-import std.ui;
+import std.graphics.ui;
 
-class CountingPainter: std.ui.Painter {
+class CountingPainter: std.graphics.ui.Painter {
   pub fills: i32;
   pub init() { fills = 0; }
-  pub fn fill(bounds: *std.ui.Rect, color: *std.ui.Color) -> void {
+  pub fn fill(bounds: *std.graphics.ui.Rect, color: *std.graphics.ui.Color) -> void {
     fills = fills + 1;
   }
-  pub fn text(bounds: *std.ui.Rect, content: *c.char,
-              color: *std.ui.Color) -> void {}
+  pub fn text(bounds: *std.graphics.ui.Rect, content: *c.char,
+              color: *std.graphics.ui.Color) -> void {}
 }
 
-class Probe: std.ui.Widget {
+class Probe: std.graphics.ui.Widget {
   pub clicks: i32;
   pub paints: i32;
   pub layouts: i32;
@@ -21,24 +21,24 @@ class Probe: std.ui.Widget {
     layouts = 0;
     this.focusable = true;
   }
-  @override pub fn arrange(area: *std.ui.Rect) -> void {
+  @override pub fn arrange(area: *std.graphics.ui.Rect) -> void {
     layouts = layouts + 1;
     super.arrange(area);
   }
-  @override pub fn paint(painter: *std.ui.Painter) -> void {
+  @override pub fn paint(painter: *std.graphics.ui.Painter) -> void {
     paints = paints + 1;
     super.paint(painter);
   }
-  @override pub fn on_event(event: *std.ui.Event) -> void {
-    if event.kind == std.ui.EventKind.Click { clicks = clicks + 1; }
+  @override pub fn on_event(event: *std.graphics.ui.Event) -> void {
+    if event.kind == std.graphics.ui.EventKind.Click { clicks = clicks + 1; }
     super.on_event(event);
   }
 }
 
 @main
 pub fn main() -> i32 {
-  let window = std.ui.Window(200, 120);
-  let panel = std.ui.Panel(10, 10, 180, 100);
+  let window = std.graphics.ui.Window(200, 120);
+  let panel = std.graphics.ui.Panel(10, 10, 180, 100);
   let probe = Probe(5, 5, 50, 30);
   if !window.add(&panel) || !panel.add(&probe) { return 1; }
   if probe.frame.x != 15 || probe.frame.y != 15 { return 2; }
@@ -47,16 +47,16 @@ pub fn main() -> i32 {
   if probe.paints != 1 || probe.layouts < 1 || painter.fills != 1 {
     return 3;
   }
-  window.pointer(std.ui.EventKind.PointerDown, 20, 20);
-  window.pointer(std.ui.EventKind.PointerUp, 20, 20);
+  window.pointer(std.graphics.ui.EventKind.PointerDown, 20, 20);
+  window.pointer(std.graphics.ui.EventKind.PointerUp, 20, 20);
   if probe.clicks != 1 { return 4; }
-  let component: *std.ui.Component = &probe;
-  let event = std.ui.Event();
-  event.kind = std.ui.EventKind.Click;
+  let component: *std.graphics.ui.Component = &probe;
+  let event = std.graphics.ui.Event();
+  event.kind = std.graphics.ui.EventKind.Click;
   component.on_event(&event);
   if probe.clicks != 2 { return 5; }
-  window.pointer(std.ui.EventKind.PointerDown, 20, 20);
-  let probe_widget: *std.ui.Widget = &probe;
+  window.pointer(std.graphics.ui.EventKind.PointerDown, 20, 20);
+  let probe_widget: *std.graphics.ui.Widget = &probe;
   if window.capture as usize != probe_widget as usize { return 6; }
   window.remove(&panel);
   if window.capture as usize != 0 || window.focused as usize != 0 ||

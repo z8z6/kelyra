@@ -1,12 +1,12 @@
-@cfg(os="linux", arch="x86_64") module std.sync.thread.hosted;
+@cfg(os=os.Linux, arch=arch.X86_64) module std.sync.thread.hosted;
 
 @extern("pthread_create")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn linux_pthread_create(thread_id: *usize, attributes: *u8,
                         callback: fn(*u8) -> *u8, context: *u8) -> i32;
 
 @extern("pthread_join")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn linux_pthread_join(thread_id: usize, result: **u8) -> i32;
 
 // The callback and context must remain valid until join.

@@ -2,6 +2,10 @@
 
 Kelyra editor support for VS Code and JetBrains IDEs.
 
+The VS Code extension lives in `vscode/`; the JetBrains plugin lives in
+`jetbrains/`. The JetBrains build bundles the TextMate grammar from
+`vscode/syntaxes/`, so both editors use the same highlighting rules.
+
 ## VS Code
 
 The extension provides `.kly` syntax highlighting, comments, brackets,
@@ -47,7 +51,7 @@ in the background and cached in the workspace's `.kelp/kide-index.json` for
 later sessions. The cache is disposable and is rebuilt from source. Hovering a
 simple `const` declaration, its expression, or a reference to it shows the
 computed value when the editor can evaluate it safely. Code disabled by
-`@cfg(os="...", arch="...")` is dimmed according to `[build].target` in the
+`@cfg(os.Windows, arch.X86_64)` is dimmed according to `[build].target` in the
 nearest `kelp.toml`, falling back to the host target. Hints are styled like
 inline code: `[kelyra]` defaults them to a smaller, padded font
 (change it with `"[kelyra]": { "editor.inlayHints.fontSize": ... }`). To give
@@ -65,8 +69,8 @@ Text edits incrementally update that tree; hover, cfg dimming, and parameter
 hints reuse its tokens. Until the WASM parser finishes loading, the existing
 scanner remains available as a fallback. Semantic checks and navigation still
 come from the C++ compiler through `kelyra-ls`. The editor grammar is in
-`grammar/tree-sitter-kelyra`; run `npm run build:grammar` after changing it to
-regenerate `assets/tree-sitter-kelyra.wasm` (the Tree-sitter CLI may download a
+`vscode/grammar/tree-sitter-kelyra`; run `npm run build:grammar` from `vscode/`
+after changing it to regenerate `vscode/assets/tree-sitter-kelyra.wasm` (the Tree-sitter CLI may download a
 WASI SDK on the first build).
 
 `.kly` and `kelp.toml` files have their own file icons, shown by
@@ -135,9 +139,11 @@ wide `f256`/`f512` values do not yet have native debug locations.
 See the [VS Code GDB configuration reference](https://code.visualstudio.com/docs/cpp/launch-json-reference).
 
 ```sh
+cd vscode
+npm ci
 npm test
 mkdir -p build
-vsce package --out "build/kelyra-$(node -p 'require("./package.json").version').vsix"
+npx vsce package --out "build/kelyra-$(node -p 'require("./package.json").version').vsix"
 ```
 
 Build `kelyra-ls` and `kelyra-format` and install the generated VSIX. The

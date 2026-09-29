@@ -1,4 +1,4 @@
-@cfg(os="windows", arch="x86_64") module std.win.dxgi;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.dxgi;
 
 import std.win.com;
 import std.win.guid;
@@ -33,7 +33,7 @@ pub class SwapChainDesc1 {
 }
 
 @extern("CreateDXGIFactory2", "dxgi")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn create_factory_raw(flags: u32, iid: *std.win.guid.Guid,
                       factory: **u8) -> i32;
 

@@ -61,6 +61,9 @@ class Lowerer {
         throw std::runtime_error("unknown shader record");
       return It->second;
     }
+    if (mlir::isa<ir::ShaderResourceType>(Ty))
+      throw std::runtime_error(
+          "DXIL texture and sampler resource lowering is not implemented");
     throw std::runtime_error("unsupported Shader IR type for DXIL");
   }
 

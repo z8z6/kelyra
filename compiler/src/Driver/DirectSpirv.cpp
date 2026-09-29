@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -58,7 +59,8 @@ class SpirvLowering {
   std::string ValueName(Value Value) const {
     const auto It = Values.find(Value);
     if (It == Values.end())
-      throw std::runtime_error("SPIR-V lowering found an unmapped shader value");
+      throw std::runtime_error(
+          "SPIR-V lowering found an unmapped shader value");
     return It->second;
   }
 
@@ -78,6 +80,14 @@ class SpirvLowering {
       return "i32";
     if (auto Ref = dyn_cast<kelyra::ir::ShaderRefType>(Ty))
       return "!spirv.ptr<" + TypeName(Ref.getValueType()) + ", Function>";
+    if (auto Resource = dyn_cast<kelyra::ir::ShaderResourceType>(Ty)) {
+      if (Resource.getKind().getValue() == "texture2d")
+        return "!spirv.image<f32, Dim2D, NoDepth, NonArrayed, "
+               "SingleSampled, NeedSampler, Unknown>";
+      if (Resource.getKind().getValue() == "sampler")
+        return "!spirv.sampler";
+      throw std::runtime_error("unsupported SPIR-V shader resource kind");
+    }
     if (auto Named = dyn_cast<kelyra::ir::ShaderRecordType>(Ty)) {
       const auto &Info = Records.at(Named.getName().getValue().str());
       if (Info.Vector)
@@ -141,8 +151,8 @@ class SpirvLowering {
   }
 
   std::string InsertPath(const std::string &Composite, Type CompositeTy,
-                         const std::string &Element,
-                         ArrayRef<Attribute> Path, size_t Depth = 0) {
+                         const std::string &Element, ArrayRef<Attribute> Path,
+                         size_t Depth = 0) {
     auto Field = cast<StringAttr>(Path[Depth]).getValue();
     auto Index = FieldIndex(CompositeTy, Field);
     auto ElementTy = FieldType(CompositeTy, Index);
@@ -172,17 +182,21 @@ class SpirvLowering {
     if (Op == "!=")
       return Float ? "spirv.FOrdNotEqual" : "spirv.INotEqual";
     if (Op == "<")
-      return Float ? "spirv.FOrdLessThan"
-                   : Unsigned ? "spirv.ULessThan" : "spirv.SLessThan";
+      return Float      ? "spirv.FOrdLessThan"
+             : Unsigned ? "spirv.ULessThan"
+                        : "spirv.SLessThan";
     if (Op == "<=")
-      return Float ? "spirv.FOrdLessThanEqual"
-                   : Unsigned ? "spirv.ULessThanEqual" : "spirv.SLessThanEqual";
+      return Float      ? "spirv.FOrdLessThanEqual"
+             : Unsigned ? "spirv.ULessThanEqual"
+                        : "spirv.SLessThanEqual";
     if (Op == ">")
-      return Float ? "spirv.FOrdGreaterThan"
-                   : Unsigned ? "spirv.UGreaterThan" : "spirv.SGreaterThan";
+      return Float      ? "spirv.FOrdGreaterThan"
+             : Unsigned ? "spirv.UGreaterThan"
+                        : "spirv.SGreaterThan";
     if (Op == ">=")
-      return Float ? "spirv.FOrdGreaterThanEqual"
-                   : Unsigned ? "spirv.UGreaterThanEqual" : "spirv.SGreaterThanEqual";
+      return Float      ? "spirv.FOrdGreaterThanEqual"
+             : Unsigned ? "spirv.UGreaterThanEqual"
+                        : "spirv.SGreaterThanEqual";
     if (Op == "&&")
       return "spirv.LogicalAnd";
     if (Op == "||")
@@ -207,6 +221,15 @@ class SpirvLowering {
         Body << "\n";
         Values[Op.getResult(0)] = Out;
       } else if (Name == "kelyra.shader.var") {
+        auto ValueType =
+            cast<kelyra::ir::ShaderRefType>(Op.getResult(0).getType())
+                .getValueType();
+        if (isa<kelyra::ir::ShaderResourceType>(ValueType)) {
+          if (Op.getNumOperands() != 1)
+            throw std::runtime_error("shader resource cannot be constructed");
+          Values[Op.getResult(0)] = ValueName(Op.getOperand(0));
+          continue;
+        }
         auto Out = NewValue();
         auto Ty = cast<kelyra::ir::ShaderRefType>(Op.getResult(0).getType())
                       .getValueType();
@@ -217,6 +240,10 @@ class SpirvLowering {
           Body << "    spirv.Store \"Function\" " << Out << ", "
                << ValueName(Op.getOperand(0)) << " : " << TypeName(Ty) << "\n";
       } else if (Name == "kelyra.shader.load") {
+        if (isa<kelyra::ir::ShaderResourceType>(Op.getResult(0).getType())) {
+          Values[Op.getResult(0)] = ValueName(Op.getOperand(0));
+          continue;
+        }
         auto Out = NewValue();
         Body << "    " << Out << " = spirv.Load \"Function\" "
              << ValueName(Op.getOperand(0)) << " : "
@@ -240,7 +267,7 @@ class SpirvLowering {
       } else if (Name == "kelyra.shader.unary") {
         auto Opcode = AttrString(&Op, "opcode");
         auto In = Op.getOperand(0);
-        auto Lowered = Opcode == "!" ? "spirv.LogicalNot"
+        auto Lowered = Opcode == "!"          ? "spirv.LogicalNot"
                        : In.getType().isF32() ? "spirv.FNegate"
                                               : "spirv.SNegate";
         Values[Op.getResult(0)] =
@@ -261,10 +288,10 @@ class SpirvLowering {
         std::string OpName;
         if (From.isF32() && To.isInteger(32))
           OpName = cast<IntegerType>(To).isUnsigned() ? "spirv.ConvertFToU"
-                                                     : "spirv.ConvertFToS";
+                                                      : "spirv.ConvertFToS";
         else if (From.isInteger(32) && To.isF32())
           OpName = cast<IntegerType>(From).isUnsigned() ? "spirv.ConvertUToF"
-                                                       : "spirv.ConvertSToF";
+                                                        : "spirv.ConvertSToF";
         else
           throw std::runtime_error("unsupported shader SPIR-V cast");
         auto Out = NewValue();
@@ -275,39 +302,65 @@ class SpirvLowering {
         auto Out = NewValue();
         Body << "    " << Out << " = spirv.CompositeConstruct ";
         for (unsigned I = 0; I < Op.getNumOperands(); ++I) {
-          if (I) Body << ", ";
+          if (I)
+            Body << ", ";
           Body << ValueName(Op.getOperand(I));
         }
         Body << " : (";
         for (unsigned I = 0; I < Op.getNumOperands(); ++I) {
-          if (I) Body << ", ";
+          if (I)
+            Body << ", ";
           Body << TypeName(Op.getOperand(I).getType());
         }
         Body << ") -> " << TypeName(Op.getResult(0).getType()) << "\n";
         Values[Op.getResult(0)] = Out;
       } else if (Name == "kelyra.shader.extract") {
         auto RecordValue = Op.getOperand(0);
-        Values[Op.getResult(0)] =
-            Extract(ValueName(RecordValue), RecordValue.getType(),
-                    FieldIndex(RecordValue.getType(), AttrString(&Op, "field")));
+        Values[Op.getResult(0)] = Extract(
+            ValueName(RecordValue), RecordValue.getType(),
+            FieldIndex(RecordValue.getType(), AttrString(&Op, "field")));
       } else if (Name == "kelyra.shader.call") {
         auto Callee = Op.getAttrOfType<FlatSymbolRefAttr>("callee");
         auto Out = NewValue();
         Body << "    " << Out << " = spirv.FunctionCall @"
              << Callee.getValue().str() << "(";
         for (unsigned I = 0; I < Op.getNumOperands(); ++I) {
-          if (I) Body << ", ";
+          if (I)
+            Body << ", ";
           Body << ValueName(Op.getOperand(I));
         }
         Body << ") : (";
         for (unsigned I = 0; I < Op.getNumOperands(); ++I) {
-          if (I) Body << ", ";
+          if (I)
+            Body << ", ";
           Body << TypeName(Op.getOperand(I).getType());
         }
         Body << ") -> " << TypeName(Op.getResult(0).getType()) << "\n";
         Values[Op.getResult(0)] = Out;
       } else if (Name == "kelyra.shader.intrinsic") {
         auto Intrinsic = AttrString(&Op, "name");
+        if (Intrinsic == "sample_2d") {
+          if (Op.getNumOperands() != 3 ||
+              TypeName(Op.getOperand(0).getType()).find("!spirv.image<") != 0 ||
+              TypeName(Op.getOperand(1).getType()) != "!spirv.sampler" ||
+              TypeName(Op.getOperand(2).getType()) != "vector<2xf32>" ||
+              TypeName(Op.getResult(0).getType()) != "vector<4xf32>")
+            throw std::runtime_error("sample_2d expects Texture2D, "
+                                     "SamplerState, Vec2 and returns Vec4");
+          const auto ImageType = TypeName(Op.getOperand(0).getType());
+          const auto SampledType = "!spirv.sampled_image<" + ImageType + ">";
+          const auto Sampled = NewValue();
+          Body << "    " << Sampled << " = spirv.SampledImage "
+               << ValueName(Op.getOperand(0)) << ", "
+               << ValueName(Op.getOperand(1)) << " : " << ImageType
+               << ", !spirv.sampler -> " << SampledType << "\n";
+          const auto Out = NewValue();
+          Body << "    " << Out << " = spirv.ImageSampleImplicitLod " << Sampled
+               << ", " << ValueName(Op.getOperand(2)) << " : " << SampledType
+               << ", vector<2xf32> -> vector<4xf32>\n";
+          Values[Op.getResult(0)] = Out;
+          continue;
+        }
         static const std::map<std::string, std::string> Intrinsics{
             {"sqrt", "spirv.GL.Sqrt"}, {"pow", "spirv.GL.Pow"},
             {"sin", "spirv.GL.Sin"},   {"cos", "spirv.GL.Cos"},
@@ -316,11 +369,13 @@ class SpirvLowering {
             {"max", "spirv.GL.FMax"},  {"clamp", "spirv.GL.FClamp"}};
         auto Found = Intrinsics.find(Intrinsic);
         if (Found == Intrinsics.end())
-          throw std::runtime_error("unsupported SPIR-V intrinsic: " + Intrinsic);
+          throw std::runtime_error("unsupported SPIR-V intrinsic: " +
+                                   Intrinsic);
         auto Out = NewValue();
         Body << "    " << Out << " = " << Found->second << " ";
         for (unsigned I = 0; I < Op.getNumOperands(); ++I) {
-          if (I) Body << ", ";
+          if (I)
+            Body << ", ";
           Body << ValueName(Op.getOperand(I));
         }
         Body << " : " << TypeName(Op.getResult(0).getType()) << "\n";
@@ -363,8 +418,8 @@ class SpirvLowering {
             Terminator->getNumOperands() != 1)
           throw std::runtime_error("shader while needs a boolean condition");
         Body << "      spirv.BranchConditional "
-             << ValueName(Terminator->getOperand(0)) << ", " << LoopBody
-             << ", " << Merge << "\n"
+             << ValueName(Terminator->getOperand(0)) << ", " << LoopBody << ", "
+             << Merge << "\n"
              << "    " << LoopBody << ":\n";
         auto &LoopBlock = Op.getRegion(1).front();
         LowerBlock(LoopBlock);
@@ -383,7 +438,7 @@ class SpirvLowering {
           throw std::runtime_error("shader loop control outside a loop");
         Body << "    spirv.Branch "
              << (Name == "kelyra.shader.break" ? Loops.back().Merge
-                                                : Loops.back().Continue)
+                                               : Loops.back().Continue)
              << "\n";
       } else if (Name == "kelyra.shader.return") {
         auto V = Op.getOperand(0);
@@ -392,8 +447,8 @@ class SpirvLowering {
       } else if (Name == "kelyra.shader.eval") {
         // The operand-producing op was lowered already.
       } else {
-        throw std::runtime_error("unsupported Shader IR op in SPIR-V lowering: " +
-                                 Name.str());
+        throw std::runtime_error(
+            "unsupported Shader IR op in SPIR-V lowering: " + Name.str());
       }
     }
   }
@@ -410,13 +465,16 @@ class SpirvLowering {
         for (auto Attr : Op.getAttrOfType<ArrayAttr>("decorations")) {
           std::vector<std::string> FieldDecorations;
           for (auto Decor : cast<ArrayAttr>(Attr))
-            FieldDecorations.push_back(cast<StringAttr>(Decor).getValue().str());
+            FieldDecorations.push_back(
+                cast<StringAttr>(Decor).getValue().str());
           Info.Decorations.push_back(std::move(FieldDecorations));
         }
         Info.Vector = Info.Fields.size() >= 2 && Info.Fields.size() <= 4 &&
-                      std::all_of(Info.FieldTypes.begin(), Info.FieldTypes.end(),
-                                  [&](Type Ty) { return Ty == Info.FieldTypes.front() &&
-                                                         (Ty.isF32() || Ty.isInteger(32)); });
+                      std::all_of(Info.FieldTypes.begin(),
+                                  Info.FieldTypes.end(), [&](Type Ty) {
+                                    return Ty == Info.FieldTypes.front() &&
+                                           (Ty.isF32() || Ty.isInteger(32));
+                                  });
         Records.emplace(AttrString(&Op, "sym_name"), std::move(Info));
       } else if (Name == "kelyra.shader.func") {
         auto FunctionName = AttrString(&Op, "sym_name");
@@ -438,20 +496,19 @@ class SpirvLowering {
       Values.clear();
       Prologue.str({});
       Body.str({});
-      auto FunctionTy =
-          cast<FunctionType>(Function->getAttrOfType<TypeAttr>("function_type")
-                                 .getValue());
+      auto FunctionTy = cast<FunctionType>(
+          Function->getAttrOfType<TypeAttr>("function_type").getValue());
       Source << "  spirv.func @" << Name << "(";
       auto &Block = Function->getRegion(0).front();
       for (unsigned I = 0; I < Block.getNumArguments(); ++I) {
-        if (I) Source << ", ";
+        if (I)
+          Source << ", ";
         auto Argument = Block.getArgument(I);
         auto ArgName = "%arg" + std::to_string(I);
         Values[Argument] = ArgName;
         Source << ArgName << " : " << TypeName(Argument.getType());
       }
-      Source << ") -> " << TypeName(FunctionTy.getResult(0))
-             << " \"None\" {\n";
+      Source << ") -> " << TypeName(FunctionTy.getResult(0)) << " \"None\" {\n";
       LowerBlock(Block);
       Source << Prologue.str() << Body.str() << "  }\n";
     }
@@ -472,18 +529,42 @@ class SpirvLowering {
     throw std::runtime_error("shader interface field needs @location");
   }
 
+  static std::pair<unsigned, unsigned>
+  Binding(const std::vector<std::string> &Decorations) {
+    for (const auto &D : Decorations) {
+      if (!llvm::StringRef(D).starts_with("binding:"))
+        continue;
+      const auto Separator = D.find(':', 8);
+      if (Separator == std::string::npos)
+        break;
+      return {static_cast<unsigned>(std::stoul(D.substr(8, Separator - 8))),
+              static_cast<unsigned>(std::stoul(D.substr(Separator + 1)))};
+    }
+    throw std::runtime_error("shader resource needs @std.graphics.binding");
+  }
+
   void EmitInterface() {
     auto FunctionTy = cast<FunctionType>(
         Entry->getAttrOfType<TypeAttr>("function_type").getValue());
     auto Stage = AttrString(Entry, "stage");
-    auto InputDecorations = Entry->getAttrOfType<ArrayAttr>("input_decorations");
+    auto InputDecorations =
+        Entry->getAttrOfType<ArrayAttr>("input_decorations");
     std::vector<std::string> Interface;
+    std::set<std::pair<unsigned, unsigned>> UsedBindings;
     for (unsigned I = 0; I < FunctionTy.getNumInputs(); ++I) {
       std::vector<std::string> Decorations;
       for (auto A : cast<ArrayAttr>(InputDecorations[I]))
         Decorations.push_back(cast<StringAttr>(A).getValue().str());
       auto Name = "in" + std::to_string(I);
       auto Ty = TypeName(FunctionTy.getInput(I));
+      if (isa<kelyra::ir::ShaderResourceType>(FunctionTy.getInput(I))) {
+        const auto [Set, Slot] = Binding(Decorations);
+        if (!UsedBindings.insert({Set, Slot}).second)
+          throw std::runtime_error("duplicate shader resource set and slot");
+        Source << "  spirv.GlobalVariable @" << Name << " bind(" << Set << ", "
+               << Slot << ") : !spirv.ptr<" << Ty << ", UniformConstant>\n";
+        continue;
+      }
       Source << "  spirv.GlobalVariable @" << Name;
       if (HasDecoration(Decorations, "vertex_index"))
         Source << " built_in(\"VertexIndex\")";
@@ -510,21 +591,32 @@ class SpirvLowering {
     std::vector<std::string> Args;
     for (unsigned I = 0; I < FunctionTy.getNumInputs(); ++I) {
       auto Ty = TypeName(FunctionTy.getInput(I));
+      if (isa<kelyra::ir::ShaderResourceType>(FunctionTy.getInput(I))) {
+        Source << "    %inptr" << I << " = spirv.mlir.addressof @in" << I
+               << " : !spirv.ptr<" << Ty << ", UniformConstant>\n"
+               << "    %inval" << I
+               << " = spirv.Load \"UniformConstant\" %inptr" << I << " : " << Ty
+               << "\n";
+        Args.push_back("%inval" + std::to_string(I));
+        continue;
+      }
       Source << "    %inptr" << I << " = spirv.mlir.addressof @in" << I
              << " : !spirv.ptr<" << Ty << ", Input>\n"
              << "    %inval" << I << " = spirv.Load \"Input\" %inptr" << I
              << " : " << Ty << "\n";
       Args.push_back("%inval" + std::to_string(I));
     }
-    Source << "    %result = spirv.FunctionCall @" << AttrString(Entry, "sym_name")
-           << "(";
+    Source << "    %result = spirv.FunctionCall @"
+           << AttrString(Entry, "sym_name") << "(";
     for (unsigned I = 0; I < Args.size(); ++I) {
-      if (I) Source << ", ";
+      if (I)
+        Source << ", ";
       Source << Args[I];
     }
     Source << ") : (";
     for (unsigned I = 0; I < FunctionTy.getNumInputs(); ++I) {
-      if (I) Source << ", ";
+      if (I)
+        Source << ", ";
       Source << TypeName(FunctionTy.getInput(I));
     }
     Source << ") -> " << TypeName(OutputTy) << "\n";
@@ -547,13 +639,12 @@ class SpirvLowering {
       }
       Source << "    %outptr" << I << " = spirv.mlir.addressof @out" << I
              << " : !spirv.ptr<" << Ty << ", Output>\n"
-             << "    spirv.Store \"Output\" %outptr" << I << ", "
-             << FieldValue << " : " << Ty << "\n";
+             << "    spirv.Store \"Output\" %outptr" << I << ", " << FieldValue
+             << " : " << Ty << "\n";
     }
     Source << "    spirv.Return\n  }\n"
            << "  spirv.EntryPoint \""
-           << (Stage == "vertex" ? "Vertex" : "Fragment")
-           << "\" @main";
+           << (Stage == "vertex" ? "Vertex" : "Fragment") << "\" @main";
     for (const auto &Name : Interface)
       Source << ", @" << Name;
     Source << "\n";
@@ -597,7 +688,8 @@ bool kelyra::driver::EmitDirectSpirv(mlir::ModuleOp Module,
     auto Text = Lowering.Run();
     auto *Context = Module.getContext();
     Context->loadDialect<mlir::spirv::SPIRVDialect>();
-    auto SpirvModule = mlir::parseSourceString<mlir::spirv::ModuleOp>(Text, Context);
+    auto SpirvModule =
+        mlir::parseSourceString<mlir::spirv::ModuleOp>(Text, Context);
     if (!SpirvModule) {
       Error = "failed to parse lowered SPIR-V dialect module:\n" + Text;
       return false;

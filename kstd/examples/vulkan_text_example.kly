@@ -1,0 +1,70 @@
+@cfg(os = os.Windows, arch = arch.X86_64)
+module vulkan_text_example;
+
+import std.graphics.font;
+import std.graphics.font.vulkan;
+import std.graphics.ui.win;
+import std.graphics.vulkan.renderer;
+import std.io;
+import std.io.file;
+import std.os;
+
+@main
+pub fn main() -> i32 {
+  let vertex: [8192]u8;
+  let fragment: [8192]u8;
+  let vertex_size = read_shader("build/vulkan_text.vert.spv", &vertex[0], 8192);
+  let fragment_size = read_shader("build/vulkan_text.frag.spv", &fragment[0], 8192);
+  if vertex_size <= 0 || fragment_size <= 0 {
+    return 1;
+  }
+  let window = Window("Kelyra Vulkan text", 800, 600);
+  if !window.valid() {
+    return 2;
+  }
+  let renderer = Renderer(window.handle(), &vertex[0], vertex_size as usize, &fragment[0], fragment_size as usize, 6);
+  if !renderer.valid() {
+    println(renderer.last_error());
+    return 3;
+  }
+  let fonts = "";
+  let content = "Kelyra 你好، مرحبا! 🦋\nVulkan 字体与纹理";
+  let layout = TextLayout(content, fonts, pixels_from_points(33.0, 96.0), 700.0, 800, 600, 48.0, 90.0);
+  if !layout.valid() {
+    println(layout.last_error());
+    return 4;
+  }
+  let texture = upload(&renderer, &layout);
+  if texture as usize == 0 {
+    println(renderer.last_error());
+    return 5;
+  }
+  if !renderer.bind(texture) {
+    return 6;
+  }
+  let result = 0;
+  while window.poll() {
+    let status = renderer.draw();
+    if status == 0 {
+      result = 7;
+      break;
+    }
+    if status == 2 {
+      result = 8;
+      break;
+    }
+    sleep_millis(16);
+  }
+  renderer.release(texture);
+  return result;
+}
+
+fn read_shader(path: *c.char, output: *u8, capacity: usize) -> i64 {
+  let handle = open(path, 0);
+  if handle < 0 {
+    return handle;
+  }
+  let length = read(handle, output, capacity);
+  close(handle);
+  return length;
+}

@@ -1,29 +1,29 @@
-@cfg(os="windows", arch="x86_64") module std.win.system;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.system;
 
 import std.win.error;
 
 @extern("GetCurrentProcessId", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_process_id() -> u32;
 
 @extern("QueryPerformanceCounter", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_performance_counter(value: *i64) -> i32;
 
 @extern("QueryPerformanceFrequency", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_performance_frequency(value: *i64) -> i32;
 
 @extern("Sleep", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_sleep(milliseconds: u32) -> void;
 
 @extern("GetEnvironmentVariableA", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_environment(name: *c.char, output: *u8, capacity: u32) -> u32;
 
 @extern("GetCurrentDirectoryA", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 fn win_current_directory(capacity: u32, output: *u8) -> u32;
 
 // Win32 process ID. The value is an unsigned 32-bit integer.

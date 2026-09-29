@@ -22,13 +22,13 @@ cd kelyra
 cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
-npm ci --prefix kide
-npm test --prefix kide
+npm ci --prefix kide/vscode
+npm test --prefix kide/vscode
 ```
 
 On Windows, configure from a Visual Studio developer environment so Clang can
 find the MSVC and Windows SDK libraries. Generated files belong in `build/`,
-`kstd/.kelp/`, or `kide/node_modules/` and are not committed.
+`kstd/.kelp/`, or `kide/vscode/node_modules/` and are not committed.
 
 Shader architecture and current HLSL compatibility limits are documented in
 [`compiler/doc/shader-ir.md`](compiler/doc/shader-ir.md).

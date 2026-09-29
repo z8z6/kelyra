@@ -1,4 +1,4 @@
-@cfg(os="windows", arch="x86_64") module std.win.com;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.com;
 
 import std.win.guid;
 
@@ -45,32 +45,32 @@ pub fn succeeded(result: HResult) -> bool { return result >= 0; }
 // COINIT_MULTITHREADED = 0, COINIT_APARTMENTTHREADED = 2.
 // Every successful initialize call, including S_FALSE, needs uninitialize.
 @extern("CoInitializeEx", "ole32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn initialize(reserved: *u8, apartment: u32) -> HResult;
 
 @extern("CoUninitialize", "ole32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn uninitialize() -> void;
 
 @extern("CoCreateInstance", "ole32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn create_instance(class_id: *std.win.guid.Guid, outer: *u8,
                        context: u32, interface_id: *std.win.guid.Guid,
                        result: **u8) -> HResult;
 
 @extern("CoTaskMemAlloc", "ole32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn allocate(size: usize) -> *u8;
 
 @extern("CoTaskMemFree", "ole32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn free(pointer: *u8) -> void;
 
 @extern("CLSIDFromString", "ole32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn guid_from_string(text: *u16, result: *std.win.guid.Guid) -> HResult;
 
 @extern("StringFromGUID2", "ole32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn guid_to_string(value: *std.win.guid.Guid, output: *u16,
                       capacity: i32) -> i32;

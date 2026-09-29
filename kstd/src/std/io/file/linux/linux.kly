@@ -1,4 +1,4 @@
-@cfg(os="linux", arch="x86_64") module std.io.file.linux;
+@cfg(os=os.Linux, arch=arch.X86_64) module std.io.file.linux;
 
 // mode 0: read existing; mode 1: create or truncate for writing.
 pub fn open(path: *c.char, mode: u32) -> i64 {

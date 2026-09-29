@@ -1,0 +1,6 @@
+module cfg.invalid_string;
+
+@cfg(os="windows")
+fn selected() -> i32 {
+  return 1;
+}

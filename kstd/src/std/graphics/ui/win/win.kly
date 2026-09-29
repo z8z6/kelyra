@@ -1,0 +1,353 @@
+@cfg(os=os.Windows, arch=arch.X86_64) module std.graphics.ui.win;
+
+import std.alloc;
+import std.memory;
+import std.graphics.ui;
+import std.graphics.ui.win.gdi;
+import std.win.error;
+import std.win.input;
+import std.win.window;
+import std.win.text;
+
+class Pending {
+  next: *Pending;
+  message: u32;
+  w_param: usize;
+  l_param: isize;
+  modifiers: u32;
+}
+
+class HostState {
+  first: *Pending;
+  last: *Pending;
+  gdi_enabled: bool;
+  tracking_mouse: bool;
+  high_surrogate: u32;
+}
+
+fn modifiers() -> u32 {
+  let value: u32 = 0;
+  if std.win.input.key_state(16) < 0 { value = value + 1; }
+  if std.win.input.key_state(17) < 0 { value = value + 2; }
+  if std.win.input.key_state(18) < 0 { value = value + 4; }
+  return value;
+}
+
+fn enqueue(state: *HostState, message: u32, w_param: usize,
+           l_param: isize) -> bool {
+  let node = std.alloc.allocate(std.memory.size_of<Pending>(0 as *Pending))
+      as *Pending;
+  if node as usize == 0 { return false; }
+  node.next = 0 as *Pending;
+  node.message = message;
+  node.w_param = w_param;
+  node.l_param = l_param;
+  node.modifiers = modifiers();
+  if state.last as usize == 0 { state.first = node; }
+  else { state.last.next = node; }
+  state.last = node;
+  return true;
+}
+
+fn procedure(window: *u8, message: u32, w_param: usize,
+             l_param: isize) -> isize {
+  if message == 129 { // WM_NCCREATE: CREATESTRUCTW begins with lpCreateParams.
+    let parameter = *(l_param as *usize);
+    let state = parameter as *HostState;
+    std.win.window.set_window_long_ptr(window, -21, state as isize);
+  }
+  let state = std.win.window.get_window_long_ptr(window, -21) as *HostState;
+  if state as usize != 0 {
+    if message == 130 { // WM_NCDESTROY
+      std.win.window.set_window_long_ptr(window, -21, 0);
+    } else if message == 5 || message == 2 || message == 7 ||
+              message == 8 || message == 533 || message == 675 ||
+              message == 256 || message == 257 || message == 258 ||
+              message == 260 || message == 261 || message == 262 ||
+              message == 512 || message == 513 || message == 514 ||
+              message == 515 || message == 516 || message == 517 ||
+              message == 518 || message == 519 || message == 520 ||
+              message == 521 || message == 523 || message == 524 ||
+              message == 525 || message == 522 || message == 526 ||
+              message == 16 || message == 15 {
+      if message == 512 && !state.tracking_mouse {
+        let track = std.win.input.TrackMouseEvent();
+        track.size = std.memory.size_of<std.win.input.TrackMouseEvent>(
+            0 as *std.win.input.TrackMouseEvent) as u32;
+        track.flags = 2; // TME_LEAVE
+        track.window = window;
+        if std.win.input.track_mouse_event(&track) != 0 {
+          state.tracking_mouse = true;
+        }
+      }
+      if message == 675 { state.tracking_mouse = false; }
+      if message == 15 && !state.gdi_enabled {
+        return std.win.window.default_procedure(window, message, w_param,
+                                                 l_param);
+      }
+      if enqueue(state, message, w_param, l_param) &&
+          (message == 16 || message == 15) { return 0; }
+    }
+  }
+  return std.win.window.default_procedure(window, message, w_param, l_param);
+}
+
+fn class_name() -> [13]u16 {
+  let name: [13]u16;
+  name[0] = 75; name[1] = 101; name[2] = 108; name[3] = 121;
+  name[4] = 114; name[5] = 97; name[6] = 85; name[7] = 105;
+  name[8] = 72; name[9] = 111; name[10] = 115; name[11] = 116;
+  name[12] = 0;
+  return name;
+}
+
+fn mouse_button(message: u32, w_param: usize) -> std.graphics.ui.MouseButton {
+  if message == 513 || message == 514 || message == 515 {
+    return std.graphics.ui.MouseButton.Left;
+  }
+  if message == 516 || message == 517 || message == 518 {
+    return std.graphics.ui.MouseButton.Right;
+  }
+  if message == 519 || message == 520 || message == 521 {
+    return std.graphics.ui.MouseButton.Middle;
+  }
+  if message == 523 || message == 524 || message == 525 {
+    if std.win.input.high_unsigned(w_param) == 1 {
+      return std.graphics.ui.MouseButton.X1;
+    }
+    return std.graphics.ui.MouseButton.X2;
+  }
+  return std.graphics.ui.MouseButton.None;
+}
+
+// Owns a resizable Win32 window and a platform-neutral UI tree. The caller
+// retains storage for every control added to window.ui.
+pub class Window {
+  native: *u8;
+  state: *HostState;
+  pub ui: std.graphics.ui.Window;
+  opened: bool;
+  width: i32;
+  height: i32;
+  gdi_enabled: bool;
+
+  pub init(title_utf8: *c.char, client_width: i32, client_height: i32) {
+    native = 0 as *u8;
+    state = 0 as *HostState;
+    ui = std.graphics.ui.Window(client_width, client_height);
+    opened = false;
+    width = client_width;
+    height = client_height;
+    gdi_enabled = false;
+
+    let title: [256]u16;
+    if std.win.text.utf8_to_wide(65001, 0, title_utf8, -1, &title[0], 256) == 0 {
+      return;
+    }
+    let name = class_name();
+    let instance = std.win.window.module_handle(0 as *u16);
+    let kind = std.win.window.WindowClassExW();
+    kind.size = std.win.window.class_size();
+    kind.style = 8; // CS_DBLCLKS
+    kind.procedure = procedure;
+    kind.instance = instance;
+    kind.class_name = &name[0];
+    if std.win.window.register_class(&kind) == 0 &&
+        std.win.error.last_error() != 1410 { return; }
+    let style: u32 = 13565952; // WS_OVERLAPPEDWINDOW
+    let outer = std.win.window.Rect();
+    outer.right = client_width;
+    outer.bottom = client_height;
+    if std.win.window.adjust_window_rect(&outer, style, 0, 0) == 0 { return; }
+    state = std.alloc.allocate(std.memory.size_of<HostState>(
+        0 as *HostState)) as *HostState;
+    if state as usize == 0 { return; }
+    state.first = 0 as *Pending;
+    state.last = 0 as *Pending;
+    state.gdi_enabled = false;
+    state.tracking_mouse = false;
+    state.high_surrogate = 0;
+    native = std.win.window.create_window(
+        0, &name[0], &title[0], style, 100, 100,
+        outer.right - outer.left, outer.bottom - outer.top,
+        0 as *u8, 0 as *u8, instance, state as *u8);
+    if native as usize == 0 { return; }
+    opened = true;
+    std.win.window.show_window(native, 5);
+    std.win.window.update_window(native);
+  }
+
+  deinit() {
+    if native as usize != 0 && std.win.window.is_window(native) != 0 {
+      std.win.window.destroy_window(native);
+    }
+    native = 0 as *u8;
+    if state as usize != 0 {
+      let node = state.first;
+      while node as usize != 0 {
+        let next = node.next;
+        std.alloc.release(node as *u8);
+        node = next;
+      }
+      std.alloc.release(state as *u8);
+      state = 0 as *HostState;
+    }
+  }
+
+  pub fn valid() -> bool { return native as usize != 0; }
+  pub fn handle() -> *u8 { return native; }
+  pub fn client_width() -> i32 { return width; }
+  pub fn client_height() -> i32 { return height; }
+
+  pub fn set_ui_paint(enabled: bool) -> void {
+    gdi_enabled = enabled;
+    if state as usize != 0 { state.gdi_enabled = enabled; }
+    repaint();
+  }
+
+  pub fn repaint() -> void {
+    if gdi_enabled && native as usize != 0 {
+      std.graphics.ui.win.gdi.invalidate(
+          native, 0 as *std.win.window.Rect, 0);
+    }
+  }
+
+  fn dispatch(node: *Pending) -> bool {
+    let message = node.message;
+    let w_param = node.w_param;
+    let l_param = node.l_param;
+    let dirty = false;
+    if message == 5 { // WM_SIZE
+      width = std.win.input.low_unsigned(l_param as usize) as i32;
+      height = std.win.input.high_unsigned(l_param as usize) as i32;
+      ui.resize(width, height);
+      dirty = true;
+    } else if message == 15 && gdi_enabled { // WM_PAINT
+      std.graphics.ui.win.gdi.paint(native, &ui);
+      std.graphics.ui.win.gdi.validate(native, 0 as *std.win.window.Rect);
+    } else if message == 16 { // WM_CLOSE
+      if ui.request_close() && native as usize != 0 {
+        std.win.window.destroy_window(native);
+        native = 0 as *u8;
+        opened = false;
+      }
+    } else if message == 2 { // WM_DESTROY
+      opened = false;
+      native = 0 as *u8;
+    } else if message == 533 { // WM_CAPTURECHANGED
+      ui.capture_lost();
+    } else if message == 675 { // WM_MOUSELEAVE
+      let event = std.graphics.ui.Event();
+      event.kind = std.graphics.ui.EventKind.PointerLeave;
+      ui.pointer_event(&event);
+    } else if message == 7 || message == 8 { // WM_SETFOCUS / WM_KILLFOCUS
+      let event = std.graphics.ui.Event();
+      if message == 7 { event.kind = std.graphics.ui.EventKind.Focus; }
+      else {
+        event.kind = std.graphics.ui.EventKind.Blur;
+        ui.capture_lost();
+      }
+      ui.keyboard_event(&event);
+    } else if message == 512 || message == 513 || message == 514 ||
+              message == 515 || message == 516 || message == 517 ||
+              message == 518 || message == 519 || message == 520 ||
+              message == 521 || message == 523 || message == 524 ||
+              message == 525 || message == 522 || message == 526 {
+      let event = std.graphics.ui.Event();
+      event.x = std.win.input.low_signed(l_param);
+      event.y = std.win.input.high_signed(l_param);
+      event.modifiers = node.modifiers;
+      event.button = mouse_button(message, w_param);
+      if message == 522 || message == 526 {
+        let point = std.win.window.Point();
+        point.x = event.x; point.y = event.y;
+        std.win.input.screen_to_client(native, &point);
+        event.x = point.x; event.y = point.y;
+        event.kind = std.graphics.ui.EventKind.PointerWheel;
+        let delta = std.win.input.high_signed(w_param as isize);
+        if message == 522 { event.wheel_y = delta; }
+        else { event.wheel_x = delta; }
+      } else if message == 512 {
+        event.kind = std.graphics.ui.EventKind.PointerMove;
+      } else if message == 515 || message == 518 || message == 521 ||
+                message == 525 {
+        event.kind = std.graphics.ui.EventKind.PointerDoubleClick;
+        if message == 515 { std.win.input.set_capture(native); }
+      } else if message == 513 || message == 516 || message == 519 ||
+                message == 523 {
+        event.kind = std.graphics.ui.EventKind.PointerDown;
+        if message == 513 { std.win.input.set_capture(native); }
+      } else {
+        event.kind = std.graphics.ui.EventKind.PointerUp;
+      }
+      ui.pointer_event(&event);
+      if message == 514 { std.win.input.release_capture(); }
+      dirty = true;
+    } else if message == 256 || message == 257 ||
+              message == 260 || message == 261 {
+      let event = std.graphics.ui.Event();
+      if message == 256 || message == 260 {
+        event.kind = std.graphics.ui.EventKind.KeyDown;
+      } else { event.kind = std.graphics.ui.EventKind.KeyUp; }
+      event.key = w_param as u32;
+      event.modifiers = node.modifiers;
+      event.scan_code = std.win.input.key_scan_code(l_param);
+      event.repeat_count = std.win.input.key_repeat_count(l_param);
+      event.repeated = std.win.input.key_repeated(l_param);
+      event.extended = std.win.input.key_extended(l_param);
+      ui.keyboard_event(&event);
+      dirty = true;
+    } else if message == 258 || message == 262 {
+      let code = w_param as u32;
+      if std.win.input.is_high_surrogate(code) {
+        state.high_surrogate = code;
+      } else {
+        let event = std.graphics.ui.Event();
+        event.kind = std.graphics.ui.EventKind.TextInput;
+        event.modifiers = node.modifiers;
+        if std.win.input.is_low_surrogate(code) {
+          if state.high_surrogate != 0 {
+            event.character = std.win.input.combine_surrogates(
+                state.high_surrogate, code);
+          }
+        } else { event.character = code; }
+        state.high_surrogate = 0;
+        if event.character != 0 { ui.keyboard_event(&event); }
+        dirty = true;
+      }
+    }
+    return dirty;
+  }
+
+  fn drain() -> bool {
+    let dirty = false;
+    while state as usize != 0 && state.first as usize != 0 {
+      let node = state.first;
+      state.first = node.next;
+      if state.first as usize == 0 { state.last = 0 as *Pending; }
+      if dispatch(node) { dirty = true; }
+      std.alloc.release(node as *u8);
+    }
+    return dirty;
+  }
+
+  // Processes events captured by WndProc, including synchronously sent ones.
+  pub fn poll() -> bool {
+    if state as usize == 0 { return false; }
+    let dirty = drain();
+    if native as usize != 0 {
+      let message = std.win.window.Message();
+      while opened && std.win.window.peek_message(&message, native, 0, 0, 1) != 0 {
+        std.win.window.translate_message(&message);
+        std.win.window.dispatch_message(&message);
+        if drain() { dirty = true; }
+      }
+    }
+    if native as usize != 0 && std.win.window.is_window(native) == 0 {
+      native = 0 as *u8;
+      opened = false;
+    }
+    if dirty { repaint(); }
+    return opened;
+  }
+}

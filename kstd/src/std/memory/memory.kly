@@ -6,30 +6,35 @@ module std.memory;
 @final
 pub class Raw<T> {
   data: T;
-  pub init() {}
+
+  pub init() {
+  }
 }
-
-// These operations require an uninitialized destination.
-@intrinsic
-pub fn init_copy<T>(slot: *Raw<T>, source: *T) -> void {}
-
-@intrinsic
-pub fn init_move<T>(slot: *Raw<T>, source: *T) -> void {}
 
 // Requires an initialized slot. The returned pointer borrows the value.
 @intrinsic
 pub fn assume_init<T>(slot: *Raw<T>) -> *T {
-  return 0 as*T;
+  return 0 as *T;
 }
 
 // Requires an initialized slot. The caller marks it uninitialized afterward.
 @intrinsic
-pub fn drop_init<T>(slot: *Raw<T>) -> void {}
+pub fn drop_init<T>(slot: *Raw<T>) -> void {
+}
+
+// These operations require an uninitialized destination.
+@intrinsic
+pub fn init_copy<T>(slot: *Raw<T>, source: *T) -> void {
+}
+
+pub fn init_default<T>(destination: *T) -> void {
+}
+
+@intrinsic
+pub fn init_move<T>(slot: *Raw<T>, source: *T) -> void {
+}
 
 // These operations apply to typed but uninitialized storage.
 pub fn size_of<T>(probe: *T) -> usize {
   return 0;
-}
-
-pub fn init_default<T>(destination: *T) -> void {
 }

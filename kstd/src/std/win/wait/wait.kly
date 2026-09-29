@@ -1,10 +1,10 @@
-@cfg(os="windows", arch="x86_64") module std.win.wait;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.wait;
 
 @extern("WaitForSingleObject", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn one(handle: *u8, milliseconds: u32) -> u32;
 
 @extern("WaitForMultipleObjects", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn many(count: u32, handles: **u8, wait_all: i32,
             milliseconds: u32) -> u32;

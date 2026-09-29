@@ -1,6 +1,6 @@
-@cfg(os="windows", arch="x86_64") module std.win.graphics.vulkan;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.graphics.vulkan;
 
-import std.ui.win;
+import std.graphics.ui.win;
 import std.os;
 import std.win.library;
 
@@ -23,7 +23,7 @@ pub fn run(title: *c.char, width: i32, height: i32,
   let create = create_address as fn(*u8, *u8, usize, *u8, usize, u32) -> *u8;
   let draw = draw_address as fn(*u8) -> i32;
   let destroy = destroy_address as fn(*u8) -> void;
-  let window = std.ui.win.Window(title, width, height);
+  let window = std.graphics.ui.win.Window(title, width, height);
   if !window.valid() {
     std.win.library.close(library);
     return 3;

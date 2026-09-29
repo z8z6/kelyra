@@ -1,4 +1,4 @@
-@cfg(os="linux", arch="x86_64") module std.sync.signal.linux;
+@cfg(os=os.Linux, arch=arch.X86_64) module std.sync.signal.linux;
 
 // kill(2). Signal zero performs permission/existence checking only.
 // Returns zero or negative Linux errno.

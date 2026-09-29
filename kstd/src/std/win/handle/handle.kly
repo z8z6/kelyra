@@ -1,7 +1,7 @@
-@cfg(os="windows", arch="x86_64") module std.win.handle;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.handle;
 
 // A returned owned HANDLE must be closed exactly once. Borrowed handles,
 // including GetStdHandle results, must not be closed by their borrowers.
 @extern("CloseHandle", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn close(handle: *u8) -> i32;

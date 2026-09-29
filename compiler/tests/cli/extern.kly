@@ -1,5 +1,5 @@
 @extern("getpid")
-@callconv(CallingConvention.C)
+@callconv(cc.C)
 fn process_id() -> c.int;
 
 @main

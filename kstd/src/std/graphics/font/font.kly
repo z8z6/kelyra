@@ -1,0 +1,687 @@
+@cfg(os = os.Windows, arch = arch.X86_64)
+module std.graphics.font;
+
+import std.alloc;
+import std.graphics.font.buffer;
+import std.graphics.font.native;
+import std.graphics.font.win;
+import std.util.string;
+
+@layout(Layout.C)
+class AtlasGlyph {
+  face  : u32;
+  index : u32;
+  x     : u32;
+  y     : u32;
+  width : u32;
+  height: u32;
+  left  : i32;
+  top   : i32;
+}
+
+@layout(Layout.C)
+pub class Cluster {
+  pub byte_start: u32;
+  pub byte_end  : u32;
+  pub left      : f32;
+  pub top       : f32;
+  pub right     : f32;
+  pub bottom    : f32;
+  pub line      : u32;
+  pub face      : u32;
+}
+
+@layout(Layout.C)
+class FontFace {
+  face   : *FtFace;
+  hb_font: *u8;
+}
+
+@layout(Layout.C)
+class LineRange {
+  start: i32;
+  end  : i32;
+}
+
+@layout(Layout.C)
+class Segment {
+  start: i32;
+  end  : i32;
+  face : u32;
+}
+
+// TextLayout owns fallback, Unicode layout, glyph caching, the atlas, and
+// drawing vertices. Native calls target only FreeType, HarfBuzz, and ICU C APIs.
+pub class TextLayout {
+  library       : *u8;
+  faces         : Buffer<FontFace>;
+  text          : *u16;
+  text_length   : i32;
+  byte_offsets  : *u32;
+  atlas         : *u8;
+  glyphs        : Buffer<AtlasGlyph>;
+  vertices_data : Buffer<f32>;
+  clusters      : Buffer<Cluster>;
+  lines         : Buffer<LineRange>;
+  segments      : Buffer<Segment>;
+  shelf_x       : u32;
+  shelf_y       : u32;
+  shelf_height  : u32;
+  font_pixels   : f32;
+  line_height   : f32;
+  ascent        : f32;
+  origin_x      : f32;
+  origin_y      : f32;
+  screen_width  : u32;
+  screen_height : u32;
+  measured_width: f32;
+  error         : *c.char;
+  ready         : bool;
+
+  pub init(content    : *c.char,
+           font_paths : *c.char,
+           size_pixels: f32,
+           max_width  : f32,
+           view_width : u32,
+           view_height: u32,
+           x          : f32,
+           y          : f32) {
+    library = 0 as *u8;
+    faces = Buffer<FontFace>();
+    text = 0 as *u16;
+    text_length = 0;
+    byte_offsets = 0 as *u32;
+    atlas = 0 as *u8;
+    glyphs = Buffer<AtlasGlyph>();
+    vertices_data = Buffer<f32>();
+    clusters = Buffer<Cluster>();
+    lines = Buffer<LineRange>();
+    segments = Buffer<Segment>();
+    shelf_x = 1;
+    shelf_y = 1;
+    shelf_height = 0;
+    font_pixels = size_pixels;
+    line_height = 0.0;
+    ascent = 0.0;
+    origin_x = x;
+    origin_y = y;
+    screen_width = view_width;
+    screen_height = view_height;
+    measured_width = 0.0;
+    error = "";
+    ready = false;
+    if content as usize == 0 || size_pixels <= 0.0 || size_pixels > 512.0 || view_width == 0 || view_height == 0 {
+      error = "invalid text or font layout dimensions";
+      return;
+    }
+    if ft_init(&library) != 0 {
+      error = "FT_Init_FreeType failed";
+      return;
+    }
+    let selected = String(font_paths);
+    if selected.empty() {
+      let defaults = system_font_paths();
+      selected.assign_view(defaults.view());
+    }
+    if !open_faces(selected.data_pointer()) {
+      error = "no supplied font file could be opened";
+      return;
+    }
+    if line_height <= 0.0 {
+      line_height = size_pixels * 1.3;
+    }
+    if !convert_text(content) {
+      error = "invalid UTF-8 text";
+      return;
+    }
+    atlas = allocate(2048 * 2048 * 4);
+    if atlas as usize == 0 {
+      error = "cannot allocate glyph atlas";
+      return;
+    }
+    fill(atlas, 0, 2048 * 2048 * 4);
+    if !break_lines(max_width) {
+      error = "ICU line breaking failed";
+      return;
+    }
+    let line: usize = 0;
+    while line < lines.length() {
+      if !shape_line(lines.at(line), line as u32) {
+        return;
+      }
+      line = line + 1;
+    }
+    ready = true;
+  }
+  deinit() {
+    let index: usize = 0;
+    while index < faces.length() {
+      let entry = faces.at(index);
+      if entry.hb_font as usize != 0 {
+        hb_font_destroy(entry.hb_font);
+      }
+      if entry.face as usize != 0 {
+        ft_done_face(entry.face);
+      }
+      index = index + 1;
+    }
+    if library as usize != 0 {
+      ft_done(library);
+    }
+    release(text as *u8);
+    release(byte_offsets as *u8);
+    release(atlas);
+  }
+  fn unit(index: i32) -> u16 {
+    return *((text as usize + (index as usize) * 2) as *u16);
+  }
+  fn offset(index: i32) -> u32 {
+    return *((byte_offsets as usize + (index as usize) * 4) as *u32);
+  }
+  fn set_offset(index: i32, value: u32) -> void {
+    *((byte_offsets as usize + (index as usize) * 4) as *u32) = value;
+  }
+  fn open_one_face(path: *c.char) -> void {
+    let face: *FtFace = 0 as *FtFace;
+    if ft_new_face(library, path, 0, &face) != 0 {
+      return;
+    }
+    if ft_set_pixel_sizes(face, 0, (font_pixels + 0.5) as u32) != 0 {
+      ft_done_face(face);
+      return;
+    }
+    let hb = hb_ft_font(face);
+    if hb as usize == 0 {
+      ft_done_face(face);
+      return;
+    }
+    let entry = FontFace();
+    entry.face = face;
+    entry.hb_font = hb;
+    if !faces.push(entry) {
+      hb_font_destroy(hb);
+      ft_done_face(face);
+      return;
+    }
+    let metrics = face.size.metrics;
+    let height = metrics.height as f32 / 64.0;
+    let top = metrics.ascender as f32 / 64.0;
+    if height > line_height {
+      line_height = height;
+    }
+    if top > ascent {
+      ascent = top;
+    }
+  }
+  fn open_faces(paths: *c.char) -> bool {
+    let source = from_cstr(paths);
+    let start: usize = 0;
+    let at: usize = 0;
+    while at <= source.len {
+      if at == source.len || source[at] == 59 {
+        if at > start {
+          let path = String("");
+          let index = start;
+          while index < at {
+            path.append_byte(source[index]);
+            index = index + 1;
+          }
+          open_one_face(path.data_pointer());
+        }
+        start = at + 1;
+      }
+      at = at + 1;
+    }
+    return faces.length() > 0;
+  }
+  fn convert_text(content: *c.char) -> bool {
+    let status: i32 = 0;
+    let length: i32 = 0;
+    utf8_to_utf16(0 as *u16, 0, &length, content, -1, &status);
+    if (status > 0 && status != 15) || length < 0 || length > 1048576 {
+      return false;
+    }
+    text = allocate(((length as usize) + 1) * 2) as *u16;
+    byte_offsets = allocate(((length as usize) + 1) * 4) as *u32;
+    if text as usize == 0 || byte_offsets as usize == 0 {
+      return false;
+    }
+    status = 0;
+    utf8_to_utf16(text, length + 1, &text_length, content, -1, &status);
+    if status > 0 || text_length != length {
+      return false;
+    }
+    let source = from_cstr(content);
+    let byte: usize = 0;
+    let index: i32 = 0;
+    while byte < source.len && index < text_length {
+      let first = source[byte];
+      let width: usize = 1;
+      let units: i32 = 1;
+      if first >= 240 {
+        width = 4;
+        units = 2;
+      } else if first >= 224 {
+        width = 3;
+      } else if first >= 192 {
+        width = 2;
+      }
+      let step: i32 = 0;
+      while step < units {
+        set_offset(index, byte as u32);
+        index = index + 1;
+        step = step + 1;
+      }
+      byte = byte + width;
+    }
+    set_offset(text_length, source.len as u32);
+    return true;
+  }
+  fn scalar_at(position: *i32, end: i32) -> u32 {
+    let first = unit(*position) as u32;
+    *position = *position + 1;
+    if first >= 55296 && first <= 56319 && *position < end {
+      let second = unit(*position) as u32;
+      if second >= 56320 && second <= 57343 {
+        *position = *position + 1;
+        return 65536 + (first - 55296) * 1024 + second - 56320;
+      }
+    }
+    return first;
+  }
+  fn face_for(start: i32, end: i32) -> u32 {
+    let face: usize = 0;
+    while face < faces.length() {
+      let complete = true;
+      let at = start;
+      while at < end {
+        let scalar = scalar_at(&at, end);
+        if scalar == 8204 || scalar == 8205 || (scalar >= 65024 && scalar <= 65039) {
+          continue;
+        }
+        if ft_get_char_index(faces.at(face).face, scalar as c.long) == 0 {
+          complete = false;
+          break;
+        }
+      }
+      if complete {
+        return face as u32;
+      }
+      face = face + 1;
+    }
+    return 0;
+  }
+  fn segment_by_face(start: i32, end: i32) -> bool {
+    segments.clear();
+    let status: i32 = 0;
+    let breaks = break_open(0, "", text, text_length, &status);
+    if status > 0 || breaks as usize == 0 {
+      return false;
+    }
+    let position = start;
+    while position < end {
+      let next = break_following(breaks, position);
+      if next < 0 || next > end {
+        next = end;
+      }
+      if next <= position {
+        break_close(breaks);
+        return false;
+      }
+      let face = face_for(position, next);
+      let count = segments.length();
+      if count > 0 && segments.at(count - 1).face == face && segments.at(count - 1).end == position {
+        segments.at(count - 1).end = next;
+      } else {
+        let part = Segment();
+        part.start = position;
+        part.end = next;
+        part.face = face;
+        if !segments.push(part) {
+          break_close(breaks);
+          return false;
+        }
+      }
+      position = next;
+    }
+    break_close(breaks);
+    return true;
+  }
+  fn measure(start: i32, end: i32) -> f32 {
+    if !segment_by_face(start, end) {
+      return 0.0;
+    }
+    let width: f32 = 0.0;
+    let part: usize = 0;
+    while part < segments.length() {
+      let segment = segments.at(part);
+      let buffer = hb_buffer_create();
+      if buffer as usize == 0 {
+        return 0.0;
+      }
+      hb_buffer_add_utf16(buffer, text, text_length, segment.start as u32, segment.end - segment.start);
+      hb_buffer_set_direction(buffer, 4);
+      hb_buffer_guess_segment_properties(buffer);
+      hb_shape(faces.at(segment.face as usize).hb_font, buffer, 0 as *u8, 0);
+      let count: u32 = 0;
+      let positions = hb_buffer_glyph_positions(buffer, &count);
+      let glyph: u32 = 0;
+      while glyph < count {
+        let position = (positions as usize + (glyph as usize) * 20) as *HbGlyphPosition;
+        width = width + position.x_advance as f32 / 64.0;
+        glyph = glyph + 1;
+      }
+      hb_buffer_destroy(buffer);
+      part = part + 1;
+    }
+    return width;
+  }
+  fn break_lines(max_width: f32) -> bool {
+    let status: i32 = 0;
+    let breaks = break_open(2, "", text, text_length, &status);
+    if status > 0 || breaks as usize == 0 {
+      return false;
+    }
+    let line_start: i32 = 0;
+    let previous: i32 = 0;
+    let boundary = break_next(breaks);
+    while boundary >= 0 {
+      let hard = break_status(breaks) >= 100;
+      if !hard && max_width > 0.0 && previous > line_start && measure(line_start, boundary) > max_width {
+        let line = LineRange();
+        line.start = line_start;
+        line.end = previous;
+        if !lines.push(line) {
+          break_close(breaks);
+          return false;
+        }
+        line_start = previous;
+      }
+      if hard {
+        let end = boundary;
+        while end > line_start && (unit(end - 1) == 10 || unit(end - 1) == 13) {
+          end = end - 1;
+        }
+        let line = LineRange();
+        line.start = line_start;
+        line.end = end;
+        if !lines.push(line) {
+          break_close(breaks);
+          return false;
+        }
+        line_start = boundary;
+      }
+      previous = boundary;
+      boundary = break_next(breaks);
+    }
+    break_close(breaks);
+    if line_start < text_length || lines.length() == 0 {
+      let line = LineRange();
+      line.start = line_start;
+      line.end = text_length;
+      if !lines.push(line) {
+        return false;
+      }
+    }
+    return true;
+  }
+  fn rasterize(face_index: u32, glyph_index: u32) -> *AtlasGlyph {
+    let cached: usize = 0;
+    while cached < glyphs.length() {
+      let glyph = glyphs.at(cached);
+      if glyph.face == face_index && glyph.index == glyph_index {
+        return glyph;
+      }
+      cached = cached + 1;
+    }
+    let face = faces.at(face_index as usize).face;
+    if ft_load_glyph(face, glyph_index, 1048576) != 0 {
+      return 0 as *AtlasGlyph;
+    }
+    let slot = face.glyph;
+    if slot.format != 1651078259 && ft_render_glyph(slot, 0) != 0 {
+      return 0 as *AtlasGlyph;
+    }
+    let bitmap = slot.bitmap;
+    let glyph = AtlasGlyph();
+    glyph.face = face_index;
+    glyph.index = glyph_index;
+    glyph.width = bitmap.width;
+    glyph.height = bitmap.rows;
+    glyph.left = slot.bitmap_left;
+    glyph.top = slot.bitmap_top;
+    glyph.x = 0;
+    glyph.y = 0;
+    if glyph.width > 0 && glyph.height > 0 {
+      if shelf_x + glyph.width + 1 > 2048 {
+        shelf_x = 1;
+        shelf_y = shelf_y + shelf_height + 1;
+        shelf_height = 0;
+      }
+      if shelf_y + glyph.height + 1 > 2048 {
+        error = "glyph atlas is full";
+        return 0 as *AtlasGlyph;
+      }
+      glyph.x = shelf_x;
+      glyph.y = shelf_y;
+      shelf_x = shelf_x + glyph.width + 1;
+      if glyph.height > shelf_height {
+        shelf_height = glyph.height;
+      }
+      let row: u32 = 0;
+      while row < glyph.height {
+        let pitch = bitmap.pitch;
+        let source_row: usize = 0;
+        if pitch >= 0 {
+          source_row = (row as usize) * (pitch as usize);
+        } else {
+          source_row = ((glyph.height - 1 - row) as usize) * ((-pitch) as usize);
+        }
+        let column: u32 = 0;
+        while column < glyph.width {
+          let target = (((glyph.y + row) * 2048 + glyph.x + column) * 4) as usize;
+          if bitmap.pixel_mode == 7 {
+            let source = source_row + (column as usize) * 4;
+            store(atlas, target, load(bitmap.buffer, source + 2));
+            store(atlas, target + 1, load(bitmap.buffer, source + 1));
+            store(atlas, target + 2, load(bitmap.buffer, source));
+            store(atlas, target + 3, load(bitmap.buffer, source + 3));
+          } else if bitmap.pixel_mode == 2 {
+            store(atlas, target, 255);
+            store(atlas, target + 1, 255);
+            store(atlas, target + 2, 255);
+            store(atlas, target + 3, load(bitmap.buffer, source_row + column as usize));
+          }
+          column = column + 1;
+        }
+        row = row + 1;
+      }
+    }
+    if !glyphs.push(glyph) {
+      return 0 as *AtlasGlyph;
+    }
+    return glyphs.at(glyphs.length() - 1);
+  }
+  fn add_vertex(x: f32, y: f32, u: f32, v: f32) -> bool {
+    return vertices_data.push(2.0 * x / screen_width as f32 - 1.0) && vertices_data.push(1.0 - 2.0 * y / screen_height as f32) && vertices_data.push(u) && vertices_data.push(v);
+  }
+  fn add_quad(x: f32, y: f32, glyph: *AtlasGlyph) -> bool {
+    if glyph.width == 0 || glyph.height == 0 {
+      return true;
+    }
+    let right = x + glyph.width as f32;
+    let bottom = y + glyph.height as f32;
+    let u0 = glyph.x as f32 / 2048.0;
+    let v0 = glyph.y as f32 / 2048.0;
+    let u1 = (glyph.x + glyph.width) as f32 / 2048.0;
+    let v1 = (glyph.y + glyph.height) as f32 / 2048.0;
+    return add_vertex(x, y, u0, v0) && add_vertex(right, y, u1, v0) && add_vertex(right, bottom, u1, v1) && add_vertex(x, y, u0, v0) && add_vertex(right, bottom, u1, v1) && add_vertex(x, bottom, u0, v1);
+  }
+  fn shape_segment(segment   : *Segment,
+                   direction : i32,
+                   line_index: u32,
+                   baseline  : f32,
+                   pen       : *f32) -> bool {
+    let buffer = hb_buffer_create();
+    if buffer as usize == 0 {
+      return false;
+    }
+    hb_buffer_add_utf16(buffer, text, text_length, segment.start as u32, segment.end - segment.start);
+    hb_buffer_set_direction(buffer, direction);
+    hb_buffer_guess_segment_properties(buffer);
+    hb_shape(faces.at(segment.face as usize).hb_font, buffer, 0 as *u8, 0);
+    let count: u32 = 0;
+    let infos = hb_buffer_glyph_infos(buffer, &count);
+    let positions = hb_buffer_glyph_positions(buffer, &count);
+    let index: u32 = 0;
+    while index < count {
+      let info = (infos as usize + (index as usize) * 20) as *HbGlyphInfo;
+      let position = (positions as usize + (index as usize) * 20) as *HbGlyphPosition;
+      let glyph = rasterize(segment.face, info.codepoint);
+      if glyph as usize == 0 {
+        hb_buffer_destroy(buffer);
+        return false;
+      }
+      let glyph_x = *pen + position.x_offset as f32 / 64.0 + glyph.left as f32;
+      let glyph_y = baseline - position.y_offset as f32 / 64.0 - glyph.top as f32;
+      if !add_quad(glyph_x, glyph_y, glyph) {
+        hb_buffer_destroy(buffer);
+        return false;
+      }
+      let cluster_at = info.cluster as i32;
+      if cluster_at < 0 {
+        cluster_at = 0;
+      }
+      if cluster_at > text_length {
+        cluster_at = text_length;
+      }
+      let next = segment.end;
+      let other: u32 = 0;
+      while other < count {
+        let candidate = (infos as usize + (other as usize) * 20) as *HbGlyphInfo;
+        if (candidate.cluster as i32) > cluster_at && (candidate.cluster as i32) < next {
+          next = candidate.cluster as i32;
+        }
+        other = other + 1;
+      }
+      let advance = position.x_advance as f32 / 64.0;
+      let cluster = Cluster();
+      cluster.byte_start = offset(cluster_at);
+      cluster.byte_end = offset(next);
+      cluster.left = *pen;
+      cluster.top = baseline - ascent;
+      cluster.right = *pen + advance;
+      cluster.bottom = cluster.top + line_height;
+      cluster.line = line_index;
+      cluster.face = segment.face;
+      if !clusters.push(cluster) {
+        hb_buffer_destroy(buffer);
+        return false;
+      }
+      * pen = *pen + advance;
+      index = index + 1;
+    }
+    hb_buffer_destroy(buffer);
+    return true;
+  }
+  fn shape_line(line: *LineRange, line_index: u32) -> bool {
+    if line.end <= line.start {
+      return true;
+    }
+    let status: i32 = 0;
+    let bidi = bidi_open(line.end - line.start, 0, &status);
+    if status > 0 || bidi as usize == 0 {
+      error = "ICU bidirectional layout failed";
+      return false;
+    }
+    let start_text = (text as usize + (line.start as usize) * 2) as *u16;
+    bidi_set_para(bidi, start_text, line.end - line.start, 254, 0 as *u8, &status);
+    let run_count = bidi_run_count(bidi, &status);
+    if status > 0 {
+      bidi_close(bidi);
+      error = "ICU bidirectional layout failed";
+      return false;
+    }
+    let pen = origin_x;
+    let baseline = origin_y + ascent + line_index as f32 * line_height;
+    let run: i32 = 0;
+    while run < run_count {
+      let logical: i32 = 0;
+      let length: i32 = 0;
+      let bidi_direction = bidi_visual_run(bidi, run, &logical, &length);
+      if !segment_by_face(line.start + logical, line.start + logical + length) {
+        bidi_close(bidi);
+        error = "font fallback segmentation failed";
+        return false;
+      }
+      let part: usize = 0;
+      while part < segments.length() {
+        let index = part;
+        if bidi_direction == 1 {
+          index = segments.length() - 1 - part;
+        }
+        let direction: i32 = 4;
+        if bidi_direction == 1 {
+          direction = 5;
+        }
+        if !shape_segment(segments.at(index), direction, line_index, baseline, &pen) {
+          bidi_close(bidi);
+          if *(error as *u8) == 0 {
+            error = "text shaping failed";
+          }
+          return false;
+        }
+        part = part + 1;
+      }
+      run = run + 1;
+    }
+    bidi_close(bidi);
+    if pen - origin_x > measured_width {
+      measured_width = pen - origin_x;
+    }
+    return true;
+  }
+  pub fn valid() -> bool {
+    return ready;
+  }
+  pub fn last_error() -> *c.char {
+    return error;
+  }
+  pub fn pixels() -> *u8 {
+    return atlas;
+  }
+  pub fn vertices() -> *f32 {
+    return vertices_data.pointer();
+  }
+  pub fn vertex_count() -> u32 {
+    return(vertices_data.length() / 4) as u32;
+  }
+  pub fn cluster_count() -> u32 {
+    return clusters.length() as u32;
+  }
+  pub fn cluster_at(index: u32) -> *Cluster {
+    return clusters.at(index as usize);
+  }
+  pub fn line_count() -> u32 {
+    return lines.length() as u32;
+  }
+  pub fn glyph_count() -> u32 {
+    return glyphs.length() as u32;
+  }
+  pub fn atlas_width() -> u32 {
+    return 2048;
+  }
+  pub fn atlas_height() -> u32 {
+    return 2048;
+  }
+  pub fn text_width() -> f32 {
+    return measured_width;
+  }
+  pub fn text_height() -> f32 {
+    return lines.length() as f32 * line_height;
+  }
+}
+
+pub fn pixels_from_points(points: f32, dpi: f32) -> f32 {
+  return points * dpi / 72.0;
+}

@@ -1,8 +1,8 @@
 module cfg.windows;
 
-@cfg(os="linux", arch="x86_64") import missing.linux_module;
+@cfg(arch.X86_64, os.Linux) import missing.linux_module;
 
-@cfg(os="windows", arch="x86_64")
+@cfg(arch.X86_64, os.Windows)
 fn selected() -> i32 {
   return 42;
 }

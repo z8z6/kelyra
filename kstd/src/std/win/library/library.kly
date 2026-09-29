@@ -1,13 +1,13 @@
-@cfg(os="windows", arch="x86_64") module std.win.library;
+@cfg(os=os.Windows, arch=arch.X86_64) module std.win.library;
 
 @extern("LoadLibraryA", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn load(name: *c.char) -> *u8;
 
 @extern("GetProcAddress", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn symbol(library_handle: *u8, name: *c.char) -> *u8;
 
 @extern("FreeLibrary", "kernel32")
-@callconv(CallingConvention.System)
+@callconv(cc.System)
 pub fn close(library_handle: *u8) -> i32;

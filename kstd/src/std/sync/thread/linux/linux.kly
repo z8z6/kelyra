@@ -1,4 +1,4 @@
-@cfg(os="linux", arch="x86_64") module std.sync.thread.linux;
+@cfg(os=os.Linux, arch=arch.X86_64) module std.sync.thread.linux;
 
 // Linux x86-64 gettid(2). A thread ID is not a process ID.
 pub fn current_id() -> i64 {

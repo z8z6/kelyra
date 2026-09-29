@@ -1,0 +1,50 @@
+module std.graphics.font.buffer;
+
+import std.alloc;
+import std.memory;
+
+// Internal growable storage for plain C-layout font records.
+pub class Buffer<T> {
+  data: *T;
+  count: usize;
+  reserved: usize;
+
+  pub init() {
+    data = 0 as *T;
+    count = 0;
+    reserved = 0;
+  }
+
+  deinit() {
+    std.alloc.release(data as *u8);
+  }
+
+  pub fn length() -> usize { return count; }
+  pub fn pointer() -> *T { return data; }
+  pub fn clear() -> void { count = 0; }
+
+  pub fn at(index: usize) -> *T {
+    if index >= count { return 0 as *T; }
+    let width = std.memory.size_of<T>(0 as *T);
+    return (data as usize + index * width) as *T;
+  }
+
+  pub fn push(value: T) -> bool {
+    let width = std.memory.size_of<T>(0 as *T);
+    if count == reserved {
+      let next: usize = 16;
+      if reserved != 0 { next = reserved * 2; }
+      if next < reserved || width == 0 || next > 268435456 / width {
+        return false;
+      }
+      let grown = std.alloc.reallocate(data as *u8, next * width);
+      if std.alloc.is_null(grown) { return false; }
+      data = grown as *T;
+      reserved = next;
+    }
+    let slot = (data as usize + count * width) as *T;
+    *slot = value;
+    count = count + 1;
+    return true;
+  }
+}

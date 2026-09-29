@@ -5,14 +5,14 @@ on:
     branches: [main]
     paths:
       - 'doc/**'
-      - 'kide/syntaxes/kelyra.tmLanguage.json'
+      - 'kide/vscode/syntaxes/kelyra.tmLanguage.json'
       - 'compiler/tests/cli/**'
       - 'kstd/examples/**'
       - '.github/workflows/pages.yml'
   pull_request:
     paths:
       - 'doc/**'
-      - 'kide/syntaxes/kelyra.tmLanguage.json'
+      - 'kide/vscode/syntaxes/kelyra.tmLanguage.json'
       - 'compiler/tests/cli/**'
       - 'kstd/examples/**'
       - '.github/workflows/pages.yml'

@@ -15,6 +15,12 @@ def Kelyra_ShaderRefType : Kelyra_Type<"ShaderRef", "shader_ref"> {
   let assemblyFormat = "`<` $valueType `>`";
 }
 
+def Kelyra_ShaderResourceType : Kelyra_Type<"ShaderResource", "shader_resource"> {
+  let summary = "Opaque shader resource with backend-neutral kind";
+  let parameters = (ins "::mlir::StringAttr":$kind);
+  let assemblyFormat = "`<` $kind `>`";
+}
+
 def Kelyra_ShaderRecordOp : Op<Kelyra_Dialect, "shader.record", [SymbolName]> {
   let summary = "Named shader data record and interface decorations";
   let arguments = (ins SymbolNameAttr:$sym_name, ArrayAttr:$fields,

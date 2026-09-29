@@ -7,11 +7,43 @@
 #include "llvm/TargetParser/Triple.h"
 
 #include <algorithm>
+#include <optional>
 #include <sstream>
+#include <string_view>
 
 using namespace kelyra;
 
 namespace {
+std::string CfgEnumMember(const lex::Node &Value) {
+  using K = lex::TokenKind;
+  if (Value.kind == K::ast_name)
+    return Value.text;
+  if (Value.kind != K::ast_member || Value.children.size() != 1)
+    return {};
+  auto Owner = CfgEnumMember(*Value.children.front());
+  return Owner.empty() ? std::string{} : Owner + "." + Value.text;
+}
+
+std::optional<std::string_view> CfgTargetValue(std::string_view Owner,
+                                                std::string_view Variant) {
+  if (Variant == "Any")
+    return "";
+  if (Owner == "os") {
+    if (Variant == "Windows")
+      return "windows";
+    if (Variant == "Linux")
+      return "linux";
+    if (Variant == "MacOS")
+      return "macos";
+  } else if (Owner == "arch") {
+    if (Variant == "X86_64")
+      return "x86_64";
+    if (Variant == "AArch64")
+      return "aarch64";
+  }
+  return std::nullopt;
+}
+
 bool ApplyTargetConditions(lex::Node &Root, const std::string &Path,
                            const std::string &TargetTriple,
                            bool &ModuleEnabled) {
@@ -45,6 +77,7 @@ bool ApplyTargetConditions(lex::Node &Root, const std::string &Path,
                       }
                       bool SeenOS = false;
                       bool SeenArch = false;
+                      bool Constrained = false;
                       for (const auto &Child : Part->children) {
                         const auto &Argument = *Child;
                         if (Argument.kind != K::ast_annotation_argument ||
@@ -53,22 +86,40 @@ bool ApplyTargetConditions(lex::Node &Root, const std::string &Path,
                           continue;
                         }
                         const auto &Value = *Argument.children.front();
-                        const bool IsOS = Argument.text == "os";
-                        const bool IsArch = Argument.text == "arch";
-                        if (Value.kind != K::ast_literal ||
-                            Value.text.size() < 2 ||
-                            Value.text.front() != '"' ||
-                            Value.text.back() != '"' || (!IsOS && !IsArch) ||
-                            (IsOS && SeenOS) || (IsArch && SeenArch)) {
+                        auto Member = CfgEnumMember(Value);
+                        if (Member.starts_with("std.annotation."))
+                          Member.erase(0, sizeof("std.annotation.") - 1);
+                        const auto Separator = Member.rfind('.');
+                        const auto Owner = Separator == std::string::npos
+                                               ? std::string{}
+                                               : Member.substr(0, Separator);
+                        const auto Variant = Separator == std::string::npos
+                                                 ? std::string{}
+                                                 : Member.substr(Separator + 1);
+                        const bool IsOS = Argument.text == "os" ||
+                                          (Argument.text.empty() && Owner == "os");
+                        const bool IsArch = Argument.text == "arch" ||
+                                            (Argument.text.empty() && Owner == "arch");
+                        if ((!IsOS && !IsArch) || (IsOS && SeenOS) ||
+                            (IsArch && SeenArch) ||
+                            Owner != (IsOS ? "os" : "arch")) {
                           Valid = false;
                           continue;
                         }
                         SeenOS |= IsOS;
                         SeenArch |= IsArch;
-                        const auto Wanted =
-                            Value.text.substr(1, Value.text.size() - 2);
-                        Enabled &= Wanted == (IsOS ? OS : Arch);
+                        const auto Wanted = CfgTargetValue(Owner, Variant);
+                        if (!Wanted) {
+                          Valid = false;
+                          continue;
+                        }
+                        if (!Wanted->empty()) {
+                          Constrained = true;
+                          Enabled &= *Wanted == (IsOS ? OS : Arch);
+                        }
                       }
+                      if (!Constrained)
+                        Valid = false;
                       return true;
                     }),
                 Parts.end());
