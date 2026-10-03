@@ -81,10 +81,10 @@ pub class Symbol {
   pub name: StringSlice;
 
   pub fn is_public() -> bool {
-    return __read_public(id);
+    return std.meta.__read_public(id);
   }
   pub fn has_annotation(value: Annotation) -> bool {
-    return __has_annotation(id, value.id);
+    return std.meta.__has_annotation(id, value.id);
   }
 }
 

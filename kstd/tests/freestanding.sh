@@ -10,7 +10,7 @@ trap 'rm -f "$temporary/roundtrip.txt" "$temporary/program" "$temporary/stdout";
 cd "$root"
 "$kelp" build
 "$compiler" --emit-exe --runtime=freestanding \
-  --module-path="$root/src" --external-path="$root/src" \
+  --module-search-path="$root/src" --external-path="$root/src" \
   --link-input="$root/.kelp/build/kstd.o" \
   -o "$temporary/program" "$root/examples/freestanding_example.kly"
 cd "$temporary"

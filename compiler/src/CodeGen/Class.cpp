@@ -5,22 +5,87 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
+#include <algorithm>
+#include <bit>
+#include <cstdint>
+
 using namespace kelyra;
 
-mlir::Value codegen::IRGen::FieldAddress(const sema::ClassInfo &Class,
-                                         mlir::Value Address, std::size_t Index,
-                                         mlir::Location Loc) {
+void codegen::IRGen::EmitClass(const sema::ClassInfo &Class, bool DeclarationOnly,
+                               mlir::ModuleOp Output) {
+  using K = lex::NodeKind;
+  for (const auto &Field : Class.StaticFields) {
+    Builder.setInsertionPointToEnd(Output.getBody());
+    auto Value = Field.Value;
+    std::uint64_t Count = 1;
+    while (Value.IsArray()) {
+      Count *= Value.Modifiers.front().Length;
+      Value = Value.Indexed();
+    }
+    const auto Bytes = Count * (Analysis.GetBitWidth(Value) + 7) / 8;
+    const auto Alignment =
+        Value.IsClass() ? Analysis.GetClass(Value)->Alignment : Analysis.GetAlignment(Value);
+    const auto Linkage = Class.Node->GenericInstance ? mlir::LLVM::Linkage::LinkonceODR
+                         : DeclarationOnly           ? mlir::LLVM::Linkage::External
+                         : Field.Public              ? mlir::LLVM::Linkage::External
+                                                     : mlir::LLVM::Linkage::Private;
+    mlir::LLVM::GlobalOp::create(Builder,
+                                 GetLocation(Field.Node->Loc),
+                                 mlir::LLVM::LLVMArrayType::get(Builder.getI8Type(), Bytes),
+                                 false,
+                                 Linkage,
+                                 Field.Symbol,
+                                 DeclarationOnly ? mlir::Attribute()
+                                                 : Builder.getStringAttr(std::string(Bytes, '\0')),
+                                 Alignment);
+  }
+  for (const auto &Member : Class.Node->children)
+    if (Member->kind == K::ast_function || Member->kind == K::ast_constructor ||
+        Member->kind == K::ast_destructor) {
+      if (Analysis.IsMetaDeclaration(*Member))
+        continue;
+      if (std::any_of(Member->children.begin(), Member->children.end(), [](const auto &Part) {
+            return Part->kind == K::ast_generic_pack;
+          }))
+        continue;
+      Builder.setInsertionPointToEnd(Output.getBody());
+      EmitFunction(*Member, &Class, DeclarationOnly);
+    }
+  if (!Class.IsInterface && !Class.Constructor) {
+    Builder.setInsertionPointToEnd(Output.getBody());
+    if (DeclarationOnly)
+      EmitDefaultConstructorDeclaration(Class);
+    else
+      EmitDefaultConstructor(Class);
+  }
+  if (!Class.IsInterface && !Class.Destructor) {
+    Builder.setInsertionPointToEnd(Output.getBody());
+    if (DeclarationOnly)
+      EmitDefaultDestructorDeclaration(Class);
+    else
+      EmitDefaultDestructor(Class);
+  }
+  if (!Class.IsInterface && !Class.Copy) {
+    Builder.setInsertionPointToEnd(Output.getBody());
+    EmitDefaultTransfer(Class, false, DeclarationOnly);
+  }
+  if (!Class.IsInterface && !Class.Move) {
+    Builder.setInsertionPointToEnd(Output.getBody());
+    EmitDefaultTransfer(Class, true, DeclarationOnly);
+  }
+}
+
+mlir::Value codegen::IRGen::FieldAddress(const sema::ClassInfo &Class, mlir::Value Address,
+                                         std::size_t Index, mlir::Location Loc) {
   sema::Type Type{sema::BuiltinType::Class, {}};
   Type.ClassName = Class.QualifiedName;
   llvm::SmallVector<mlir::LLVM::GEPArg> Indices{
       0, static_cast<int32_t>(Class.Fields[Index].LayoutIndex)};
-  return mlir::LLVM::GEPOp::create(Builder, Loc,
-                                   mlir::LLVM::LLVMPointerType::get(&Context),
-                                   GetType(Type), Address, Indices);
+  return mlir::LLVM::GEPOp::create(
+      Builder, Loc, mlir::LLVM::LLVMPointerType::get(&Context), GetType(Type), Address, Indices);
 }
 
-void codegen::IRGen::EmitConstruction(const lex::Node &Expression,
-                                      mlir::Value Address) {
+void codegen::IRGen::EmitConstruction(const lex::Node &Expression, mlir::Value Address) {
   if (const auto *Constructor = Analysis.GetInlineConstructor(Expression)) {
     const auto *Class = Analysis.GetConstructorCall(Expression);
     if (!Class)
@@ -35,11 +100,10 @@ void codegen::IRGen::EmitConstruction(const lex::Node &Expression,
         Storage = EmitClassSourceAddress(Argument).first;
       } else {
         Storage = CreateAlloca(Type, GetLocation(Argument.Loc));
-        mlir::LLVM::StoreOp::create(Builder, GetLocation(Argument.Loc),
-                                    EmitExpression(Argument), Storage);
+        mlir::LLVM::StoreOp::create(
+            Builder, GetLocation(Argument.Loc), EmitExpression(Argument), Storage);
       }
-      Scopes.back().emplace("$forward" + std::to_string(I - 1),
-                            Variable{Type, Storage, {}});
+      Scopes.back().emplace("$forward" + std::to_string(I - 1), Variable{Type, Storage, {}});
     }
     sema::Type Receiver{sema::BuiltinType::Class, {}};
     Receiver.ClassName = Class->QualifiedName;
@@ -51,7 +115,7 @@ void codegen::IRGen::EmitConstruction(const lex::Node &Expression,
     CurrentClass = Class;
     InTransferConstructor = true;
     for (const auto &Child : Constructor->children)
-      if (Child->kind == lex::TokenKind::ast_block) {
+      if (Child->kind == lex::NodeKind::ast_block) {
         InlineConstructorBlock = Child.get();
         if (Class->UserFieldCount == 0)
           EmitVirtualSlots(*Class, Address, GetLocation(Expression.Loc));
@@ -70,27 +134,26 @@ void codegen::IRGen::EmitConstruction(const lex::Node &Expression,
     Arguments.push_back(Analysis.GetType(*Expression.children[I]).IsClass()
                             ? EmitClassArgument(*Expression.children[I])
                             : EmitExpression(*Expression.children[I]));
-  mlir::func::CallOp::create(Builder, GetLocation(Expression.Loc),
-                             Analysis.GetCallee(Expression), mlir::TypeRange{},
+  mlir::func::CallOp::create(Builder,
+                             GetLocation(Expression.Loc),
+                             Analysis.GetCallee(Expression),
+                             mlir::TypeRange{},
                              Arguments);
 }
 
-std::pair<mlir::Value, bool>
-codegen::IRGen::EmitClassSourceAddress(const lex::Node &Expression) {
-  if (Expression.kind == lex::TokenKind::ast_group &&
-      Expression.children.size() == 1)
+std::pair<mlir::Value, bool> codegen::IRGen::EmitClassSourceAddress(const lex::Node &Expression) {
+  if (Expression.kind == lex::NodeKind::ast_group && Expression.children.size() == 1)
     return EmitClassSourceAddress(*Expression.children.front());
   if (!Analysis.IsClassTemporary(Expression))
     return {EmitAddress(Expression), false};
   if (Analysis.IsForwardTemporary(Expression))
     return {EmitAddress(Expression), true};
-  auto Address =
-      CreateAlloca(Analysis.GetType(Expression), GetLocation(Expression.Loc));
+  auto Address = CreateAlloca(Analysis.GetType(Expression), GetLocation(Expression.Loc));
   if (Analysis.GetConstructorCall(Expression))
     EmitConstruction(Expression, Address);
   else
-    mlir::LLVM::StoreOp::create(Builder, GetLocation(Expression.Loc),
-                                EmitExpression(Expression), Address);
+    mlir::LLVM::StoreOp::create(
+        Builder, GetLocation(Expression.Loc), EmitExpression(Expression), Address);
   return {Address, true};
 }
 
@@ -101,8 +164,8 @@ mlir::Value codegen::IRGen::EmitClassArgument(const lex::Node &Expression) {
   auto Destination = CreateAlloca(Analysis.GetType(Expression), Loc);
   EmitTransfer(Class, Destination, Source, Temporary, Loc);
   if (Temporary)
-    mlir::func::CallOp::create(Builder, Loc, Class.DestructorSymbol,
-                               mlir::TypeRange{}, mlir::ValueRange{Source});
+    mlir::func::CallOp::create(
+        Builder, Loc, Class.DestructorSymbol, mlir::TypeRange{}, mlir::ValueRange{Source});
   return mlir::LLVM::LoadOp::create(
       Builder, Loc, GetType(Analysis.GetType(Expression)), Destination);
 }
@@ -110,13 +173,14 @@ mlir::Value codegen::IRGen::EmitClassArgument(const lex::Node &Expression) {
 void codegen::IRGen::EmitCleanups(std::size_t KeepDepth, mlir::Location Loc) {
   for (auto I = Cleanups.size(); I > KeepDepth; --I)
     for (auto It = Cleanups[I - 1].rbegin(); It != Cleanups[I - 1].rend(); ++It)
-      mlir::func::CallOp::create(Builder, Loc, It->Class->DestructorSymbol,
+      mlir::func::CallOp::create(Builder,
+                                 Loc,
+                                 It->Class->DestructorSymbol,
                                  mlir::TypeRange{},
                                  mlir::ValueRange{It->Address});
 }
 
-void codegen::IRGen::EmitFieldDestructors(const sema::ClassInfo &Class,
-                                          mlir::Value Address,
+void codegen::IRGen::EmitFieldDestructors(const sema::ClassInfo &Class, mlir::Value Address,
                                           mlir::Location Loc) {
   if (Class.RawStorage)
     return;
@@ -126,41 +190,42 @@ void codegen::IRGen::EmitFieldDestructors(const sema::ClassInfo &Class,
       continue;
     const auto *Child = Analysis.GetClass(Field.Value);
     auto ChildAddress = FieldAddress(Class, Address, I - 1, Loc);
-    mlir::func::CallOp::create(Builder, Loc, Child->DestructorSymbol,
-                               mlir::TypeRange{},
-                               mlir::ValueRange{ChildAddress});
+    mlir::func::CallOp::create(
+        Builder, Loc, Child->DestructorSymbol, mlir::TypeRange{}, mlir::ValueRange{ChildAddress});
   }
 }
 
-void codegen::IRGen::EmitVirtualSlots(const sema::ClassInfo &Class,
-                                      mlir::Value Address, mlir::Location Loc) {
+void codegen::IRGen::EmitVirtualSlots(const sema::ClassInfo &Class, mlir::Value Address,
+                                      mlir::Location Loc) {
   if (!Class.BaseName.empty())
     EmitVirtualSlots(*Analysis.GetClass(Class.BaseName), Address, Loc);
-  const auto SetSlot = [&](const sema::ClassInfo &Owner, std::size_t Index,
-                           const lex::Node &Method) {
-    const auto &Signature = Owner.Fields[Index].Value;
-    llvm::SmallVector<mlir::Type> Parameters;
-    llvm::SmallVector<mlir::Type> Results;
-    for (const auto &Parameter : Signature.Parameters)
-      Parameters.push_back(GetType(Parameter));
-    if (!Signature.Results.front().IsVoid())
-      Results.push_back(GetType(Signature.Results.front()));
-    auto Value = mlir::func::ConstantOp::create(
-        Builder, Loc, Builder.getFunctionType(Parameters, Results),
-        mlir::FlatSymbolRefAttr::get(&Context, Analysis.GetSymbol(Method)));
-    auto Pointer = mlir::UnrealizedConversionCastOp::create(
-        Builder, Loc, GetType(Signature), Value.getResult());
-    mlir::LLVM::StoreOp::create(Builder, Loc, Pointer.getResult(0),
-                                FieldAddress(Owner, Address, Index, Loc));
-  };
+  const auto SetSlot =
+      [&](const sema::ClassInfo &Owner, std::size_t Index, const lex::Node &Method) {
+        const auto &Signature = Owner.Fields[Index].Value;
+        llvm::SmallVector<mlir::Type> Parameters;
+        llvm::SmallVector<mlir::Type> Results;
+        for (const auto &Parameter : Signature.Parameters)
+          Parameters.push_back(GetType(Parameter));
+        if (!Signature.Results.front().IsVoid())
+          Results.push_back(GetType(Signature.Results.front()));
+        auto Value = mlir::func::ConstantOp::create(
+            Builder,
+            Loc,
+            Builder.getFunctionType(Parameters, Results),
+            mlir::FlatSymbolRefAttr::get(&Context, Analysis.GetSymbol(Method)));
+        auto Pointer = mlir::UnrealizedConversionCastOp::create(
+            Builder, Loc, GetType(Signature), Value.getResult());
+        mlir::LLVM::StoreOp::create(
+            Builder, Loc, Pointer.getResult(0), FieldAddress(Owner, Address, Index, Loc));
+      };
   for (const auto &[Name, Index] : Class.VirtualSlots)
     for (const auto &Member : Class.Node->children)
-      if (Member->kind == lex::TokenKind::ast_function &&
+      if (Member->kind == lex::NodeKind::ast_function &&
           Analysis.GetFunctionSignature(*Member) == Name)
         SetSlot(Class, Index, *Member);
   for (const auto &[Name, Slot] : Class.OverrideSlots)
     for (const auto &Member : Class.Node->children)
-      if (Member->kind == lex::TokenKind::ast_function &&
+      if (Member->kind == lex::NodeKind::ast_function &&
           Analysis.GetFunctionSignature(*Member) == Name)
         SetSlot(*Analysis.GetClass(Slot.first), Slot.second, *Member);
 }
@@ -168,9 +233,8 @@ void codegen::IRGen::EmitVirtualSlots(const sema::ClassInfo &Class,
 void codegen::IRGen::EmitDefaultConstructor(const sema::ClassInfo &Class) {
   const auto Loc = GetLocation(Class.Node->Loc);
   auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
-  auto Function =
-      mlir::func::FuncOp::create(Builder, Loc, Class.ConstructorSymbol,
-                                 Builder.getFunctionType({Pointer}, {}));
+  auto Function = mlir::func::FuncOp::create(
+      Builder, Loc, Class.ConstructorSymbol, Builder.getFunctionType({Pointer}, {}));
   if (Class.Node->GenericInstance)
     Function->setAttr("kelyra.generic", Builder.getUnitAttr());
   if (!Class.Public)
@@ -186,11 +250,10 @@ void codegen::IRGen::EmitDefaultConstructor(const sema::ClassInfo &Class) {
     const auto Address = FieldAddress(Class, Entry->getArgument(0), I, Loc);
     if (Field.Value.IsClass()) {
       const auto *Child = Analysis.GetClass(Field.Value);
-      mlir::func::CallOp::create(Builder, Loc, Child->ConstructorSymbol,
-                                 mlir::TypeRange{}, mlir::ValueRange{Address});
+      mlir::func::CallOp::create(
+          Builder, Loc, Child->ConstructorSymbol, mlir::TypeRange{}, mlir::ValueRange{Address});
     } else {
-      auto Zero = mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Field.Value))
-                      .getRes();
+      auto Zero = mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Field.Value)).getRes();
       mlir::LLVM::StoreOp::create(Builder, Loc, Zero, Address);
     }
   }
@@ -198,21 +261,20 @@ void codegen::IRGen::EmitDefaultConstructor(const sema::ClassInfo &Class) {
   mlir::func::ReturnOp::create(Builder, Loc);
 }
 
-void codegen::IRGen::EmitDefaultConstructorDeclaration(
-    const sema::ClassInfo &Class) {
+void codegen::IRGen::EmitDefaultConstructorDeclaration(const sema::ClassInfo &Class) {
   auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
-  auto Function = mlir::func::FuncOp::create(
-      Builder, GetLocation(Class.Node->Loc), Class.ConstructorSymbol,
-      Builder.getFunctionType({Pointer}, {}));
+  auto Function = mlir::func::FuncOp::create(Builder,
+                                             GetLocation(Class.Node->Loc),
+                                             Class.ConstructorSymbol,
+                                             Builder.getFunctionType({Pointer}, {}));
   Function.setPrivate();
 }
 
 void codegen::IRGen::EmitDefaultDestructor(const sema::ClassInfo &Class) {
   const auto Loc = GetLocation(Class.Node->Loc);
   auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
-  auto Function =
-      mlir::func::FuncOp::create(Builder, Loc, Class.DestructorSymbol,
-                                 Builder.getFunctionType({Pointer}, {}));
+  auto Function = mlir::func::FuncOp::create(
+      Builder, Loc, Class.DestructorSymbol, Builder.getFunctionType({Pointer}, {}));
   if (Class.Node->GenericInstance)
     Function->setAttr("kelyra.generic", Builder.getUnitAttr());
   Function.setPrivate();
@@ -223,30 +285,32 @@ void codegen::IRGen::EmitDefaultDestructor(const sema::ClassInfo &Class) {
   mlir::func::ReturnOp::create(Builder, Loc);
 }
 
-void codegen::IRGen::EmitDefaultDestructorDeclaration(
-    const sema::ClassInfo &Class) {
+void codegen::IRGen::EmitDefaultDestructorDeclaration(const sema::ClassInfo &Class) {
   auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
-  auto Function = mlir::func::FuncOp::create(
-      Builder, GetLocation(Class.Node->Loc), Class.DestructorSymbol,
-      Builder.getFunctionType({Pointer}, {}));
+  auto Function = mlir::func::FuncOp::create(Builder,
+                                             GetLocation(Class.Node->Loc),
+                                             Class.DestructorSymbol,
+                                             Builder.getFunctionType({Pointer}, {}));
   Function.setPrivate();
 }
 
-void codegen::IRGen::EmitTransfer(const sema::ClassInfo &Class,
-                                  mlir::Value Target, mlir::Value Source,
-                                  bool Move, mlir::Location Loc) {
-  mlir::func::CallOp::create(
-      Builder, Loc, Move ? Class.MoveSymbol : Class.CopySymbol,
-      mlir::TypeRange{}, mlir::ValueRange{Target, Source});
+void codegen::IRGen::EmitTransfer(const sema::ClassInfo &Class, mlir::Value Target,
+                                  mlir::Value Source, bool Move, mlir::Location Loc) {
+  mlir::func::CallOp::create(Builder,
+                             Loc,
+                             Move ? Class.MoveSymbol : Class.CopySymbol,
+                             mlir::TypeRange{},
+                             mlir::ValueRange{Target, Source});
 }
 
-void codegen::IRGen::EmitDefaultTransfer(const sema::ClassInfo &Class,
-                                         bool Move, bool DeclarationOnly) {
+void codegen::IRGen::EmitDefaultTransfer(const sema::ClassInfo &Class, bool Move,
+                                         bool DeclarationOnly) {
   const auto Loc = GetLocation(Class.Node->Loc);
   auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
-  auto Function = mlir::func::FuncOp::create(
-      Builder, Loc, Move ? Class.MoveSymbol : Class.CopySymbol,
-      Builder.getFunctionType({Pointer, Pointer}, {}));
+  auto Function = mlir::func::FuncOp::create(Builder,
+                                             Loc,
+                                             Move ? Class.MoveSymbol : Class.CopySymbol,
+                                             Builder.getFunctionType({Pointer, Pointer}, {}));
   if (Class.Node->GenericInstance)
     Function->setAttr("kelyra.generic", Builder.getUnitAttr());
   if (DeclarationOnly) {
@@ -268,12 +332,10 @@ void codegen::IRGen::EmitDefaultTransfer(const sema::ClassInfo &Class,
     if (Field.Value.IsClass()) {
       EmitTransfer(*Analysis.GetClass(Field.Value), Target, Source, Move, Loc);
     } else {
-      auto Value = mlir::LLVM::LoadOp::create(Builder, Loc,
-                                              GetType(Field.Value), Source);
+      auto Value = mlir::LLVM::LoadOp::create(Builder, Loc, GetType(Field.Value), Source);
       mlir::LLVM::StoreOp::create(Builder, Loc, Value, Target);
       if (Move) {
-        auto Zero =
-            mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Field.Value));
+        auto Zero = mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Field.Value));
         mlir::LLVM::StoreOp::create(Builder, Loc, Zero, Source);
       }
     }

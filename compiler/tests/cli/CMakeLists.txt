@@ -1,4 +1,8 @@
-add_executable(kelyra_cli_tests cli_test.cpp)
+file(GLOB_RECURSE KELYRA_CLI_TESTS_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
+)
+add_executable(kelyra_cli_tests ${KELYRA_CLI_TESTS_SOURCES})
 target_include_directories(kelyra_cli_tests SYSTEM PRIVATE
   "${KELYRA_LLVM_SOURCE_DIR}/llvm/include"
   "${KELYRA_LLVM_BINARY_DIR}/include"

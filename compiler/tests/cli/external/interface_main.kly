@@ -1,0 +1,4 @@
+import external.extra;
+
+@main
+pub fn main() -> i32 { return external.extra.answer(); }

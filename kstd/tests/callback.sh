@@ -6,6 +6,6 @@ compiler=${KELYRA:-$root/../build/bin/kelyra}
 output=$(mktemp)
 trap 'rm -f "$output"' EXIT HUP INT TERM
 
-"$compiler" --emit-exe --module-path="$root/src" -o "$output" \
+"$compiler" --emit-exe --module-search-path="$root/src" -o "$output" \
   "$root/examples/callback_example.kly"
 "$output"

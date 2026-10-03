@@ -25,6 +25,47 @@ try {
             if ($LASTEXITCODE -ne 0 -or $output -notmatch 'demo(\.exe)?$') {
                 throw "kelp output returned an unexpected path: $output"
             }
+            $compiler = Join-Path (Split-Path -Parent $Kelp) 'kelyra.exe'
+            if (Test-Path -LiteralPath $compiler) {
+                $compiler = $compiler.Replace('\', '/')
+                $manifest = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'kelp.toml'))
+                $manifest = $manifest.Replace('compiler = "kelyra"', "compiler = `"$compiler`"")
+                [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'kelp.toml'), $manifest)
+                $sourcePath = Join-Path (Get-Location) 'src/main.kly'
+                $originalSource = [System.IO.File]::ReadAllText($sourcePath)
+                $crossManifest = $manifest.Replace('[build]', "[build]`ntarget = `"x86_64-unknown-linux-gnu`"")
+                $crossManifest = $crossManifest.Replace('c-args = []', 'c-args = ["-DKELP_CHECK=1"]')
+                [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'kelp.toml'), $crossManifest)
+                [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'src/check.h'), '
+#ifndef KELP_CHECK
+#error missing C frontend options
+#endif
+#ifdef _WIN32
+#error wrong C frontend target
+#endif
+int kelp_check(void);
+')
+                [System.IO.File]::WriteAllText($sourcePath, '
+import c "check.h";
+@cfg(os.Linux)
+fn linux_value() -> i32 { return c.kelp_check(); }
+@main
+pub fn main() -> i32 { return linux_value(); }
+')
+                foreach ($action in @('check', 'test')) {
+                    & $Kelp $action
+                    if ($LASTEXITCODE -ne 0) { throw "kelp $action did not pass target and C frontend options" }
+                }
+                [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'kelp.toml'), $manifest)
+                [System.IO.File]::WriteAllText($sourcePath, $originalSource)
+                foreach ($action in @('check', 'build', 'test', 'run')) {
+                    & $Kelp $action
+                    if ($LASTEXITCODE -ne 0) { throw "kelp $action failed with the current compiler" }
+                }
+                if (-not (Test-Path -LiteralPath $output)) {
+                    throw 'kelp build did not produce the configured artifact'
+                }
+            }
         } finally {
             Pop-Location
         }

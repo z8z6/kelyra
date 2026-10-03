@@ -5,7 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(kelp src/main.cpp)
+file(GLOB_RECURSE KELP_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
+)
+add_executable(kelp ${KELP_SOURCES})
 set_target_properties(kelp PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 if(MSVC)

@@ -1,0 +1,7 @@
+import library;
+
+@main
+fn launch() -> i32 {
+  let box: Box<i32> = make<i32>(42);
+  return box.get();
+}

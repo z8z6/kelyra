@@ -11,7 +11,7 @@ cd "$root"
 "$kelp" build
 for example in option result reflect; do
   "$compiler" --emit-exe --runtime=freestanding \
-    --module-path="$root/src" --external-path="$root/src" \
+    --module-search-path="$root/src" --external-path="$root/src" \
     --link-input="$root/.kelp/build/kstd.o" \
     -o "$temporary/$example" "$root/examples/${example}_example.kly"
   "$temporary/$example"

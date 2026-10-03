@@ -1,18 +1,18 @@
 #include "../TestSource.h"
-#include "Lexer/Lexer.h"
-#include "Sema/Sema.h"
-#include "Sema/Type.h"
+#include "Front/Parser/Parser.h"
+#include "Front/Sema/Sema.h"
+#include "Front/Sema/Type.h"
 
 #include <algorithm>
 #include <array>
+#include <gtest/gtest.h>
 #include <set>
 #include <unordered_set>
-#include <gtest/gtest.h>
 
 using namespace kelyra;
 
 TEST(Sema, FunctionValues) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 fn increment(value: i32) -> i32 { return value + 1; }
 fn choose() -> fn(i32) -> i32 { return increment; }
 fn apply(callback: fn(i32) -> i32) -> i32 { return callback(1); }
@@ -31,14 +31,14 @@ fn use() -> i32 { let callback: fn(i32) -> i32 = choose(); return callback(4) + 
            "fn g(callback: fn(void)) {}",
        }) {
     SCOPED_TRACE(Source);
-    auto Invalid = lex::Lexer().parse(Source);
+    auto Invalid = lex::Parser().parse(Source);
     ASSERT_TRUE(Invalid.ok());
     EXPECT_FALSE(Analysis.Check(*Invalid.root));
   }
 }
 
 TEST(Sema, OverloadedFunctionsAndFunctionValues) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 fn select(value: i32) -> i32 { return value; }
 fn select(value: f32) -> f32 { return value; }
 fn use_integer(value: i32) -> i32 { return select(value); }
@@ -59,14 +59,14 @@ fn callback() -> fn(i32) -> i32 { return select; }
            "@extern(\"same\") fn f(value: f32);",
        }) {
     SCOPED_TRACE(Source);
-    auto Invalid = lex::Lexer().parse(Source);
+    auto Invalid = lex::Parser().parse(Source);
     ASSERT_TRUE(Invalid.ok());
     EXPECT_FALSE(Analysis.Check(*Invalid.root));
   }
 }
 
 TEST(Sema, OverloadedMethodsAndInterfaceMethods) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 @interface class Reader {
   pub fn read(value: i32) -> i32;
   pub fn read(value: f32) -> f32;
@@ -91,11 +91,11 @@ fn use(reader: *Reader, child: *Child, number: i32, fraction: f32) -> i32 {
 }
 
 TEST(Sema, OverloadedFunctionsAcrossImports) {
-  auto Alpha = lex::Lexer().parse(
-      "module alpha; pub fn choose(value: i32) -> i32 { return value; }");
-  auto Beta = lex::Lexer().parse(
-      "module beta; pub fn choose(value: f32) -> f32 { return value; }");
-  auto App = lex::Lexer().parse(R"(
+  auto Alpha =
+      lex::Parser().parse("module alpha; pub fn choose(value: i32) -> i32 { return value; }");
+  auto Beta =
+      lex::Parser().parse("module beta; pub fn choose(value: f32) -> f32 { return value; }");
+  auto App = lex::Parser().parse(R"(
 module app;
 import alpha;
 import beta;
@@ -110,13 +110,12 @@ fn callback() -> fn(i32) -> i32 { return choose; }
   ASSERT_TRUE(Beta.ok());
   ASSERT_TRUE(App.ok());
   sema::Sema Analysis;
-  EXPECT_TRUE(Analysis.CheckModules({{App.root.get(), true},
-                                     {Alpha.root.get(), false},
-                                     {Beta.root.get(), false}}));
+  EXPECT_TRUE(Analysis.CheckModules(
+      {{App.root.get(), true}, {Alpha.root.get(), false}, {Beta.root.get(), false}}));
 }
 
 TEST(Sema, AmbiguousOverloadListsCandidateSignatures) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 fn choose(value: i32) {}
 fn choose(value: i64) {}
 fn use() { choose(1); }
@@ -125,24 +124,21 @@ fn use() { choose(1); }
   sema::Sema Analysis;
   ASSERT_FALSE(Analysis.Check(*Parsed.root));
   const auto &Diagnostics = Analysis.GetDiagnostics();
-  const auto It = std::find_if(Diagnostics.begin(), Diagnostics.end(),
-                               [](const auto &Diagnostic) {
-                                 return Diagnostic.Kind ==
-                                        lex::DiagnosticKind::AmbiguousOverload;
-                               });
+  const auto It = std::find_if(Diagnostics.begin(), Diagnostics.end(), [](const auto &Diagnostic) {
+    return Diagnostic.Kind == lex::DiagnosticKind::AmbiguousOverload;
+  });
   ASSERT_NE(It, Diagnostics.end());
   EXPECT_NE(It->Detail.find("choose(i32)"), std::string::npos);
   EXPECT_NE(It->Detail.find("choose(i64)"), std::string::npos);
 }
 
 TEST(Sema, OverloadSymbolsDoNotDependOnDeclarationOrder) {
-  auto Single = lex::Lexer().parse(
-      "fn select(value: i32) -> i32 { return value; }");
-  auto First = lex::Lexer().parse(R"(
+  auto Single = lex::Parser().parse("fn select(value: i32) -> i32 { return value; }");
+  auto First = lex::Parser().parse(R"(
 fn select(value: i32) -> i32 { return value; }
 fn select(value: f32) -> f32 { return value; }
 )");
-  auto Reversed = lex::Lexer().parse(R"(
+  auto Reversed = lex::Parser().parse(R"(
 fn select(value: f32) -> f32 { return value; }
 fn select(value: i32) -> i32 { return value; }
 )");
@@ -155,52 +151,42 @@ fn select(value: i32) -> i32 { return value; }
   ASSERT_TRUE(Before.Check(*Single.root));
   ASSERT_TRUE(Left.Check(*First.root));
   ASSERT_TRUE(Right.Check(*Reversed.root));
-  EXPECT_EQ(Left.GetSymbol(*First.root->children[0]),
-            Right.GetSymbol(*Reversed.root->children[1]));
-  EXPECT_EQ(Left.GetSymbol(*First.root->children[1]),
-            Right.GetSymbol(*Reversed.root->children[0]));
-  EXPECT_NE(Left.GetSymbol(*First.root->children[0]),
-            Left.GetSymbol(*First.root->children[1]));
-  EXPECT_EQ(Before.GetSymbol(*Single.root->children[0]),
-            Left.GetSymbol(*First.root->children[0]));
+  EXPECT_EQ(Left.GetSymbol(*First.root->children[0]), Right.GetSymbol(*Reversed.root->children[1]));
+  EXPECT_EQ(Left.GetSymbol(*First.root->children[1]), Right.GetSymbol(*Reversed.root->children[0]));
+  EXPECT_NE(Left.GetSymbol(*First.root->children[0]), Left.GetSymbol(*First.root->children[1]));
+  EXPECT_EQ(Before.GetSymbol(*Single.root->children[0]), Left.GetSymbol(*First.root->children[0]));
 }
 
 TEST(Sema, FunctionValuesRespectImports) {
-  auto Library = lex::Lexer().parse(
-      "module library; pub fn visible() -> i32 { return 1; } "
-      "fn hidden() -> i32 { return 2; }");
+  auto Library = lex::Parser().parse("module library; pub fn visible() -> i32 { return 1; } "
+                                     "fn hidden() -> i32 { return 2; }");
   ASSERT_TRUE(Library.ok());
-  for (const auto Name :
-       {"library.visible", "visible", "library.hidden", "hidden"}) {
-    auto Main =
-        lex::Lexer().parse(std::string("module app; import library; fn "
-                                       "factory() -> fn() -> i32 { return ") +
-                           Name + "; }");
+  for (const auto Name : {"library.visible", "visible", "library.hidden", "hidden"}) {
+    auto Main = lex::Parser().parse(std::string("module app; import library; fn "
+                                                "factory() -> fn() -> i32 { return ") +
+                                    Name + "; }");
     ASSERT_TRUE(Main.ok());
     sema::Sema Analysis;
-    EXPECT_EQ(Analysis.CheckModules(
-                  {{Main.root.get(), true}, {Library.root.get(), false}}),
+    EXPECT_EQ(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}),
               std::string_view(Name).ends_with("visible"));
   }
 }
 
 TEST(Sema, ExternalModuleUsesDeclarationsOnly) {
-  auto Main = lex::Lexer().parse(
-      "module app; import library; fn main() -> i32 { return "
-      "library.answer(); }");
-  auto Library = lex::Lexer().parse(
-      "module library; pub fn answer() -> i32 { return missing(); }");
+  auto Main = lex::Parser().parse("module app; import library; fn main() -> i32 { return "
+                                  "library.answer(); }");
+  auto Library =
+      lex::Parser().parse("module library; pub fn answer() -> i32 { return missing(); }");
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(Library.ok());
   sema::Sema Analysis;
-  EXPECT_TRUE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Library.root.get(), false, true}}));
-  EXPECT_FALSE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Library.root.get(), false, false}}));
+  EXPECT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false, true}}));
+  EXPECT_FALSE(
+      Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false, false}}));
 }
 
 TEST(Sema, VoidAndMultipleReturns) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 fn explicit() -> void { return; }
 fn implicit() { explicit(); }
 fn pair() -> (i32, bool) { return 7, true; }
@@ -236,14 +222,14 @@ fn use() -> i32 { let (value, ok) = forward(); if ok { return value; } return 0;
            "fn f(x: (i32, bool)) {}",
        }) {
     SCOPED_TRACE(Source);
-    auto Invalid = lex::Lexer().parse(Source);
+    auto Invalid = lex::Parser().parse(Source);
     ASSERT_TRUE(Invalid.ok());
     EXPECT_FALSE(Analysis.Check(*Invalid.root));
   }
 }
 
 TEST(Sema, InterfaceDeclaration) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 @interface class Reader {
   const CAPACITY: i32 = 60 + 4;
   fn read(count: i32) -> i32;
@@ -255,8 +241,8 @@ fn capacity() -> i32 { return Reader.CAPACITY; }
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
   EXPECT_TRUE(Analysis.Check(*Parsed.root));
-  EXPECT_TRUE(Analysis.GetReflection().Find("std.annotation.interface",
-                                            sema::MetaKind::Annotation));
+  EXPECT_TRUE(
+      Analysis.GetReflection().Find("std.annotation.interface", sema::MetaKind::Annotation));
   for (const auto Source : {
            "@interface class Bad { value: i32; }",
            "@interface class Bad { init() {} }",
@@ -273,16 +259,15 @@ fn capacity() -> i32 { return Reader.CAPACITY; }
            "annotation interface();",
        }) {
     SCOPED_TRACE(Source);
-    auto Invalid = lex::Lexer().parse(Source);
+    auto Invalid = lex::Parser().parse(Source);
     ASSERT_TRUE(Invalid.ok());
     EXPECT_FALSE(Analysis.Check(*Invalid.root));
   }
-  EXPECT_FALSE(lex::Lexer().parse("class Bad { fn missing(); }").ok());
 }
 
 TEST(Sema, NamedEntrypointAnnotation) {
-  auto Parsed = lex::Lexer().parse("@main fn launch() -> i32 { return 42; } "
-                                   "fn main() -> i32 { return 1; }");
+  auto Parsed = lex::Parser().parse("@main fn launch() -> i32 { return 42; } "
+                                    "fn main() -> i32 { return 1; }");
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
   ASSERT_TRUE(Analysis.Check(*Parsed.root));
@@ -296,25 +281,23 @@ TEST(Sema, NamedEntrypointAnnotation) {
            "@main fn launch(value: i32) -> i32 { return value; }",
        }) {
     SCOPED_TRACE(Source);
-    auto Invalid = lex::Lexer().parse(Source);
+    auto Invalid = lex::Parser().parse(Source);
     ASSERT_TRUE(Invalid.ok());
     ASSERT_TRUE(Analysis.Check(*Invalid.root));
     EXPECT_FALSE(Analysis.CheckEntrypoint(*Invalid.root));
   }
-  auto InvalidTarget = lex::Lexer().parse("@main class Bad {}");
+  auto InvalidTarget = lex::Parser().parse("@main class Bad {}");
   ASSERT_TRUE(InvalidTarget.ok());
   EXPECT_FALSE(Analysis.Check(*InvalidTarget.root));
 }
 
 TEST(Sema, EntrypointCanBeImported) {
-  auto Main = lex::Lexer().parse("module app; import worker;");
-  auto Worker = lex::Lexer().parse(
-      "module worker; @main fn launch() -> i32 { return 42; }");
+  auto Main = lex::Parser().parse("module app; import worker;");
+  auto Worker = lex::Parser().parse("module worker; @main fn launch() -> i32 { return 42; }");
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(Worker.ok());
   sema::Sema Analysis;
-  ASSERT_TRUE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Worker.root.get(), false}}));
+  ASSERT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Worker.root.get(), false}}));
   EXPECT_TRUE(Analysis.CheckEntrypoint(*Main.root));
   EXPECT_EQ(Analysis.GetSymbol(*Worker.root->children.back()), "main");
 }
@@ -330,7 +313,7 @@ TEST(Sema, RejectInvalidTransferMethods) {
            "class Item { value: i32; } fn f() { let a = Item(); a.copy(&a); }",
        }) {
     SCOPED_TRACE(Source);
-    auto Parsed = lex::Lexer().parse(Source);
+    auto Parsed = lex::Parser().parse(Source);
     ASSERT_TRUE(Parsed.ok());
     sema::Sema Analysis;
     EXPECT_FALSE(Analysis.Check(*Parsed.root));
@@ -338,7 +321,7 @@ TEST(Sema, RejectInvalidTransferMethods) {
 }
 
 TEST(Sema, ClassLayoutPadding) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 class Mixed {
   flag: bool; number: i64; tail: u8;
   init() { flag = true; number = 42; tail = 7; }
@@ -362,7 +345,7 @@ TEST(Sema, CLayoutAnnotation) {
     double measure;
     long value;
   };
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 @layout(Layout.C)
 class Pair {
   pub tag: c.char;
@@ -389,7 +372,7 @@ class Pair {
            "class Bad {}",
            "@layout(Layout.C) class Bad { value: char; }",
        }) {
-    auto Invalid = lex::Lexer().parse(Source);
+    auto Invalid = lex::Parser().parse(Source);
     ASSERT_TRUE(Invalid.ok()) << Source;
     EXPECT_FALSE(Analysis.Check(*Invalid.root)) << Source;
   }
@@ -400,7 +383,7 @@ TEST(Sema, CLayoutFunctionPointerField) {
     char tag;
     int (*callback)(void *, int);
   };
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 @layout(Layout.C)
 class Callbacks {
   pub tag: c.char;
@@ -418,7 +401,7 @@ class Callbacks {
 }
 
 TEST(Sema, ExternLinkLibrary) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 @extern("CreateWindowExW", "user32")
 @callconv(cc.System)
 fn create_window() -> *u8;
@@ -427,9 +410,8 @@ fn create_window() -> *u8;
   sema::Sema Analysis;
   ASSERT_TRUE(Analysis.Check(*Parsed.root));
   const std::unordered_set<std::string> Modules{""};
-  EXPECT_EQ(Analysis.GetLinkLibraries(Modules),
-            std::set<std::string>{"user32"});
-  auto Invalid = lex::Lexer().parse(R"(
+  EXPECT_EQ(Analysis.GetLinkLibraries(Modules), std::set<std::string>{"user32"});
+  auto Invalid = lex::Parser().parse(R"(
 @extern("CreateWindowExW", "user32", "extra")
 fn create_window() -> *u8;
 )");
@@ -438,7 +420,7 @@ fn create_window() -> *u8;
 }
 
 TEST(Sema, AnnotationEnumArgumentsBindByType) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 enum First { A }
 enum Second { B }
 annotation tagged(first: First = First.A, second: Second = Second.B);
@@ -449,7 +431,7 @@ fn use() -> i32 { return 1; }
   sema::Sema Analysis;
   EXPECT_TRUE(Analysis.Check(*Parsed.root));
 
-  auto Ambiguous = lex::Lexer().parse(R"(
+  auto Ambiguous = lex::Parser().parse(R"(
 enum Choice { A }
 annotation duplicate(first: Choice, second: Choice);
 @duplicate(Choice.A)
@@ -461,7 +443,7 @@ fn use() -> i32 { return 1; }
 }
 
 TEST(Sema, EnumAnnotationsAndMatchValidation) {
-  auto Valid = lex::Lexer().parse(R"(
+  auto Valid = lex::Parser().parse(R"(
 enum Mode: u8 { Off, On = Off + 3 }
 enum Signed: i8 { Negative = -128, Zero = 0, Positive = 127 }
 alias Selected = Mode;
@@ -493,10 +475,10 @@ fn copy(value: Selected) -> Mode { return value; }
   EXPECT_TRUE(Signed->HasZero);
   EXPECT_EQ(Signed->Variants.front().Value, "-128");
   for (const auto &Child : Valid.root->children)
-    if (Child->kind == lex::TokenKind::ast_function && Child->text == "copy")
+    if (Child->kind == lex::NodeKind::ast_function && Child->text == "copy")
       for (const auto &Part : Child->children)
-        if (Part->kind == lex::TokenKind::ast_parameter)
-          EXPECT_EQ(sema::GetBitWidth(Analysis.GetType(*Part)), 8u);
+        if (Part->kind == lex::NodeKind::ast_parameter)
+          EXPECT_EQ(Analysis.GetBitWidth(Analysis.GetType(*Part)), 8u);
   for (const auto Source : {
            "enum E { A, A }",
            "enum E { A = 1, B = 1 }",
@@ -520,16 +502,15 @@ fn copy(value: Selected) -> Mode { return value; }
            "@layout(\"c\") class Box { field: i32; }",
        }) {
     SCOPED_TRACE(Source);
-    auto Invalid = lex::Lexer().parse(Source);
+    auto Invalid = lex::Parser().parse(Source);
     ASSERT_TRUE(Invalid.ok());
     EXPECT_FALSE(Analysis.Check(*Invalid.root));
   }
 }
 
 TEST(Sema, ImportedEnumKeepsItsTypeIdentity) {
-  auto Library =
-      lex::Lexer().parse("module colors; pub enum Color: u8 { Red, Blue } ");
-  auto Main = lex::Lexer().parse(R"(
+  auto Library = lex::Parser().parse("module colors; pub enum Color: u8 { Red, Blue } ");
+  auto Main = lex::Parser().parse(R"(
 module app;
 import colors;
 fn choose(value: Color) -> i32 {
@@ -539,17 +520,14 @@ fn choose(value: Color) -> i32 {
   ASSERT_TRUE(Library.ok());
   ASSERT_TRUE(Main.ok());
   sema::Sema Analysis;
-  EXPECT_TRUE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Library.root.get(), false}}));
-  auto Private =
-      lex::Lexer().parse("module colors; enum Color: u8 { Red, Blue }");
+  EXPECT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}));
+  auto Private = lex::Parser().parse("module colors; enum Color: u8 { Red, Blue }");
   ASSERT_TRUE(Private.ok());
-  EXPECT_FALSE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Private.root.get(), false}}));
+  EXPECT_FALSE(Analysis.CheckModules({{Main.root.get(), true}, {Private.root.get(), false}}));
 }
 
 TEST(Sema, ClassesThisAndMetadata) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 @target(Target.Class) annotation resource();
 @target(Target.Method) annotation query();
 @resource
@@ -612,7 +590,7 @@ TEST(Sema, RejectInvalidClassLifetimes) {
            "class A { init() {} fn f() { this = this; } }",
        }) {
     SCOPED_TRACE(Source);
-    auto Parsed = lex::Lexer().parse(Source);
+    auto Parsed = lex::Parser().parse(Source);
     ASSERT_TRUE(Parsed.ok());
     sema::Sema Analysis;
     EXPECT_FALSE(Analysis.Check(*Parsed.root));
@@ -621,8 +599,8 @@ TEST(Sema, RejectInvalidClassLifetimes) {
 }
 
 TEST(Sema, ClassDefaultConstructor) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 class Empty {}
 class Pair { first: i32; second: bool; }
 class Zero { value: i32; init() { value = 7; } }
@@ -652,26 +630,24 @@ fn use() -> i32 {
            "class Empty {} fn f() -> i32 { let a = Empty(1); return 0; }",
        }) {
     SCOPED_TRACE(Source);
-    auto Invalid = Lexer.parse(Source);
+    auto Invalid = Parser.parse(Source);
     ASSERT_TRUE(Invalid.ok());
     sema::Sema Other;
     EXPECT_FALSE(Other.Check(*Invalid.root));
   }
   // A generated constructor may not reach a non-public field constructor in
   // another module.
-  auto Library = Lexer.parse("module library; pub class Hidden { init() {} }");
-  auto Main = Lexer.parse(
-      "module app; import library; class Outer { hidden: library.Hidden; } "
-      "fn build() -> i32 { let outer = Outer(); return 0; }");
+  auto Library = Parser.parse("module library; pub class Hidden { init() {} }");
+  auto Main = Parser.parse("module app; import library; class Outer { hidden: library.Hidden; } "
+                           "fn build() -> i32 { let outer = Outer(); return 0; }");
   ASSERT_TRUE(Library.ok());
   ASSERT_TRUE(Main.ok());
   sema::Sema Modules;
-  EXPECT_FALSE(Modules.CheckModules(
-      {{Main.root.get(), true}, {Library.root.get(), false}}));
+  EXPECT_FALSE(Modules.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}));
 }
 
 TEST(Sema, ClassModuleVisibility) {
-  auto Library = lex::Lexer().parse(R"(
+  auto Library = lex::Parser().parse(R"(
 module library;
 pub class Item {
   secret: i32;
@@ -690,13 +666,11 @@ pub class PrivateInit { init() {} }
            "let a: library.Item = library.Item(1); return a.get();",
            "let a = Item(1); return a.value;",
        }) {
-    auto Main = lex::Lexer().parse(
-        std::string("module app; import library; fn main() -> i32 {") + Body +
-        "}");
+    auto Main = lex::Parser().parse(std::string("module app; import library; fn main() -> i32 {") +
+                                    Body + "}");
     ASSERT_TRUE(Main.ok());
     sema::Sema Analysis;
-    EXPECT_TRUE(Analysis.CheckModules(
-        {{Main.root.get(), true}, {Library.root.get(), false}}));
+    EXPECT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}));
   }
   for (const auto Body : {
            "let a = library.Item(1); return a.secret;",
@@ -704,21 +678,18 @@ pub class PrivateInit { init() {} }
            "let a = library.Hidden(); return 0;",
            "let a = library.PrivateInit(); return 0;",
        }) {
-    auto Main = lex::Lexer().parse(
-        std::string("module app; import library; fn main() -> i32 {") + Body +
-        "}");
+    auto Main = lex::Parser().parse(std::string("module app; import library; fn main() -> i32 {") +
+                                    Body + "}");
     ASSERT_TRUE(Main.ok());
     sema::Sema Analysis;
-    EXPECT_FALSE(Analysis.CheckModules(
-        {{Main.root.get(), true}, {Library.root.get(), false}}));
+    EXPECT_FALSE(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}));
   }
 }
 
 TEST(Sema, BuiltinTypes) {
   constexpr std::array Names = {
-      "i8",   "i16",  "i32",  "i64",  "i128",  "isize", "u8",
-      "u16",  "u32",  "u64",  "u128", "usize", "f32",   "f64",
-      "f128", "f256", "f512", "bool", "char",
+      "i8",   "i16",   "i32", "i64", "i128", "isize", "u8",   "u16",  "u32",  "u64",
+      "u128", "usize", "f32", "f64", "f128", "f256",  "f512", "bool", "char",
   };
   for (const auto Name : Names) {
     const auto Type = sema::ParseBuiltinType(Name);
@@ -731,8 +702,8 @@ TEST(Sema, BuiltinTypes) {
 }
 
 TEST(Sema, PointerAddressAndDereference) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 fn update(value: i32) -> i32 {
   let pointer: *i32 = &value;
   *pointer = *pointer + 1;
@@ -745,19 +716,18 @@ fn update(value: i32) -> i32 {
 }
 
 TEST(Sema, RejectWideFloatArithmetic) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse("fn bad(x: f256) -> f256 { return x + x; }");
+  lex::Parser Parser;
+  auto Parsed = Parser.parse("fn bad(x: f256) -> f256 { return x + x; }");
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
   ASSERT_FALSE(Analysis.Check(*Parsed.root));
   ASSERT_EQ(Analysis.GetDiagnostics().size(), 1u);
-  EXPECT_EQ(Analysis.GetDiagnostics().front().Kind,
-            lex::DiagnosticKind::UnsupportedExpression);
+  EXPECT_EQ(Analysis.GetDiagnostics().front().Kind, lex::DiagnosticKind::UnsupportedExpression);
 }
 
 TEST(Sema, KelyraIntegersBridgeCompatibleCTypes) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 fn take(value: c.longlong) -> c.longlong { return value; }
 fn bridge(value: i64) -> i64 { return take(value); }
 )");
@@ -767,8 +737,8 @@ fn bridge(value: i64) -> i64 { return take(value); }
 }
 
 TEST(Sema, MultidimensionalArray) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 fn get() -> i32 {
   let values: [2][3]i32;
   values[1][1] = 7;
@@ -781,7 +751,7 @@ fn get() -> i32 {
 }
 
 TEST(Sema, PointerAndArrayOrderAreDistinct) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 fn invalid() {
   let values: [2]i32;
   let whole: *[2]i32 = &values;
@@ -793,62 +763,53 @@ fn invalid() {
   sema::Sema Analysis;
   EXPECT_FALSE(Analysis.Check(*Parsed.root));
   ASSERT_FALSE(Analysis.GetDiagnostics().empty());
-  EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
-            lex::DiagnosticKind::TypeMismatch);
+  EXPECT_EQ(Analysis.GetDiagnostics().back().Kind, lex::DiagnosticKind::TypeMismatch);
 }
 
 TEST(Sema, ModulesRespectPublicVisibility) {
-  lex::Lexer Lexer;
-  auto Main = Lexer.parse(test::ReadSource("cli/modules/main.kly"));
-  auto Library = Lexer.parse(test::ReadSource("cli/modules/math/vector.kly"));
+  lex::Parser Parser;
+  auto Main = Parser.parse(test::ReadSource("cli/modules/main.kly"));
+  auto Library = Parser.parse(test::ReadSource("cli/modules/math/vector.kly"));
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(Library.ok());
   sema::Sema Analysis;
-  EXPECT_TRUE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Library.root.get(), false}}));
+  EXPECT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}));
 
-  auto PrivateUse =
-      Lexer.parse(test::ReadSource("cli/modules/private_main.kly"));
+  auto PrivateUse = Parser.parse(test::ReadSource("cli/modules/private_main.kly"));
   ASSERT_TRUE(PrivateUse.ok());
-  EXPECT_FALSE(Analysis.CheckModules(
-      {{PrivateUse.root.get(), true}, {Library.root.get(), false}}));
+  EXPECT_FALSE(Analysis.CheckModules({{PrivateUse.root.get(), true}, {Library.root.get(), false}}));
   ASSERT_FALSE(Analysis.GetDiagnostics().empty());
-  EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
-            lex::DiagnosticKind::PrivateDeclaration);
+  EXPECT_EQ(Analysis.GetDiagnostics().back().Kind, lex::DiagnosticKind::PrivateDeclaration);
 }
 
 TEST(Sema, RejectAmbiguousImportedFunction) {
-  lex::Lexer Lexer;
-  auto Main = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Main = Parser.parse(R"(
 module app.main;
 import first;
 import second;
 fn main() -> i32 { return answer(); }
 )");
-  auto First =
-      Lexer.parse("module first; pub fn answer() -> i32 { return 1; }");
-  auto Second =
-      Lexer.parse("module second; pub fn answer() -> i32 { return 2; }");
+  auto First = Parser.parse("module first; pub fn answer() -> i32 { return 1; }");
+  auto Second = Parser.parse("module second; pub fn answer() -> i32 { return 2; }");
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(First.ok());
   ASSERT_TRUE(Second.ok());
   sema::Sema Analysis;
-  EXPECT_FALSE(Analysis.CheckModules({{Main.root.get(), true},
-                                      {First.root.get(), false},
-                                      {Second.root.get(), false}}));
+  EXPECT_FALSE(Analysis.CheckModules(
+      {{Main.root.get(), true}, {First.root.get(), false}, {Second.root.get(), false}}));
   ASSERT_FALSE(Analysis.GetDiagnostics().empty());
-  EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
-            lex::DiagnosticKind::AmbiguousOverload);
+  EXPECT_EQ(Analysis.GetDiagnostics().back().Kind, lex::DiagnosticKind::AmbiguousOverload);
 }
 
 TEST(Sema, PlainImportExposesPublicTypesAndFunctions) {
-  auto Main = lex::Lexer().parse(R"(
+  auto Main = lex::Parser().parse(R"(
 module app;
 import library;
 fn make() -> Item { return Item(); }
 fn answer() -> Number { return value(); }
 )");
-  auto Library = lex::Lexer().parse(R"(
+  auto Library = lex::Parser().parse(R"(
 module library;
 pub class Item {}
 pub alias Number = i32;
@@ -857,13 +818,12 @@ pub fn value() -> i32 { return 42; }
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(Library.ok());
   sema::Sema Analysis;
-  EXPECT_TRUE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Library.root.get(), false}}));
+  EXPECT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}));
 }
 
 TEST(Sema, AmbiguousImportedTypeRequiresQualification) {
-  auto First = lex::Lexer().parse("module first; pub class Item {}");
-  auto Second = lex::Lexer().parse("module second; pub class Item {}");
+  auto First = lex::Parser().parse("module first; pub class Item {}");
+  auto Second = lex::Parser().parse("module second; pub class Item {}");
   ASSERT_TRUE(First.ok());
   ASSERT_TRUE(Second.ok());
   for (const auto Source : {
@@ -871,52 +831,46 @@ TEST(Sema, AmbiguousImportedTypeRequiresQualification) {
            "module app; import first; import second; fn use(value: first.Item) "
            "{}",
        }) {
-    auto Main = lex::Lexer().parse(Source);
+    auto Main = lex::Parser().parse(Source);
     ASSERT_TRUE(Main.ok());
     sema::Sema Analysis;
-    const bool Qualified =
-        std::string_view(Source).find("first.Item") != std::string_view::npos;
-    EXPECT_EQ(Analysis.CheckModules({{Main.root.get(), true},
-                                     {First.root.get(), false},
-                                     {Second.root.get(), false}}),
+    const bool Qualified = std::string_view(Source).find("first.Item") != std::string_view::npos;
+    EXPECT_EQ(Analysis.CheckModules(
+                  {{Main.root.get(), true}, {First.root.get(), false}, {Second.root.get(), false}}),
               Qualified);
     if (!Qualified) {
       ASSERT_FALSE(Analysis.GetDiagnostics().empty());
-      EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
-                lex::DiagnosticKind::AmbiguousName);
+      EXPECT_EQ(Analysis.GetDiagnostics().back().Kind, lex::DiagnosticKind::AmbiguousName);
     }
   }
 }
 
 TEST(Sema, AmbiguousImportedAnnotationRequiresQualification) {
-  auto First = lex::Lexer().parse("module first; pub annotation tag();");
-  auto Second = lex::Lexer().parse("module second; pub annotation tag();");
+  auto First = lex::Parser().parse("module first; pub annotation tag();");
+  auto Second = lex::Parser().parse("module second; pub annotation tag();");
   ASSERT_TRUE(First.ok());
   ASSERT_TRUE(Second.ok());
   for (const auto Source : {
            "module app; import first; import second; @tag class Item {}",
            "module app; import first; import second; @first.tag class Item {}",
        }) {
-    auto Main = lex::Lexer().parse(Source);
+    auto Main = lex::Parser().parse(Source);
     ASSERT_TRUE(Main.ok());
     sema::Sema Analysis;
-    const bool Qualified =
-        std::string_view(Source).find("@first.tag") != std::string_view::npos;
-    EXPECT_EQ(Analysis.CheckModules({{Main.root.get(), true},
-                                     {First.root.get(), false},
-                                     {Second.root.get(), false}}),
+    const bool Qualified = std::string_view(Source).find("@first.tag") != std::string_view::npos;
+    EXPECT_EQ(Analysis.CheckModules(
+                  {{Main.root.get(), true}, {First.root.get(), false}, {Second.root.get(), false}}),
               Qualified);
     if (!Qualified) {
       ASSERT_FALSE(Analysis.GetDiagnostics().empty());
-      EXPECT_EQ(Analysis.GetDiagnostics().back().Kind,
-                lex::DiagnosticKind::AmbiguousName);
+      EXPECT_EQ(Analysis.GetDiagnostics().back().Kind, lex::DiagnosticKind::AmbiguousName);
     }
   }
 }
 
 TEST(Sema, InlineAssemblyAndForwardFunction) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 fn main() -> i32 { return later(); }
 fn later() -> i32 {
   let value: i32 = 1;
@@ -932,8 +886,8 @@ fn later() -> i32 {
 }
 
 TEST(Sema, UserDefinedAnnotations) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 @target(Target.Function)
 annotation route(path: std.util.string.StringSlice, method: std.util.string.StringSlice = "GET");
 
@@ -943,8 +897,7 @@ fn handler() -> i32 { return 0; }
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
   ASSERT_TRUE(Analysis.Check(*Parsed.root));
-  const auto &Instances =
-      Analysis.GetAnnotations(*Parsed.root->children.back());
+  const auto &Instances = Analysis.GetAnnotations(*Parsed.root->children.back());
   ASSERT_EQ(Instances.size(), 1u);
   EXPECT_EQ(Instances.front().Name, "route");
   ASSERT_EQ(Instances.front().Arguments.size(), 2u);
@@ -955,7 +908,7 @@ fn handler() -> i32 { return 0; }
 }
 
 TEST(Sema, InlineAndDeprecatedAnnotations) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 @inline fn automatic() -> i32 { return 1; }
 @inline(InlineMode.Always) @deprecated("use automatic")
 fn old() -> i32 { return 2; }
@@ -972,22 +925,21 @@ fn caller() -> i32 { return old(); }
             "use of deprecated function 'old': use automatic");
   const auto &Automatic = Analysis.GetAnnotations(*Parsed.root->children[0]);
   ASSERT_EQ(Automatic.size(), 1u);
-  EXPECT_EQ(Automatic.front().Arguments[0].Value.Text,
-            "std.annotation.InlineMode.Auto");
+  EXPECT_EQ(Automatic.front().Arguments[0].Value.Text, "std.annotation.InlineMode.Auto");
   for (const auto Source : {
            "@inline(never) fn f() -> i32 { return 0; }",
            "@inline(InlineMode.Always) fn f();",
            "@inline(InlineMode.Always) class Box {}",
            "@deprecated class Box {}",
        }) {
-    auto Invalid = lex::Lexer().parse(Source);
+    auto Invalid = lex::Parser().parse(Source);
     ASSERT_TRUE(Invalid.ok()) << Source;
     EXPECT_FALSE(Analysis.Check(*Invalid.root)) << Source;
   }
 }
 
 TEST(Sema, RejectInvalidUserAnnotations) {
-  lex::Lexer Lexer;
+  lex::Parser Parser;
   for (const std::string Source : {
            "annotation flag(value: bool); @flag(1) fn f() -> i32 { return 0; }",
            "annotation flag(value: bool); @flag(true, true) fn f() -> i32 { "
@@ -1000,7 +952,7 @@ TEST(Sema, RejectInvalidUserAnnotations) {
            "@target(Target.Unknown) annotation marker();",
            "@missing fn f() -> i32 { return 0; }",
        }) {
-    auto Parsed = Lexer.parse(Source);
+    auto Parsed = Parser.parse(Source);
     ASSERT_TRUE(Parsed.ok()) << Source;
     sema::Sema Analysis;
     EXPECT_FALSE(Analysis.Check(*Parsed.root)) << Source;
@@ -1008,8 +960,8 @@ TEST(Sema, RejectInvalidUserAnnotations) {
 }
 
 TEST(Sema, AnnotationModulesDefaultsAndRepeatable) {
-  lex::Lexer Lexer;
-  auto Main = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Main = Parser.parse(R"(
 module app;
 import web;
 @web.route("/users")
@@ -1018,7 +970,7 @@ import web;
 @web.tag(2)
 fn handler() -> i32 { return 0; }
 )");
-  auto Web = Lexer.parse(R"(
+  auto Web = Parser.parse(R"(
 module web;
 @target(Target.Function)
 @retention(Retention.Compile)
@@ -1033,8 +985,7 @@ pub annotation tag(value: i32);
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(Web.ok());
   sema::Sema Analysis;
-  ASSERT_TRUE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Web.root.get(), false}}));
+  ASSERT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Web.root.get(), false}}));
   const auto &Instances = Analysis.GetAnnotations(*Main.root->children.back());
   ASSERT_EQ(Instances.size(), 3u);
   ASSERT_EQ(Instances.front().Arguments.size(), 2u);
@@ -1044,8 +995,8 @@ pub annotation tag(value: i32);
 }
 
 TEST(Sema, ReflectionMetadataAndReferences) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 annotation binding(value_type: std.meta.Type, function: std.meta.Function);
 fn convert(value: i32) -> i32 { return value; }
 @binding(meta(*i32), meta(convert))
@@ -1060,12 +1011,10 @@ fn registered() -> i32 { return 0; }
   ASSERT_TRUE(Function.has_value());
   const auto &FunctionInfo = Reflection.Get(*Function);
   EXPECT_EQ(FunctionInfo.Children.size(), 1u);
-  EXPECT_EQ(Reflection.Get(FunctionInfo.Children.front()).Kind,
-            sema::MetaKind::Parameter);
+  EXPECT_EQ(Reflection.Get(FunctionInfo.Children.front()).Kind, sema::MetaKind::Parameter);
   EXPECT_NE(FunctionInfo.Type, sema::InvalidMetaId);
 
-  const auto &Instances =
-      Analysis.GetAnnotations(*Parsed.root->children.back());
+  const auto &Instances = Analysis.GetAnnotations(*Parsed.root->children.back());
   ASSERT_EQ(Instances.size(), 1u);
   ASSERT_EQ(Instances.front().Arguments.size(), 2u);
   const auto &TypeValue = Instances.front().Arguments[0].Value;
@@ -1084,7 +1033,7 @@ fn registered() -> i32 { return 0; }
 }
 
 TEST(Sema, AnnotationParametersUseConcreteMetaHandles) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 annotation mark();
 class Box { pub value: i32; }
 fn handler() {}
@@ -1110,8 +1059,7 @@ fn target() {}
   const auto &Values = Analysis.GetAnnotations(*Parsed.root->children.back());
   ASSERT_EQ(Values.size(), 1u);
   ASSERT_EQ(Values.front().Arguments.size(), 7u);
-  EXPECT_EQ(Values.front().Arguments.back().Value.Kind,
-            sema::AnnotationValueKind::String);
+  EXPECT_EQ(Values.front().Arguments.back().Value.Kind, sema::AnnotationValueKind::String);
 }
 
 TEST(Sema, AnnotationParametersRejectWrongMetaHandles) {
@@ -1127,7 +1075,7 @@ TEST(Sema, AnnotationParametersRejectWrongMetaHandles) {
            "use() {}",
        }) {
     SCOPED_TRACE(Source);
-    auto Parsed = lex::Lexer().parse(Source);
+    auto Parsed = lex::Parser().parse(Source);
     ASSERT_TRUE(Parsed.ok());
     sema::Sema Analysis;
     EXPECT_FALSE(Analysis.Check(*Parsed.root));
@@ -1135,7 +1083,7 @@ TEST(Sema, AnnotationParametersRejectWrongMetaHandles) {
 }
 
 TEST(Sema, ReflectAnnotationSelectsInstanceFields) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 @reflect class Whole {
   pub visible: i32;
   hidden: i32;
@@ -1177,7 +1125,7 @@ TEST(Sema, ReflectAnnotationRejectsInvalidTargets) {
            "@reflect(1) class Wrong {}",
        }) {
     SCOPED_TRACE(Source);
-    auto Parsed = lex::Lexer().parse(Source);
+    auto Parsed = lex::Parser().parse(Source);
     ASSERT_TRUE(Parsed.ok());
     sema::Sema Analysis;
     EXPECT_FALSE(Analysis.Check(*Parsed.root));
@@ -1185,15 +1133,15 @@ TEST(Sema, ReflectAnnotationRejectsInvalidTargets) {
 }
 
 TEST(Sema, ReflectionReferencesRespectModuleVisibility) {
-  lex::Lexer Lexer;
-  auto Main = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Main = Parser.parse(R"(
 module app;
 import library;
 annotation callback(function: std.meta.Function);
 @callback(meta(library.public_callback))
 fn registered() -> i32 { return 0; }
 )");
-  auto Library = Lexer.parse(R"(
+  auto Library = Parser.parse(R"(
 module library;
 pub fn public_callback() -> i32 { return 1; }
 fn private_callback() -> i32 { return 2; }
@@ -1201,10 +1149,9 @@ fn private_callback() -> i32 { return 2; }
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(Library.ok());
   sema::Sema Analysis;
-  ASSERT_TRUE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Library.root.get(), false}}));
+  ASSERT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}));
 
-  auto PrivateMain = Lexer.parse(R"(
+  auto PrivateMain = Parser.parse(R"(
 module app;
 import library;
 annotation callback(function: std.meta.Function);
@@ -1212,13 +1159,13 @@ annotation callback(function: std.meta.Function);
 fn registered() -> i32 { return 0; }
 )");
   ASSERT_TRUE(PrivateMain.ok());
-  EXPECT_FALSE(Analysis.CheckModules(
-      {{PrivateMain.root.get(), true}, {Library.root.get(), false}}));
+  EXPECT_FALSE(
+      Analysis.CheckModules({{PrivateMain.root.get(), true}, {Library.root.get(), false}}));
 }
 
 TEST(Sema, MetaValueCannotEscapeToRuntime) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse("fn invalid() -> i32 { return meta(i32); }");
+  lex::Parser Parser;
+  auto Parsed = Parser.parse("fn invalid() -> i32 { return meta(i32); }");
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
   ASSERT_FALSE(Analysis.Check(*Parsed.root));
@@ -1227,8 +1174,8 @@ TEST(Sema, MetaValueCannotEscapeToRuntime) {
 }
 
 TEST(Sema, WhenEvaluatesOnlySelectedBranch) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 annotation selected();
 @selected
 fn target() -> i32 { return 0; }
@@ -1246,28 +1193,27 @@ fn choose() -> i32 {
   sema::Sema Analysis;
   EXPECT_TRUE(Analysis.Check(*Parsed.root));
 
-  auto Invalid =
-      Lexer.parse("fn invalid(flag: bool) -> i32 { when flag { return 1; } }");
+  auto Invalid = Parser.parse("fn invalid(flag: bool) -> i32 { when flag { return 1; } }");
   ASSERT_TRUE(Invalid.ok());
   ASSERT_FALSE(Analysis.Check(*Invalid.root));
-  EXPECT_TRUE(std::any_of(
-      Analysis.GetDiagnostics().begin(), Analysis.GetDiagnostics().end(),
-      [](const lex::Diagnostic &Diagnostic) {
-        return Diagnostic.Kind == lex::DiagnosticKind::InvalidWhenCondition;
-      }));
+  EXPECT_TRUE(std::any_of(Analysis.GetDiagnostics().begin(),
+                          Analysis.GetDiagnostics().end(),
+                          [](const lex::Diagnostic &Diagnostic) {
+                            return Diagnostic.Kind == lex::DiagnosticKind::InvalidWhenCondition;
+                          }));
 }
 
 TEST(Sema, ArrayLengthRequiresCompileTimeInteger) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse("fn f(x: [1.5]i32) {}");
+  lex::Parser Parser;
+  auto Parsed = Parser.parse("fn f(x: [1.5]i32) {}");
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
   EXPECT_FALSE(Analysis.Check(*Parsed.root));
 }
 
 TEST(Sema, MetaBlockEvaluatesFunctionAndLocalControlFlow) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 @meta fn sum(limit: i32) -> i32 {
   let i = 0;
   let total = 0;
@@ -1307,21 +1253,21 @@ TEST(Sema, CompilerIntrinsicRequiresSupportedStandardLibraryDeclaration) {
            "usize) -> bool { return false; }",
        }) {
     SCOPED_TRACE(Source);
-    auto Parsed = lex::Lexer().parse(Source);
+    auto Parsed = lex::Parser().parse(Source);
     ASSERT_TRUE(Parsed.ok());
     sema::Sema Analysis;
     ASSERT_FALSE(Analysis.Check(*Parsed.root));
-    EXPECT_TRUE(std::any_of(
-        Analysis.GetDiagnostics().begin(), Analysis.GetDiagnostics().end(),
-        [](const lex::Diagnostic &Diagnostic) {
-          return Diagnostic.Kind ==
-                 lex::DiagnosticKind::InvalidIntrinsicDeclaration;
-        }));
+    EXPECT_TRUE(std::any_of(Analysis.GetDiagnostics().begin(),
+                            Analysis.GetDiagnostics().end(),
+                            [](const lex::Diagnostic &Diagnostic) {
+                              return Diagnostic.Kind ==
+                                     lex::DiagnosticKind::InvalidIntrinsicDeclaration;
+                            }));
   }
 }
 
 TEST(Sema, ClassMetadataQueries) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 class Plain {}
 class Explicit { init(value: i32) {} deinit() {} }
 class Derived: Plain {}
@@ -1345,7 +1291,7 @@ fn inspect() -> i32 {
 }
 
 TEST(Sema, MemberMetadataQueries) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 class Inspect {
   pub value: i32;
   @static
@@ -1388,19 +1334,18 @@ fn inspect() -> i32 {
   EXPECT_TRUE(Valid);
   if (!Valid)
     return;
-  const auto ClassId =
-      Analysis.GetReflection().Find("Inspect", sema::MetaKind::Class);
+  const auto ClassId = Analysis.GetReflection().Find("Inspect", sema::MetaKind::Class);
   ASSERT_TRUE(ClassId.has_value());
   std::vector<std::string> Names;
   for (const auto Id : Analysis.GetReflection().Get(*ClassId).Children)
     Names.push_back(Analysis.GetReflection().Get(Id).Name);
-  EXPECT_EQ(Names, (std::vector<std::string>{"value", "shared", "read",
-                                             "create", "init", "deinit"}));
+  EXPECT_EQ(Names,
+            (std::vector<std::string>{"value", "shared", "read", "create", "init", "deinit"}));
 }
 
 TEST(Sema, MemberMetadataQueriesRespectVisibility) {
-  lex::Lexer Lexer;
-  auto Main = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Main = Parser.parse(R"(
 module app;
 import library;
 fn inspect() -> i32 {
@@ -1414,7 +1359,7 @@ fn inspect() -> i32 {
   }
 }
 )");
-  auto Library = Lexer.parse(R"(
+  auto Library = Parser.parse(R"(
 module library;
 pub class Inspect {
   pub visible: i32;
@@ -1426,16 +1371,15 @@ pub class Inspect {
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(Library.ok());
   sema::Sema Analysis;
-  const bool Valid = Analysis.CheckModules(
-      {{Main.root.get(), true}, {Library.root.get(), false}});
+  const bool Valid = Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}});
   for (const auto &Diagnostic : Analysis.GetDiagnostics())
     ADD_FAILURE() << Diagnostic;
   EXPECT_TRUE(Valid);
 }
 
 TEST(Sema, MetaQueriesUseLoadedModuleDefinition) {
-  lex::Lexer Lexer;
-  auto Main = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Main = Parser.parse(R"(
 module app;
 import std.meta;
 pub fn target() {}
@@ -1443,22 +1387,21 @@ fn inspect() -> i32 {
   when meta(target).is_public() { return 1; } else { return 0; }
 }
 )");
-  auto Meta = Lexer.parse("module std.meta; pub class Symbol {} ");
+  auto Meta = Parser.parse("module std.meta; pub class Symbol {} ");
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(Meta.ok());
   sema::Sema Analysis;
-  EXPECT_FALSE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Meta.root.get(), false, true}}));
-  EXPECT_TRUE(std::any_of(
-      Analysis.GetDiagnostics().begin(), Analysis.GetDiagnostics().end(),
-      [](const auto &Diagnostic) {
-        return Diagnostic.Kind == lex::DiagnosticKind::InvalidWhenCondition;
-      }));
+  EXPECT_FALSE(Analysis.CheckModules({{Main.root.get(), true}, {Meta.root.get(), false, true}}));
+  EXPECT_TRUE(std::any_of(Analysis.GetDiagnostics().begin(),
+                          Analysis.GetDiagnostics().end(),
+                          [](const auto &Diagnostic) {
+                            return Diagnostic.Kind == lex::DiagnosticKind::InvalidWhenCondition;
+                          }));
 }
 
 TEST(Sema, MetaQueryExecutesStandardLibraryMethodBody) {
-  lex::Lexer Lexer;
-  auto Main = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Main = Parser.parse(R"(
 module app;
 import std.meta;
 pub fn target() {}
@@ -1466,7 +1409,7 @@ fn inspect() -> i32 {
   when meta(target).is_public() { return 1; } else { return missing; }
 }
 )");
-  auto Meta = Lexer.parse(R"(
+  auto Meta = Parser.parse(R"(
 @meta module std.meta;
 pub class Symbol {
   pub id: usize;
@@ -1482,40 +1425,37 @@ pub fn __read_public(id: usize) -> bool;
   ASSERT_TRUE(Main.ok());
   ASSERT_TRUE(Meta.ok());
   sema::Sema Analysis;
-  EXPECT_TRUE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Meta.root.get(), false, true}}));
+  EXPECT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Meta.root.get(), false, true}}));
 }
 
 TEST(Sema, MetaModuleIsCompileTimeOnly) {
-  lex::Lexer Lexer;
-  auto Meta = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Meta = Parser.parse(R"(
 @meta module catalog;
 pub class Descriptor {}
 pub fn flag() -> bool { return true; }
 )");
   ASSERT_TRUE(Meta.ok());
   {
-    auto Main = Lexer.parse("module app; import catalog; fn use() -> bool { "
-                            "return catalog.flag(); }");
+    auto Main = Parser.parse("module app; import catalog; fn use() -> bool { "
+                             "return catalog.flag(); }");
     ASSERT_TRUE(Main.ok());
     sema::Sema Analysis;
-    EXPECT_FALSE(Analysis.CheckModules(
-        {{Main.root.get(), true}, {Meta.root.get(), false}}));
+    EXPECT_FALSE(Analysis.CheckModules({{Main.root.get(), true}, {Meta.root.get(), false}}));
     EXPECT_TRUE(Analysis.IsMetaModule("catalog"));
   }
   {
-    auto Main = Lexer.parse("module app; import catalog; class Store { "
-                            "value: catalog.Descriptor; }");
+    auto Main = Parser.parse("module app; import catalog; class Store { "
+                             "value: catalog.Descriptor; }");
     ASSERT_TRUE(Main.ok());
     sema::Sema Analysis;
-    EXPECT_FALSE(Analysis.CheckModules(
-        {{Main.root.get(), true}, {Meta.root.get(), false}}));
+    EXPECT_FALSE(Analysis.CheckModules({{Main.root.get(), true}, {Meta.root.get(), false}}));
   }
 }
 
 TEST(Sema, MetaClassFunctionAndMethodAreCompileTimeOnly) {
-  lex::Lexer Lexer;
-  auto Library = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Library = Parser.parse(R"(
 module catalog;
 @meta pub class Descriptor {}
 @meta pub fn inspect() -> bool { return true; }
@@ -1526,34 +1466,62 @@ pub class Service {
 )");
   ASSERT_TRUE(Library.ok());
   const auto Reject = [&](std::string_view Source) {
-    auto Main = Lexer.parse(std::string(Source));
+    auto Main = Parser.parse(std::string(Source));
     EXPECT_TRUE(Main.ok());
     if (!Main.ok())
       return;
     sema::Sema Analysis;
-    EXPECT_FALSE(Analysis.CheckModules(
-        {{Main.root.get(), true}, {Library.root.get(), false}}));
+    EXPECT_FALSE(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}));
   };
-  Reject(
-      "module app; import catalog; class Store { value: catalog.Descriptor; }");
+  Reject("module app; import catalog; class Store { value: catalog.Descriptor; }");
   Reject("module app; import catalog; fn use() -> bool { return "
          "catalog.inspect(); }");
   Reject("module app; import catalog; fn use() -> bool { return "
          "catalog.Service().describe(); }");
-  auto Main =
-      Lexer.parse("module app; import catalog; fn use() -> bool { "
-                  "let service = catalog.Service(); return service.run(); }");
+  auto Main = Parser.parse("module app; import catalog; fn use() -> bool { "
+                           "let service = catalog.Service(); return service.run(); }");
   ASSERT_TRUE(Main.ok());
   sema::Sema Analysis;
-  EXPECT_TRUE(Analysis.CheckModules(
-      {{Main.root.get(), true}, {Library.root.get(), false}}));
+  EXPECT_TRUE(Analysis.CheckModules({{Main.root.get(), true}, {Library.root.get(), false}}));
 }
 
 TEST(Sema, MetaEntrypointIsRejected) {
-  lex::Lexer Lexer;
-  auto Source =
-      Lexer.parse("module app; @meta @main fn main() -> i32 { return 0; }");
+  lex::Parser Parser;
+  auto Source = Parser.parse("module app; @meta @main fn main() -> i32 { return 0; }");
   ASSERT_TRUE(Source.ok());
   sema::Sema Analysis;
   EXPECT_FALSE(Analysis.CheckModules({{Source.root.get(), true}}));
+}
+
+TEST(Sema, TargetSpecificLayout) {
+  struct Expectation {
+    const char *Triple;
+    unsigned PointerWidth, LongWidth, WCharWidth;
+    unsigned TextOffset, PointerOffset, Size;
+  };
+  for (const auto &Expected : {Expectation{"x86_64-pc-windows-msvc", 64, 32, 16, 4, 8, 16},
+                               Expectation{"x86_64-unknown-linux-gnu", 64, 64, 32, 8, 16, 24},
+                               Expectation{"i386-unknown-linux-gnu", 32, 32, 32, 4, 8, 12}}) {
+    SCOPED_TRACE(Expected.Triple);
+    auto Parsed = lex::Parser().parse(R"(
+@layout(Layout.C)
+class ABI {
+  pub value: c.long;
+  pub text: c.wchar;
+  pub pointer: *u8;
+}
+)");
+    ASSERT_TRUE(Parsed.ok());
+    sema::Sema Analysis(Expected.Triple);
+    ASSERT_TRUE(Analysis.Check(*Parsed.root));
+    EXPECT_EQ(Analysis.GetBitWidth({sema::BuiltinType::USize, {}}), Expected.PointerWidth);
+    EXPECT_EQ(Analysis.GetBitWidth({sema::BuiltinType::CLong, {}}), Expected.LongWidth);
+    EXPECT_EQ(Analysis.GetBitWidth({sema::BuiltinType::CWChar, {}}), Expected.WCharWidth);
+    const auto *Class = Analysis.GetClass("ABI");
+    ASSERT_NE(Class, nullptr);
+    EXPECT_EQ(Class->Fields[1].Offset, Expected.TextOffset);
+    EXPECT_EQ(Class->Fields[2].Offset, Expected.PointerOffset);
+    EXPECT_EQ(Class->Size, Expected.Size);
+  }
+  EXPECT_FALSE(sema::TargetLayout("invalid-target").IsValid());
 }

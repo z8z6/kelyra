@@ -1,4 +1,8 @@
-add_executable(kelyra_codegen_tests codegen_test.cpp)
+file(GLOB_RECURSE KELYRA_CODEGEN_TESTS_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
+)
+add_executable(kelyra_codegen_tests ${KELYRA_CODEGEN_TESTS_SOURCES})
 target_link_libraries(kelyra_codegen_tests PRIVATE
   kelyra_codegen
   kelyra_sema

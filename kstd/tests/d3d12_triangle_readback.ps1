@@ -10,11 +10,11 @@ $TestExe = Join-Path $OutputDirectory 'd3d12_triangle_readback.exe'
 
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $env:PATH = "$ClangDirectory;$env:PATH"
-& $Compiler --emit-dxil --shader-entry vertex_main "--module-path=$Root/src" "--module-path=$Root/examples" -o (Join-Path $OutputDirectory 'triangle.vs.dxil') $ShaderSource
+& $Compiler --emit-dxil --shader-entry vertex_main "--module-search-path=$Root/src" "--module-search-path=$Root/examples" -o (Join-Path $OutputDirectory 'triangle.vs.dxil') $ShaderSource
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $Compiler --emit-dxil --shader-entry fragment_main "--module-path=$Root/src" "--module-path=$Root/examples" -o (Join-Path $OutputDirectory 'triangle.ps.dxil') $ShaderSource
+& $Compiler --emit-dxil --shader-entry fragment_main "--module-search-path=$Root/src" "--module-search-path=$Root/examples" -o (Join-Path $OutputDirectory 'triangle.ps.dxil') $ShaderSource
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $Compiler --emit-exe "--module-path=$Root/src" -o $TestExe $TestSource
+& $Compiler --emit-exe "--module-search-path=$Root/src" -o $TestExe $TestSource
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Push-Location $Root
 try {

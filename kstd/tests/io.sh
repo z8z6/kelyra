@@ -15,7 +15,7 @@ mkdir -p "$root/build"
 # declares the std modules and resolves their definitions from the object.
 "$kelp" build
 "$compiler" --emit-exe \
-  --module-path="$root/src" --external-path="$root/src" \
+  --module-search-path="$root/src" --external-path="$root/src" \
   --link-input="$root/.kelp/build/kstd.o" \
   -o "$output" "$root/examples/io_example.kly"
 printf 'hello from input\n' | "$output" >"$stdout" 2>"$stderr"

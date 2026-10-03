@@ -1,5 +1,5 @@
-#include "Lexer/Formatter.h"
-#include "Lexer/Lexer.h"
+#include "Front/Lexer/Formatter.h"
+#include "Front/Parser/Parser.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -21,7 +21,7 @@ void Usage(std::ostream &Output) {
 bool IsPublic(const kelyra::lex::Node &Node) {
   return std::any_of(Node.children.begin(), Node.children.end(),
                      [](const auto &Part) {
-                       return Part->kind == kelyra::lex::TokenKind::ast_public;
+                       return Part->kind == kelyra::lex::NodeKind::ast_public;
                      });
 }
 
@@ -55,7 +55,7 @@ kelyra::lex::FormatSymbols
 CollectSymbols(const kelyra::lex::ParseResult &Parsed,
                const std::filesystem::path &File,
                const std::vector<std::filesystem::path> &ModulePaths) {
-  using K = kelyra::lex::TokenKind;
+  using K = kelyra::lex::NodeKind;
   kelyra::lex::FormatSymbols Result;
   Result.Complete = true;
   for (const auto &Child : Parsed.root->children)
@@ -76,7 +76,7 @@ CollectSymbols(const kelyra::lex::ParseResult &Parsed,
     if (!Input)
       return false;
     std::string Source((std::istreambuf_iterator<char>(Input)), {});
-    auto Module = kelyra::lex::Lexer().parse(std::move(Source), Path->string());
+    auto Module = kelyra::lex::Parser().parse(std::move(Source), Path->string());
     if (!Module.ok())
       return false;
     auto &Names = Result.Visible[Name];
@@ -148,7 +148,7 @@ int main(int Argc, char **Argv) {
       return 1;
     }
 
-    auto Parsed = kelyra::lex::Lexer().parse(Source, Path);
+    auto Parsed = kelyra::lex::Parser().parse(Source, Path);
     if (!Parsed.ok()) {
       for (const auto &Diagnostic : Parsed.diagnostics)
         std::cerr << Diagnostic << '\n';

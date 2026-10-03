@@ -23,7 +23,13 @@ mlir_tablegen(KelyraOps.cpp.inc -gen-op-defs
   EXTRA_INCLUDES ${KELYRA_TABLEGEN_INCLUDES})
 add_public_tablegen_target(KelyraOpsIncGen)
 
-add_library(kelyra_ir Kelyra.cpp)
+file(GLOB_RECURSE KELYRA_IR_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
+  "${PROJECT_SOURCE_DIR}/include/IR/*.h"
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.td"
+)
+add_library(kelyra_ir ${KELYRA_IR_SOURCES})
 add_dependencies(kelyra_ir KelyraOpsIncGen)
 if(NOT LLVM_ENABLE_RTTI)
   if(MSVC)

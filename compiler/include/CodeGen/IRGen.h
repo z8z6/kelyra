@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Lexer/Lexer.h"
-#include "Sema/Sema.h"
+#include "Front/AST/AST.h"
+#include "Front/Sema/Sema.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -9,9 +9,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Support/Error.h"
-#include <llvm/Support/CodeGen.h>
 
 #include <set>
 #include <string>
@@ -21,8 +18,6 @@
 #include <vector>
 
 namespace kelyra::codegen {
-enum class RuntimeMode { Host, Freestanding };
-
 class IRGen {
   struct Variable {
     sema::Type SemanticType;
@@ -58,22 +53,21 @@ class IRGen {
   const lex::Node *InlineConstructorBlock = nullptr;
   unsigned GlobalStringCount = 0;
   std::set<const lex::Node *> ExternalModules;
+  bool EmitExternalGenericInstances = true;
 
   mlir::Location GetLocation(const lex::Location &Loc);
   mlir::LLVM::DIFileAttr GetDebugFile(const lex::Location &Loc);
   mlir::LLVM::DITypeAttr GetDebugType(const sema::Type &Type);
   void BeginDebugFunction(mlir::Operation *Function, const lex::Node &Node);
-  void EmitDebugVariable(std::string_view Name, const lex::Location &Loc,
-                         const sema::Type &Type, mlir::Value Storage,
-                         unsigned Argument = 0, bool DirectValue = false);
+  void EmitDebugVariable(std::string_view Name, const lex::Location &Loc, const sema::Type &Type,
+                         mlir::Value Storage, unsigned Argument = 0, bool DirectValue = false);
   mlir::Type GetType(const sema::Type &Type);
   Variable *FindVariable(std::string_view Name);
   mlir::Value CreateAlloca(const sema::Type &Type, mlir::Location Loc);
   mlir::Value EmitAddress(const lex::Node &Expression);
   mlir::Value EmitSliceIndex(const lex::Node &Expression);
   void EmitSliceBoundsCheck(mlir::Value Valid, mlir::Location Loc);
-  std::pair<mlir::Value, mlir::Value>
-  EmitSliceParts(const lex::Node &Expression);
+  std::pair<mlir::Value, mlir::Value> EmitSliceParts(const lex::Node &Expression);
   mlir::Value EmitNameExpression(const lex::Node &Expression);
   mlir::Value EmitIndexExpression(const lex::Node &Expression);
   mlir::Value EmitSliceExpression(const lex::Node &Expression);
@@ -86,8 +80,7 @@ class IRGen {
   mlir::Value EmitBlockExpression(const lex::Node &Expression);
   mlir::Value EmitMatchExpression(const lex::Node &Expression);
   mlir::Value EmitExpression(const lex::Node &Expression);
-  mlir::Value EmitInterfaceConversion(const lex::Node &Expression,
-                                      mlir::Value Object,
+  mlir::Value EmitInterfaceConversion(const lex::Node &Expression, mlir::Value Object,
                                       const sema::ClassInfo &Interface);
   void EmitBlock(const lex::Node &Block);
   void EmitBlockStatement(const lex::Node &Statement);
@@ -103,65 +96,41 @@ class IRGen {
   void EmitWhileStatement(const lex::Node &Statement);
   void EmitForStatement(const lex::Node &Statement);
   void EmitStatement(const lex::Node &Statement);
-  void EmitFunction(const lex::Node &Function,
-                    const sema::ClassInfo *Owner = nullptr,
+  void EmitExternalDeclarations();
+  void EmitClass(const sema::ClassInfo &Class, bool DeclarationOnly, mlir::ModuleOp Output);
+  void EmitFunction(const lex::Node &Function, const sema::ClassInfo *Owner = nullptr,
                     bool DeclarationOnly = false);
   bool EmitOptionIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
                            bool DeclarationOnly);
   bool EmitReflectIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
                             bool DeclarationOnly);
-  bool EmitSliceIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
-                          bool DeclarationOnly);
-  void EmitReflectionGlobals(llvm::ArrayRef<const lex::Node *> Modules,
-                             mlir::ModuleOp Output);
+  bool EmitSliceIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func, bool DeclarationOnly);
+  void EmitReflectionGlobals(llvm::ArrayRef<const lex::Node *> Modules, mlir::ModuleOp Output);
   void EmitConstruction(const lex::Node &Expression, mlir::Value Address);
-  std::pair<mlir::Value, bool>
-  EmitClassSourceAddress(const lex::Node &Expression);
+  std::pair<mlir::Value, bool> EmitClassSourceAddress(const lex::Node &Expression);
   mlir::Value EmitClassArgument(const lex::Node &Expression);
   void EmitCleanups(std::size_t KeepDepth, mlir::Location Loc);
-  void EmitFieldDestructors(const sema::ClassInfo &Class, mlir::Value Address,
-                            mlir::Location Loc);
-  void EmitVirtualSlots(const sema::ClassInfo &Class, mlir::Value Address,
-                        mlir::Location Loc);
+  void EmitFieldDestructors(const sema::ClassInfo &Class, mlir::Value Address, mlir::Location Loc);
+  void EmitVirtualSlots(const sema::ClassInfo &Class, mlir::Value Address, mlir::Location Loc);
   void EmitDefaultConstructor(const sema::ClassInfo &Class);
   void EmitDefaultConstructorDeclaration(const sema::ClassInfo &Class);
   void EmitDefaultDestructor(const sema::ClassInfo &Class);
   void EmitDefaultDestructorDeclaration(const sema::ClassInfo &Class);
-  void EmitDefaultTransfer(const sema::ClassInfo &Class, bool Move,
-                           bool DeclarationOnly);
-  void EmitTransfer(const sema::ClassInfo &Class, mlir::Value Target,
-                    mlir::Value Source, bool Move, mlir::Location Loc);
-  mlir::Value FieldAddress(const sema::ClassInfo &Class, mlir::Value Address,
-                           std::size_t Index, mlir::Location Loc);
+  void EmitDefaultTransfer(const sema::ClassInfo &Class, bool Move, bool DeclarationOnly);
+  void EmitTransfer(const sema::ClassInfo &Class, mlir::Value Target, mlir::Value Source, bool Move,
+                    mlir::Location Loc);
+  mlir::Value FieldAddress(const sema::ClassInfo &Class, mlir::Value Address, std::size_t Index,
+                           mlir::Location Loc);
 
 public:
-  IRGen(mlir::MLIRContext &Context, const sema::Sema &Analysis,
-        unsigned SafeLevel = 0, bool DebugInfo = true);
+  IRGen(mlir::MLIRContext &Context, const sema::Sema &Analysis, unsigned SafeLevel = 0,
+        bool DebugInfo = true);
   // Modules in this set are provided by a linked library, so only their
   // declarations are emitted and their definitions are left to the linker.
-  void SetExternalModules(const std::set<const lex::Node *> &Modules) {
-    ExternalModules = Modules;
-  }
+  void SetExternalModules(const std::set<const lex::Node *> &Modules) { ExternalModules = Modules; }
+  void SetEmitExternalGenericInstances(bool Enabled) { EmitExternalGenericInstances = Enabled; }
   mlir::OwningOpRef<mlir::ModuleOp> Generate(const lex::Node &Module);
-  mlir::OwningOpRef<mlir::ModuleOp>
-  Generate(llvm::ArrayRef<const lex::Node *> Modules);
+  mlir::OwningOpRef<mlir::ModuleOp> Generate(llvm::ArrayRef<const lex::Node *> Modules);
 };
 
-llvm::Error
-EmitObject(mlir::ModuleOp Module, llvm::StringRef OutputPath,
-           llvm::CodeGenOptLevel OptLevel = llvm::CodeGenOptLevel::None,
-           llvm::StringRef CWrapperSource = {},
-           llvm::ArrayRef<std::string> CArguments = {},
-           llvm::ArrayRef<std::string> CSources = {},
-           llvm::StringRef TargetTriple = {},
-           RuntimeMode Runtime = RuntimeMode::Host);
-llvm::Error
-EmitExecutable(mlir::ModuleOp Module, llvm::StringRef OutputPath,
-               llvm::CodeGenOptLevel OptLevel = llvm::CodeGenOptLevel::None,
-               llvm::ArrayRef<std::string> CSources = {},
-               llvm::ArrayRef<std::string> CArguments = {},
-               llvm::StringRef CWrapperSource = {},
-               RuntimeMode Runtime = RuntimeMode::Host,
-               llvm::StringRef TargetTriple = {},
-               llvm::ArrayRef<std::string> Libraries = {});
 } // namespace kelyra::codegen

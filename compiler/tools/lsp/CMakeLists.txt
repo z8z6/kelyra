@@ -1,4 +1,8 @@
-add_executable(kelyra-ls main.cpp)
+file(GLOB_RECURSE KELYRA_LS_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
+)
+add_executable(kelyra-ls ${KELYRA_LS_SOURCES})
 target_compile_definitions(kelyra-ls PRIVATE
   KELYRA_STDLIB_SOURCE_DIR="${KELYRA_STDLIB_SOURCE_DIR}")
 target_include_directories(kelyra-ls SYSTEM PRIVATE

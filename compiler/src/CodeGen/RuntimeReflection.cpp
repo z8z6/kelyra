@@ -13,11 +13,9 @@ std::string TypeName(const sema::Type &Type) {
   if (Type.IsPointer())
     return "*" + TypeName(Type.Pointee());
   if (Type.IsArray())
-    return "[" + std::to_string(Type.ArrayLength()) + "]" +
-           TypeName(Type.Indexed());
+    return "[" + std::to_string(Type.ArrayLength()) + "]" + TypeName(Type.Indexed());
   if (Type.IsSlice())
-    return "[]" + std::string(Type.IsReadOnlySlice() ? "const " : "") +
-           TypeName(Type.Indexed());
+    return "[]" + std::string(Type.IsReadOnlySlice() ? "const " : "") + TypeName(Type.Indexed());
   if (Type.IsClass())
     return Type.ClassName;
   if (!Type.CName.empty())
@@ -61,8 +59,7 @@ std::string MakeBlob(const sema::Type &Type, const sema::ClassInfo *Class,
   std::uint32_t Count = 0;
   if (Class)
     for (const auto &Field : Class->Fields)
-      if (const auto Id = Reflection.GetId(*Field.Node);
-          Id && Reflection.Get(*Id).RuntimeReflected)
+      if (const auto Id = Reflection.GetId(*Field.Node); Id && Reflection.Get(*Id).RuntimeReflected)
         ++Count;
   std::string Bytes;
   AppendU32(Bytes, 0x46524c4b); // "KLRF" in little-endian order.
@@ -90,30 +87,33 @@ std::string MakeBlob(const sema::Type &Type, const sema::ClassInfo *Class,
   return Bytes;
 }
 
-mlir::LLVM::GlobalOp
-CreateBlobGlobal(mlir::OpBuilder &Builder, mlir::Location Loc,
-                 std::string_view Symbol, std::string_view Bytes, bool External,
-                 bool DeclarationOnly, bool Generic = false) {
-  auto Array = mlir::LLVM::LLVMArrayType::get(
-      Builder.getI8Type(), DeclarationOnly ? 1 : Bytes.size());
-  return mlir::LLVM::GlobalOp::create(
-      Builder, Loc, Array, true,
-      Generic    ? mlir::LLVM::Linkage::LinkonceODR
-      : External ? mlir::LLVM::Linkage::External
-                 : mlir::LLVM::Linkage::Private,
-      Symbol,
-      DeclarationOnly ? mlir::Attribute() : Builder.getStringAttr(Bytes), 1);
+mlir::LLVM::GlobalOp CreateBlobGlobal(mlir::OpBuilder &Builder, mlir::Location Loc,
+                                      std::string_view Symbol, std::string_view Bytes,
+                                      bool External, bool DeclarationOnly, bool Generic = false) {
+  auto Array =
+      mlir::LLVM::LLVMArrayType::get(Builder.getI8Type(), DeclarationOnly ? 1 : Bytes.size());
+  return mlir::LLVM::GlobalOp::create(Builder,
+                                      Loc,
+                                      Array,
+                                      true,
+                                      Generic    ? mlir::LLVM::Linkage::LinkonceODR
+                                      : External ? mlir::LLVM::Linkage::External
+                                                 : mlir::LLVM::Linkage::Private,
+                                      Symbol,
+                                      DeclarationOnly ? mlir::Attribute()
+                                                      : Builder.getStringAttr(Bytes),
+                                      1);
 }
 } // namespace
 
-void codegen::IRGen::EmitReflectionGlobals(
-    llvm::ArrayRef<const lex::Node *> Modules, mlir::ModuleOp Output) {
+void codegen::IRGen::EmitReflectionGlobals(llvm::ArrayRef<const lex::Node *> Modules,
+                                           mlir::ModuleOp Output) {
   mlir::OpBuilder GlobalBuilder(&Context);
   GlobalBuilder.setInsertionPointToStart(Output.getBody());
   for (const auto *Module : Modules) {
     const bool External = ExternalModules.count(Module) != 0;
     for (const auto &Child : Module->children) {
-      if (Child->kind != lex::TokenKind::ast_class)
+      if (Child->kind != lex::NodeKind::ast_class)
         continue;
       if (Analysis.IsMetaDeclaration(*Child))
         continue;
@@ -131,20 +131,22 @@ void codegen::IRGen::EmitReflectionGlobals(
       sema::Type Type{sema::BuiltinType::Class, {}};
       Type.ClassName = Class->QualifiedName;
       const auto Bytes = MakeBlob(Type, Class, Analysis.GetReflection());
-      CreateBlobGlobal(GlobalBuilder, GetLocation(Child->Loc),
+      CreateBlobGlobal(GlobalBuilder,
+                       GetLocation(Child->Loc),
                        "__kelyra_reflect_v1_" + Encode(Class->QualifiedName),
-                       Bytes, true, External && !Child->GenericInstance,
+                       Bytes,
+                       true,
+                       External && (!Child->GenericInstance || !EmitExternalGenericInstances),
                        Child->GenericInstance);
     }
   }
 }
 
-bool codegen::IRGen::EmitReflectIntrinsic(const lex::Node &Function,
-                                          mlir::func::FuncOp Func,
+bool codegen::IRGen::EmitReflectIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
                                           bool DeclarationOnly) {
   const auto Id = Analysis.GetReflection().GetId(Function);
-  if (!Id || !Analysis.GetReflection().Get(*Id).QualifiedName.starts_with(
-                 "std.reflect.__type_data__G"))
+  if (!Id ||
+      !Analysis.GetReflection().Get(*Id).QualifiedName.starts_with("std.reflect.__type_data__G"))
     return false;
   if (DeclarationOnly) {
     Func.setPrivate();
@@ -153,7 +155,7 @@ bool codegen::IRGen::EmitReflectIntrinsic(const lex::Node &Function,
   Func.setPrivate();
   const lex::Node *Parameter = nullptr;
   for (const auto &Child : Function.children)
-    if (Child->kind == lex::TokenKind::ast_parameter) {
+    if (Child->kind == lex::NodeKind::ast_parameter) {
       Parameter = Child.get();
       break;
     }
@@ -170,15 +172,15 @@ bool codegen::IRGen::EmitReflectIntrinsic(const lex::Node &Function,
     const auto Bytes = MakeBlob(Type, nullptr, Analysis.GetReflection());
     mlir::OpBuilder GlobalBuilder(&Context);
     GlobalBuilder.setInsertionPointToStart(Module.getBody());
-    Global = CreateBlobGlobal(GlobalBuilder, GetLocation(Function.Loc),
-                              LocalSymbol, Bytes, false, false);
+    Global = CreateBlobGlobal(
+        GlobalBuilder, GetLocation(Function.Loc), LocalSymbol, Bytes, false, false);
   }
   auto *Entry = Func.addEntryBlock();
   Builder.setInsertionPointToStart(Entry);
-  auto Pointer = mlir::LLVM::AddressOfOp::create(
-      Builder, GetLocation(Function.Loc),
-      mlir::LLVM::LLVMPointerType::get(&Context), Global.getSymNameAttr());
-  mlir::func::ReturnOp::create(Builder, GetLocation(Function.Loc),
-                               Pointer.getResult());
+  auto Pointer = mlir::LLVM::AddressOfOp::create(Builder,
+                                                 GetLocation(Function.Loc),
+                                                 mlir::LLVM::LLVMPointerType::get(&Context),
+                                                 Global.getSymNameAttr());
+  mlir::func::ReturnOp::create(Builder, GetLocation(Function.Loc), Pointer.getResult());
   return true;
 }

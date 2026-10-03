@@ -12,17 +12,15 @@ if (-not (Test-Path -LiteralPath $Compiler)) {
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
 foreach ($Target in @('dxil', 'spirv')) {
+    $Directory = Join-Path $OutputDirectory $Target
+    & $Compiler "--shader-format=$Target" "--module-search-path=$Root/src" -o $Directory $Source
+    if ($LASTEXITCODE -ne 0) { throw "Shader compilation failed: $Target" }
+    $Extension = if ($Target -eq 'spirv') { 'spv' } else { 'dxil' }
     foreach ($Stage in @('vertex', 'fragment')) {
-        $Entry = "${Stage}_main"
-        $Output = Join-Path $OutputDirectory "$Stage.$Target"
-        & $Compiler "--emit-$Target" "--shader-entry=$Entry" "--module-path=$Root/src" -o $Output $Source
-        if ($LASTEXITCODE -ne 0) {
-            throw "Shader compilation failed: $Entry to $Target"
-        }
+        $Suffix = if ($Stage -eq 'vertex') { 'vert' } else { 'frag' }
+        $Output = Join-Path $Directory "shader_lighting_example.${Stage}_main.$Suffix.$Extension"
         $Bytes = [System.IO.File]::ReadAllBytes($Output)
-        if ($Bytes.Length -lt 4) {
-            throw "Shader output is empty: $Output"
-        }
+        if ($Bytes.Length -lt 4) { throw "Shader output is empty: $Output" }
         if ($Target -eq 'spirv') {
             if ([BitConverter]::ToUInt32($Bytes, 0) -ne 0x07230203) {
                 throw "Output is not SPIR-V: $Output"

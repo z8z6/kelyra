@@ -3,6 +3,15 @@ module shader_lighting_example;
 import std.graphics;
 import std.graphics.shader.lighting;
 
+pub class FragmentOutput {
+  @location(0)
+  pub color: Vec4;
+
+  pub init(color: Vec4) {
+    this.color = color;
+  }
+}
+
 pub class VertexOutput {
   @position
   pub position: Vec4;
@@ -12,13 +21,10 @@ pub class VertexOutput {
   }
 }
 
-pub class FragmentOutput {
-  @location(0)
-  pub color: Vec4;
-
-  pub init(color: Vec4) {
-    this.color = color;
-  }
+@fragment
+pub fn fragment_main() -> FragmentOutput {
+  let lit = phong_color(Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0), Vec3(0.05, 0.05, 0.05), Vec3(0.7, 0.3, 0.2), Vec3(0.2, 0.2, 0.2), 16.0);
+  return FragmentOutput(Vec4(lit.x, lit.y, lit.z, 1.0));
 }
 
 @vertex
@@ -30,12 +36,4 @@ pub fn vertex_main(@vertex_index index: u32) -> VertexOutput {
     return VertexOutput(Vec4(0.7, -0.6, 0.0, 1.0));
   }
   return VertexOutput(Vec4(0.0, 0.7, 0.0, 1.0));
-}
-
-@fragment
-pub fn fragment_main() -> FragmentOutput {
-  let lit = phong_color(Vec3(0.0, 0.0, 1.0), Vec3(0.0, 0.0, 1.0),
-                        Vec3(0.0, 0.0, 1.0), Vec3(0.05, 0.05, 0.05),
-                        Vec3(0.7, 0.3, 0.2), Vec3(0.2, 0.2, 0.2), 16.0);
-  return FragmentOutput(Vec4(lit.x, lit.y, lit.z, 1.0));
 }

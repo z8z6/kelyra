@@ -7,6 +7,6 @@ output=$(mktemp)
 trap 'rm -f "$output"' EXIT HUP INT TERM
 
 "$compiler" --emit-exe --runtime=freestanding \
-  --module-path="$root/src" -o "$output" \
+  --module-search-path="$root/src" -o "$output" \
   "$root/examples/thread_signal_example.kly"
 "$output"

@@ -7,11 +7,17 @@
 using namespace kelyra;
 namespace di = mlir::LLVM;
 
+mlir::Location codegen::IRGen::GetLocation(const lex::Location &Loc) {
+  mlir::Location Result = mlir::FileLineColLoc::get(
+      &Context, Loc.File.empty() ? "<unknown>" : Loc.File, Loc.Line, Loc.Column);
+  return DebugScope ? mlir::FusedLoc::get(&Context, {Result}, DebugScope) : Result;
+}
+
 di::DIFileAttr codegen::IRGen::GetDebugFile(const lex::Location &Loc) {
   llvm::SmallString<256> Path(Loc.File.empty() ? "<unknown>" : Loc.File);
   llvm::sys::fs::make_absolute(Path);
-  return di::DIFileAttr::get(&Context, llvm::sys::path::filename(Path),
-                             llvm::sys::path::parent_path(Path));
+  return di::DIFileAttr::get(
+      &Context, llvm::sys::path::filename(Path), llvm::sys::path::parent_path(Path));
 }
 
 di::DITypeAttr codegen::IRGen::GetDebugType(const sema::Type &Type) {
@@ -19,103 +25,218 @@ di::DITypeAttr codegen::IRGen::GetDebugType(const sema::Type &Type) {
   if (Type.IsVoid() || Type.IsResults())
     return di::DINullTypeAttr::get(&Context);
   if (Type.IsSlice()) {
-    auto ElementPointer = di::DIDerivedTypeAttr::get(
-        &Context, DW_TAG_pointer_type, {}, {}, 0, {},
-        GetDebugType(Type.Indexed()), sizeof(void *) * 8, alignof(void *) * 8,
-        0, std::nullopt, di::DIFlags::Zero, {});
-    auto LengthType = di::DIBasicTypeAttr::get(
-        &Context, DW_TAG_base_type, Builder.getStringAttr("usize"),
-        sizeof(std::size_t) * 8, DW_ATE_unsigned);
+    auto ElementPointer =
+        di::DIDerivedTypeAttr::get(&Context,
+                                   DW_TAG_pointer_type,
+                                   {},
+                                   {},
+                                   0,
+                                   {},
+                                   GetDebugType(Type.Indexed()),
+                                   Analysis.GetTargetLayout().GetPointerBitWidth(),
+                                   Analysis.GetTargetLayout().GetPointerAlignment() * 8,
+                                   0,
+                                   std::nullopt,
+                                   di::DIFlags::Zero,
+                                   {});
+    auto LengthType = di::DIBasicTypeAttr::get(&Context,
+                                               DW_TAG_base_type,
+                                               Builder.getStringAttr("usize"),
+                                               Analysis.GetTargetLayout().GetPointerBitWidth(),
+                                               DW_ATE_unsigned);
     llvm::SmallVector<di::DINodeAttr> Fields;
-    Fields.push_back(di::DIDerivedTypeAttr::get(
-        &Context, DW_TAG_member, Builder.getStringAttr("data"), {}, 0, {},
-        ElementPointer, sizeof(void *) * 8, alignof(void *) * 8, 0,
-        std::nullopt, di::DIFlags::Zero, {}));
-    Fields.push_back(di::DIDerivedTypeAttr::get(
-        &Context, DW_TAG_member, Builder.getStringAttr("len"), {}, 0, {},
-        LengthType, sizeof(std::size_t) * 8, alignof(std::size_t) * 8,
-        sizeof(void *) * 8, std::nullopt, di::DIFlags::Zero, {}));
-    return di::DICompositeTypeAttr::get(
-        &Context, DW_TAG_structure_type, Builder.getStringAttr("slice"), {}, 0,
-        {}, {}, di::DIFlags::Zero, (sizeof(void *) + sizeof(std::size_t)) * 8,
-        alignof(void *) * 8, {}, {}, {}, {}, {}, {}, Fields);
+    Fields.push_back(
+        di::DIDerivedTypeAttr::get(&Context,
+                                   DW_TAG_member,
+                                   Builder.getStringAttr("data"),
+                                   {},
+                                   0,
+                                   {},
+                                   ElementPointer,
+                                   Analysis.GetTargetLayout().GetPointerBitWidth(),
+                                   Analysis.GetTargetLayout().GetPointerAlignment() * 8,
+                                   0,
+                                   std::nullopt,
+                                   di::DIFlags::Zero,
+                                   {}));
+    Fields.push_back(
+        di::DIDerivedTypeAttr::get(&Context,
+                                   DW_TAG_member,
+                                   Builder.getStringAttr("len"),
+                                   {},
+                                   0,
+                                   {},
+                                   LengthType,
+                                   Analysis.GetTargetLayout().GetPointerBitWidth(),
+                                   Analysis.GetTargetLayout().GetPointerAlignment() * 8,
+                                   Analysis.GetTargetLayout().GetPointerBitWidth(),
+                                   std::nullopt,
+                                   di::DIFlags::Zero,
+                                   {}));
+    return di::DICompositeTypeAttr::get(&Context,
+                                        DW_TAG_structure_type,
+                                        Builder.getStringAttr("slice"),
+                                        {},
+                                        0,
+                                        {},
+                                        {},
+                                        di::DIFlags::Zero,
+                                        Analysis.GetTargetLayout().GetPointerBitWidth() * 2,
+                                        Analysis.GetTargetLayout().GetPointerAlignment() * 8,
+                                        {},
+                                        {},
+                                        {},
+                                        {},
+                                        {},
+                                        {},
+                                        Fields);
   }
   if (Type.IsArray()) {
-    llvm::SmallVector<di::DINodeAttr> Bounds{di::DISubrangeAttr::get(
-        &Context, Builder.getI64IntegerAttr(Type.ArrayLength()),
-        Builder.getI64IntegerAttr(0), {}, {})};
-    return di::DICompositeTypeAttr::get(&Context, DW_TAG_array_type, {}, {}, 0,
-                                        {}, GetDebugType(Type.Indexed()),
-                                        di::DIFlags::Zero, 0, 0, {}, {}, {}, {},
-                                        {}, {}, Bounds);
+    llvm::SmallVector<di::DINodeAttr> Bounds{
+        di::DISubrangeAttr::get(&Context,
+                                Builder.getI64IntegerAttr(Type.ArrayLength()),
+                                Builder.getI64IntegerAttr(0),
+                                {},
+                                {})};
+    return di::DICompositeTypeAttr::get(&Context,
+                                        DW_TAG_array_type,
+                                        {},
+                                        {},
+                                        0,
+                                        {},
+                                        GetDebugType(Type.Indexed()),
+                                        di::DIFlags::Zero,
+                                        0,
+                                        0,
+                                        {},
+                                        {},
+                                        {},
+                                        {},
+                                        {},
+                                        {},
+                                        Bounds);
   }
   if (Type.IsPointer()) {
     auto Pointee = Type.Pointee();
-    return di::DIDerivedTypeAttr::get(&Context, DW_TAG_pointer_type, {}, {}, 0,
-                                      {}, GetDebugType(Pointee),
-                                      sizeof(void *) * 8, alignof(void *) * 8,
-                                      0, std::nullopt, di::DIFlags::Zero, {});
+    return di::DIDerivedTypeAttr::get(&Context,
+                                      DW_TAG_pointer_type,
+                                      {},
+                                      {},
+                                      0,
+                                      {},
+                                      GetDebugType(Pointee),
+                                      Analysis.GetTargetLayout().GetPointerBitWidth(),
+                                      Analysis.GetTargetLayout().GetPointerAlignment() * 8,
+                                      0,
+                                      std::nullopt,
+                                      di::DIFlags::Zero,
+                                      {});
   }
   if (Type.IsFunction()) {
     llvm::SmallVector<di::DITypeAttr> Types{GetDebugType(Type.Results.front())};
     for (const auto &Parameter : Type.Parameters)
       Types.push_back(GetDebugType(Parameter));
-    auto Signature =
-        di::DISubroutineTypeAttr::get(&Context, DW_CC_normal, Types);
-    return di::DIDerivedTypeAttr::get(&Context, DW_TAG_pointer_type, {}, {}, 0,
-                                      {}, Signature, sizeof(void *) * 8,
-                                      alignof(void *) * 8, 0, std::nullopt,
-                                      di::DIFlags::Zero, {});
+    auto Signature = di::DISubroutineTypeAttr::get(&Context, DW_CC_normal, Types);
+    return di::DIDerivedTypeAttr::get(&Context,
+                                      DW_TAG_pointer_type,
+                                      {},
+                                      {},
+                                      0,
+                                      {},
+                                      Signature,
+                                      Analysis.GetTargetLayout().GetPointerBitWidth(),
+                                      Analysis.GetTargetLayout().GetPointerAlignment() * 8,
+                                      0,
+                                      std::nullopt,
+                                      di::DIFlags::Zero,
+                                      {});
   }
   if (Type.IsClass()) {
-    if (const auto Found = DebugClasses.find(Type.ClassName);
-        Found != DebugClasses.end())
+    if (const auto Found = DebugClasses.find(Type.ClassName); Found != DebugClasses.end())
       return Found->second;
     const auto &Class = *Analysis.GetClass(Type);
     auto RecId = mlir::DistinctAttr::create(Builder.getUnitAttr());
-    auto Self =
-        mlir::cast<di::DITypeAttr>(di::DICompositeTypeAttr::getRecSelf(RecId));
+    auto Self = mlir::cast<di::DITypeAttr>(di::DICompositeTypeAttr::getRecSelf(RecId));
     DebugClasses.emplace(Type.ClassName, Self);
     llvm::SmallVector<di::DINodeAttr> Fields;
     for (const auto &Field : Class.Fields) {
       auto FieldType = GetDebugType(Field.Value);
-      Fields.push_back(di::DIDerivedTypeAttr::get(
-          &Context, DW_TAG_member, Builder.getStringAttr(Field.Name),
-          GetDebugFile(Field.Node->Loc), Field.Node->Loc.Line, {}, FieldType, 0,
-          0, Field.Offset * 8, std::nullopt, di::DIFlags::Zero, {}));
+      Fields.push_back(di::DIDerivedTypeAttr::get(&Context,
+                                                  DW_TAG_member,
+                                                  Builder.getStringAttr(Field.Name),
+                                                  GetDebugFile(Field.Node->Loc),
+                                                  Field.Node->Loc.Line,
+                                                  {},
+                                                  FieldType,
+                                                  0,
+                                                  0,
+                                                  Field.Offset * 8,
+                                                  std::nullopt,
+                                                  di::DIFlags::Zero,
+                                                  {}));
     }
-    auto Result = di::DICompositeTypeAttr::get(
-        &Context, RecId, false, DW_TAG_structure_type,
-        Builder.getStringAttr(Class.QualifiedName),
-        GetDebugFile(Class.Node->Loc), Class.Node->Loc.Line, {}, {},
-        di::DIFlags::Zero, Class.Size * 8, Class.Alignment * 8, {}, {}, {}, {},
-        {}, {}, Fields);
+    auto Result = di::DICompositeTypeAttr::get(&Context,
+                                               RecId,
+                                               false,
+                                               DW_TAG_structure_type,
+                                               Builder.getStringAttr(Class.QualifiedName),
+                                               GetDebugFile(Class.Node->Loc),
+                                               Class.Node->Loc.Line,
+                                               {},
+                                               {},
+                                               di::DIFlags::Zero,
+                                               Class.Size * 8,
+                                               Class.Alignment * 8,
+                                               {},
+                                               {},
+                                               {},
+                                               {},
+                                               {},
+                                               {},
+                                               Fields);
     DebugClasses[Type.ClassName] = Result;
     return Result;
   }
   if (Type.IsRecord())
-    return di::DICompositeTypeAttr::get(
-        &Context, DW_TAG_structure_type, Builder.getStringAttr(Type.CName), {},
-        0, {}, {}, di::DIFlags::FwdDecl, sema::GetBitWidth(Type),
-        Type.Alignment * 8, {}, {}, {}, {}, {}, {}, {});
+    return di::DICompositeTypeAttr::get(&Context,
+                                        DW_TAG_structure_type,
+                                        Builder.getStringAttr(Type.CName),
+                                        {},
+                                        0,
+                                        {},
+                                        {},
+                                        di::DIFlags::FwdDecl,
+                                        Analysis.GetBitWidth(Type),
+                                        Type.Alignment * 8,
+                                        {},
+                                        {},
+                                        {},
+                                        {},
+                                        {},
+                                        {},
+                                        {});
   const auto &Info = sema::GetBuiltinTypeInfo(Type.Element);
   const auto Encoding = sema::IsFloat(Type.Element)           ? DW_ATE_float
                         : Info.Class == sema::TypeClass::Bool ? DW_ATE_boolean
                         : sema::IsSignedInteger(Type.Element) ? DW_ATE_signed
                                                               : DW_ATE_unsigned;
-  return di::DIBasicTypeAttr::get(
-      &Context, DW_TAG_base_type, Builder.getStringAttr(Info.Name),
-      std::max(8u, sema::GetBitWidth(Type)), Encoding);
+  return di::DIBasicTypeAttr::get(&Context,
+                                  DW_TAG_base_type,
+                                  Builder.getStringAttr(Info.Name),
+                                  std::max(8u, Analysis.GetBitWidth(Type)),
+                                  Encoding);
 }
 
-void codegen::IRGen::BeginDebugFunction(mlir::Operation *Function,
-                                        const lex::Node &Node) {
+void codegen::IRGen::BeginDebugFunction(mlir::Operation *Function, const lex::Node &Node) {
   if (!DebugInfo)
     return;
   auto File = GetDebugFile(Node.Loc);
-  auto Unit = di::DICompileUnitAttr::get(
-      mlir::DistinctAttr::create(Builder.getUnitAttr()), llvm::dwarf::DW_LANG_C,
-      File, Builder.getStringAttr("Kelyra"), false, di::DIEmissionKind::Full);
+  auto Unit = di::DICompileUnitAttr::get(mlir::DistinctAttr::create(Builder.getUnitAttr()),
+                                         llvm::dwarf::DW_LANG_C,
+                                         File,
+                                         Builder.getStringAttr("Kelyra"),
+                                         false,
+                                         di::DIEmissionKind::Full);
   llvm::SmallVector<di::DITypeAttr> Types{GetDebugType(Analysis.GetType(Node))};
   if (CurrentClass) {
     sema::Type Receiver{sema::BuiltinType::Class, {}};
@@ -124,34 +245,43 @@ void codegen::IRGen::BeginDebugFunction(mlir::Operation *Function,
     Types.push_back(GetDebugType(Receiver));
   }
   for (const auto &Child : Node.children)
-    if (Child->kind == lex::TokenKind::ast_parameter)
+    if (Child->kind == lex::NodeKind::ast_parameter)
       Types.push_back(GetDebugType(Analysis.GetType(*Child)));
-  auto Signature =
-      di::DISubroutineTypeAttr::get(&Context, llvm::dwarf::DW_CC_normal, Types);
-  auto Scope = di::DISubprogramAttr::get(
-      &Context, mlir::DistinctAttr::create(Builder.getUnitAttr()), Unit, File,
-      Builder.getStringAttr(Node.text),
-      Builder.getStringAttr(Analysis.GetSymbol(Node)), File, Node.Loc.Line,
-      Node.Loc.Line, di::DISubprogramFlags::Definition, Signature, {}, {});
+  auto Signature = di::DISubroutineTypeAttr::get(&Context, llvm::dwarf::DW_CC_normal, Types);
+  auto Scope = di::DISubprogramAttr::get(&Context,
+                                         mlir::DistinctAttr::create(Builder.getUnitAttr()),
+                                         Unit,
+                                         File,
+                                         Builder.getStringAttr(Node.text),
+                                         Builder.getStringAttr(Analysis.GetSymbol(Node)),
+                                         File,
+                                         Node.Loc.Line,
+                                         Node.Loc.Line,
+                                         di::DISubprogramFlags::Definition,
+                                         Signature,
+                                         {},
+                                         {});
   Function->setLoc(mlir::FusedLoc::get(&Context, {Function->getLoc()}, Scope));
   DebugScope = Scope;
 }
 
-void codegen::IRGen::EmitDebugVariable(std::string_view Name,
-                                       const lex::Location &Loc,
-                                       const sema::Type &Type,
-                                       mlir::Value Storage, unsigned Argument,
-                                       bool DirectValue) {
+void codegen::IRGen::EmitDebugVariable(std::string_view Name, const lex::Location &Loc,
+                                       const sema::Type &Type, mlir::Value Storage,
+                                       unsigned Argument, bool DirectValue) {
   if (!DebugScope || !di::isCompatibleType(Storage.getType()))
     return;
-  auto Variable = di::DILocalVariableAttr::get(
-      &Context, DebugScope, Builder.getStringAttr(Name), GetDebugFile(Loc),
-      Loc.Line, Argument, 0, GetDebugType(Type), di::DIFlags::Zero);
+  auto Variable = di::DILocalVariableAttr::get(&Context,
+                                               DebugScope,
+                                               Builder.getStringAttr(Name),
+                                               GetDebugFile(Loc),
+                                               Loc.Line,
+                                               Argument,
+                                               0,
+                                               GetDebugType(Type),
+                                               di::DIFlags::Zero);
   auto Expression = di::DIExpressionAttr::get(&Context, {});
   if (DirectValue)
-    di::DbgValueOp::create(Builder, GetLocation(Loc), Storage, Variable,
-                           Expression);
+    di::DbgValueOp::create(Builder, GetLocation(Loc), Storage, Variable, Expression);
   else
-    di::DbgDeclareOp::create(Builder, GetLocation(Loc), Storage, Variable,
-                             Expression);
+    di::DbgDeclareOp::create(Builder, GetLocation(Loc), Storage, Variable, Expression);
 }

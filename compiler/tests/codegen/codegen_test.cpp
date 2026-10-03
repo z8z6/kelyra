@@ -1,6 +1,6 @@
 #include "CodeGen/IRGen.h"
-#include "Lexer/Lexer.h"
-#include "Sema/Sema.h"
+#include "Front/Parser/Parser.h"
+#include "Front/Sema/Sema.h"
 
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
@@ -13,7 +13,7 @@
 using namespace kelyra;
 
 TEST(IRGen, LocalVariableDebugMetadata) {
-  auto Parsed = lex::Lexer().parse(
+  auto Parsed = lex::Parser().parse(
       "fn inspect(parameter: i32) -> i32 { let value = parameter; "
       "{ let value = 9; } return value; }",
       "debug.kly");
@@ -38,7 +38,7 @@ TEST(IRGen, LocalVariableDebugMetadata) {
 }
 
 TEST(IRGen, MultipleReturnsAndClassCleanup) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 class Resource { init() {} deinit() {} }
 fn done() -> void { return; }
 fn pair() -> (i32, bool) { let resource = Resource(); return 42, true; }
@@ -69,8 +69,8 @@ fn use() { let (value, ok) = factory()(); done(); }
 }
 
 TEST(IRGen, IntegerFunction) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(
       "fn calculate(a: i32, b: i32) -> i32 { return a + b * 2; }", "test.kly");
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
@@ -94,7 +94,7 @@ TEST(IRGen, IntegerFunction) {
 }
 
 TEST(IRGen, OverloadedFunctionsHaveDistinctSymbols) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 fn choose(value: i32) -> i32 { return value; }
 fn choose(value: f32) -> f32 { return value; }
 fn integer(value: i32) -> i32 { return choose(value); }
@@ -122,8 +122,8 @@ fn floating(value: f32) -> f32 { return choose(value); }
 }
 
 TEST(IRGen, UserAnnotationMetadataDoesNotChangeLowering) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 @target(Target.Function)
 annotation route(path: std.util.string.StringSlice);
 @route("/")
@@ -147,8 +147,8 @@ fn handler() -> i32 { return 0; }
 }
 
 TEST(IRGen, WhenEmitsOnlySelectedBranch) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 fn choose() -> i32 {
   when false { return 99; } else { return 7; }
 }
@@ -171,8 +171,8 @@ fn choose() -> i32 {
 }
 
 TEST(IRGen, RejectUnknownName) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(
       "fn calculate(a: i32) -> i32 { return missing + a; }", "test.kly");
   ASSERT_TRUE(Parsed.ok());
   sema::Sema Analysis;
@@ -183,8 +183,8 @@ TEST(IRGen, RejectUnknownName) {
 }
 
 TEST(IRGen, BuiltinTypeSignatures) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 fn id_i8(x: i8) -> i8 { return x; }
 fn id_i16(x: i16) -> i16 { return x; }
 fn id_i32(x: i32) -> i32 { return x; }
@@ -240,8 +240,8 @@ fn id_char(x: char) -> char { return x; }
 }
 
 TEST(IRGen, TypedArithmeticAndLiterals) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 fn half(x: u16) -> u16 { return x / 2; }
 fn offset(x: f32) -> f32 { return x + 1.5; }
 fn enabled() -> bool { return true; }
@@ -265,8 +265,8 @@ fn maximum() -> u128 { return 340282366920938463463374607431768211455; }
 }
 
 TEST(IRGen, MultidimensionalArrayAndControlFlow) {
-  lex::Lexer Lexer;
-  auto Parsed = Lexer.parse(R"(
+  lex::Parser Parser;
+  auto Parsed = Parser.parse(R"(
 fn get() -> i32 {
   let values: [2][3]i32;
   let i = 0;
@@ -306,7 +306,7 @@ fn get() -> i32 {
 }
 
 TEST(IRGen, PointerToArrayAndArrayOfPointers) {
-  auto Parsed = lex::Lexer().parse(R"(
+  auto Parsed = lex::Parser().parse(R"(
 fn get() -> i32 {
   let values: [2]i32;
   let whole: *[2]i32 = &values;

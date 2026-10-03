@@ -47,51 +47,33 @@ if(MSVC)
 endif()
 
 add_subdirectory(src/IR)
-
-add_library(kelyra_frontend
-        src/Lexer/Diagnostic.cpp
-        src/Lexer/Formatter.cpp
-        src/Lexer/Lexer.cpp
-        src/Lexer/Token.cpp
-        include/Lexer/Diagnostic.h
-        include/Lexer/Token.h
-)
-target_include_directories(kelyra_frontend PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-
-add_subdirectory(src/Sema)
-add_subdirectory(src/CImport)
+add_subdirectory(src/Front)
 add_subdirectory(src/CodeGen)
+add_subdirectory(src/Shader)
 
-add_executable(kelyra
-  src/main.cpp
-  src/Driver/Command.cpp
-  src/Driver/Input.cpp
-  src/Driver/CImport.cpp
-  src/Driver/Analysis.cpp
-  src/Driver/Emit.cpp
-  src/Driver/Shader.cpp
-  src/Driver/DirectSpirv.cpp
-  src/Driver/DirectDxil.cpp
-  src/Driver/DxilValidator.cpp
-  src/Driver/Generics.cpp
-  src/Driver/ModuleLoader.cpp)
+file(GLOB KELYRA_ENTRY_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
+set(KELYRA_COMPILER_SOURCES)
+foreach(Module IN ITEMS Support Front/Module Front/Expansion)
+  file(GLOB_RECURSE ModuleSources CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/${Module}/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/${Module}/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/${Module}/*.h"
+  )
+  list(APPEND KELYRA_COMPILER_SOURCES ${ModuleSources})
+endforeach()
+add_executable(kelyra ${KELYRA_ENTRY_SOURCES} ${KELYRA_COMPILER_SOURCES})
 target_compile_definitions(kelyra PRIVATE
   KELYRA_STDLIB_SOURCE_DIR="${KELYRA_STDLIB_SOURCE_DIR}")
 target_include_directories(kelyra PRIVATE "${PROJECT_BINARY_DIR}/generated")
 target_link_libraries(kelyra PRIVATE
   kelyra_codegen
+  kelyra_shader
   kelyra_cimport
   kelyra_frontend
   kelyra_ir
   kelyra_sema
-  MLIRFuncDialect
-  MLIRSPIRVDialect
-  MLIRSPIRVSerialization
-  MLIRParser
-  LLVMDirectXCodeGen
-  LLVMDirectXDesc
-  LLVMDirectXInfo
-  LLVMDirectXIRPasses
 )
 if(TARGET clang)
   add_dependencies(kelyra clang)

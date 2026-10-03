@@ -6,8 +6,7 @@
 
 using namespace kelyra;
 
-bool codegen::IRGen::EmitOptionIntrinsic(const lex::Node &Function,
-                                         mlir::func::FuncOp Func,
+bool codegen::IRGen::EmitOptionIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
                                          bool DeclarationOnly) {
   const auto Id = Analysis.GetReflection().GetId(Function);
   if (!Id)
@@ -28,8 +27,7 @@ bool codegen::IRGen::EmitOptionIntrinsic(const lex::Node &Function,
   const bool RawMove = Name.starts_with("std.memory.init_move__G");
   const bool RawAccess = Name.starts_with("std.memory.assume_init__G");
   const bool RawDrop = Name.starts_with("std.memory.drop_init__G");
-  if (!Size && !Copy && !InitDefault && !Drop && !RawCopy && !RawMove &&
-      !RawAccess && !RawDrop)
+  if (!Size && !Copy && !InitDefault && !Drop && !RawCopy && !RawMove && !RawAccess && !RawDrop)
     return false;
   if (DeclarationOnly) {
     Func.setPrivate();
@@ -41,7 +39,7 @@ bool codegen::IRGen::EmitOptionIntrinsic(const lex::Node &Function,
   Builder.setInsertionPointToStart(Entry);
   const lex::Node *Parameter = nullptr;
   for (const auto &Child : Function.children)
-    if (Child->kind == lex::TokenKind::ast_parameter) {
+    if (Child->kind == lex::NodeKind::ast_parameter) {
       Parameter = Child.get();
       break;
     }
@@ -49,24 +47,24 @@ bool codegen::IRGen::EmitOptionIntrinsic(const lex::Node &Function,
   auto Type = Analysis.GetType(*Parameter).Pointee();
   if (RawCopy || RawMove || RawAccess || RawDrop) {
     const auto *Raw = Analysis.GetClass(Type);
-    assert(Raw && Raw->RawStorage && Raw->Fields.size() == 1 &&
-           "raw intrinsic needs Raw<T>");
+    assert(Raw && Raw->RawStorage && Raw->Fields.size() == 1 && "raw intrinsic needs Raw<T>");
     Type = Raw->Fields.front().Value;
     if (RawAccess) {
       mlir::func::ReturnOp::create(Builder, Loc, Entry->getArgument(0));
     } else if (RawDrop) {
       if (Type.IsClass())
-        mlir::func::CallOp::create(
-            Builder, Loc, Analysis.GetClass(Type)->DestructorSymbol,
-            mlir::TypeRange{}, mlir::ValueRange{Entry->getArgument(0)});
+        mlir::func::CallOp::create(Builder,
+                                   Loc,
+                                   Analysis.GetClass(Type)->DestructorSymbol,
+                                   mlir::TypeRange{},
+                                   mlir::ValueRange{Entry->getArgument(0)});
       mlir::func::ReturnOp::create(Builder, Loc);
     } else {
       if (Type.IsClass())
-        EmitTransfer(*Analysis.GetClass(Type), Entry->getArgument(0),
-                     Entry->getArgument(1), RawMove, Loc);
+        EmitTransfer(
+            *Analysis.GetClass(Type), Entry->getArgument(0), Entry->getArgument(1), RawMove, Loc);
       else {
-        auto Value = mlir::LLVM::LoadOp::create(Builder, Loc, GetType(Type),
-                                                Entry->getArgument(1));
+        auto Value = mlir::LLVM::LoadOp::create(Builder, Loc, GetType(Type), Entry->getArgument(1));
         mlir::LLVM::StoreOp::create(Builder, Loc, Value, Entry->getArgument(0));
       }
       mlir::func::ReturnOp::create(Builder, Loc);
@@ -84,38 +82,41 @@ bool codegen::IRGen::EmitOptionIntrinsic(const lex::Node &Function,
         Count *= Element.ArrayLength();
         Element = Element.Indexed();
       }
-      Bytes = Count * (sema::GetBitWidth(Element) + 7) / 8;
+      Bytes = Count * (Analysis.GetBitWidth(Element) + 7) / 8;
     } else
-      Bytes = (sema::GetBitWidth(Type) + 7) / 8;
-    auto Value = mlir::arith::ConstantIntOp::create(Builder, Loc, Bytes, 64);
+      Bytes = (Analysis.GetBitWidth(Type) + 7) / 8;
+    auto Value = mlir::arith::ConstantIntOp::create(
+        Builder, Loc, Bytes, Analysis.GetTargetLayout().GetPointerBitWidth());
     mlir::func::ReturnOp::create(Builder, Loc, Value.getResult());
   } else if (InitDefault) {
-    mlir::func::CallOp::create(
-        Builder, Loc, Analysis.GetClass(Type)->ConstructorSymbol,
-        mlir::TypeRange{}, mlir::ValueRange{Entry->getArgument(0)});
+    mlir::func::CallOp::create(Builder,
+                               Loc,
+                               Analysis.GetClass(Type)->ConstructorSymbol,
+                               mlir::TypeRange{},
+                               mlir::ValueRange{Entry->getArgument(0)});
     mlir::func::ReturnOp::create(Builder, Loc);
   } else if (Copy) {
     if (Type.IsClass())
-      EmitTransfer(*Analysis.GetClass(Type), Entry->getArgument(0),
-                   Entry->getArgument(1), false, Loc);
+      EmitTransfer(
+          *Analysis.GetClass(Type), Entry->getArgument(0), Entry->getArgument(1), false, Loc);
     else {
-      auto Value = mlir::LLVM::LoadOp::create(Builder, Loc, GetType(Type),
-                                              Entry->getArgument(1));
+      auto Value = mlir::LLVM::LoadOp::create(Builder, Loc, GetType(Type), Entry->getArgument(1));
       mlir::LLVM::StoreOp::create(Builder, Loc, Value, Entry->getArgument(0));
     }
     mlir::func::ReturnOp::create(Builder, Loc);
   } else {
     if (Type.IsClass())
-      mlir::func::CallOp::create(
-          Builder, Loc, Analysis.GetClass(Type)->DestructorSymbol,
-          mlir::TypeRange{}, mlir::ValueRange{Entry->getArgument(0)});
+      mlir::func::CallOp::create(Builder,
+                                 Loc,
+                                 Analysis.GetClass(Type)->DestructorSymbol,
+                                 mlir::TypeRange{},
+                                 mlir::ValueRange{Entry->getArgument(0)});
     mlir::func::ReturnOp::create(Builder, Loc);
   }
   return true;
 }
 
-bool codegen::IRGen::EmitSliceIntrinsic(const lex::Node &Function,
-                                        mlir::func::FuncOp Func,
+bool codegen::IRGen::EmitSliceIntrinsic(const lex::Node &Function, mlir::func::FuncOp Func,
                                         bool DeclarationOnly) {
   const auto Id = Analysis.GetReflection().GetId(Function);
   if (!Id)
@@ -130,14 +131,11 @@ bool codegen::IRGen::EmitSliceIntrinsic(const lex::Node &Function,
   const auto Loc = GetLocation(Function.Loc);
   auto *Entry = Func.addEntryBlock();
   Builder.setInsertionPointToStart(Entry);
-  auto Result = mlir::LLVM::ZeroOp::create(Builder, Loc,
-                                           Func.getFunctionType().getResult(0));
+  auto Result = mlir::LLVM::ZeroOp::create(Builder, Loc, Func.getFunctionType().getResult(0));
   auto WithPointer = mlir::LLVM::InsertValueOp::create(
-      Builder, Loc, Result, Entry->getArgument(0),
-      Builder.getDenseI64ArrayAttr({0}));
+      Builder, Loc, Result, Entry->getArgument(0), Builder.getDenseI64ArrayAttr({0}));
   auto WithLength = mlir::LLVM::InsertValueOp::create(
-      Builder, Loc, WithPointer, Entry->getArgument(1),
-      Builder.getDenseI64ArrayAttr({1}));
+      Builder, Loc, WithPointer, Entry->getArgument(1), Builder.getDenseI64ArrayAttr({1}));
   mlir::func::ReturnOp::create(Builder, Loc, WithLength.getResult());
   return true;
 }

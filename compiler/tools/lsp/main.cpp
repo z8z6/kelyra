@@ -1,4 +1,4 @@
-#include "Lexer/Lexer.h"
+#include "Front/Parser/Parser.h"
 
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/LSP/Logging.h"
@@ -108,15 +108,15 @@ std::size_t OffsetAt(std::string_view Source, Position Position) {
 }
 
 bool IsType(const lex::Node &Node) {
-  return Node.kind == lex::TokenKind::ast_type ||
-         Node.kind == lex::TokenKind::ast_pointer_type ||
-         Node.kind == lex::TokenKind::ast_array_type ||
-         Node.kind == lex::TokenKind::ast_result_types ||
-         Node.kind == lex::TokenKind::ast_function_type;
+  return Node.kind == lex::NodeKind::ast_type ||
+         Node.kind == lex::NodeKind::ast_pointer_type ||
+         Node.kind == lex::NodeKind::ast_array_type ||
+         Node.kind == lex::NodeKind::ast_result_types ||
+         Node.kind == lex::NodeKind::ast_function_type;
 }
 
 std::string TypeName(const lex::Node &Node) {
-  if (Node.kind == lex::TokenKind::ast_function_type) {
+  if (Node.kind == lex::NodeKind::ast_function_type) {
     std::string Result = "fn(";
     for (std::size_t I = 0; I + 1 < Node.children.size(); ++I) {
       if (I)
@@ -125,7 +125,7 @@ std::string TypeName(const lex::Node &Node) {
     }
     return Result + ") -> " + TypeName(*Node.children.back());
   }
-  if (Node.kind == lex::TokenKind::ast_result_types) {
+  if (Node.kind == lex::NodeKind::ast_result_types) {
     std::string Result = "(";
     for (const auto &Child : Node.children) {
       if (Result.size() > 1)
@@ -134,14 +134,14 @@ std::string TypeName(const lex::Node &Node) {
     }
     return Result + ")";
   }
-  if (Node.kind == lex::TokenKind::ast_type)
+  if (Node.kind == lex::NodeKind::ast_type)
     return Node.text;
   if (Node.children.empty())
     return {};
   auto Result = TypeName(*Node.children.front());
-  if (Node.kind == lex::TokenKind::ast_pointer_type)
+  if (Node.kind == lex::NodeKind::ast_pointer_type)
     return "*" + Result;
-  if (Node.kind == lex::TokenKind::ast_array_type)
+  if (Node.kind == lex::NodeKind::ast_array_type)
     return Result + "[" + Node.text + "]";
   return Result;
 }
@@ -168,7 +168,7 @@ struct Document {
 
   std::string_view Spelling(const lex::Token &Token) const {
     return std::string_view(Parsed.source)
-        .substr(Token.Loc.Offset, Token.Loc.Len);
+        .substr(Token.Loc.Begin, Token.Loc.Length());
   }
 
   static std::string CleanComment(std::string_view Text) {
@@ -191,7 +191,7 @@ struct Document {
     std::vector<std::string> Lines;
     std::size_t Index = 0;
     while (Index < Parsed.tokens.size() &&
-           Parsed.tokens[Index].Loc.Offset < Offset)
+           Parsed.tokens[Index].Loc.Begin < Offset)
       ++Index;
     auto Cursor = Offset;
     while (Index > 0) {
@@ -199,22 +199,22 @@ struct Document {
       if (Token.kind != lex::TokenKind::comment)
         break;
       const auto Gap = std::string_view(Parsed.source)
-                           .substr(Token.Loc.End(), Cursor - Token.Loc.End());
+                           .substr(Token.Loc.End, Cursor - Token.Loc.End);
       if (std::count(Gap.begin(), Gap.end(), '\n') > 1 ||
           std::any_of(Gap.begin(), Gap.end(),
                       [](unsigned char C) { return !std::isspace(C); }))
         break;
-      const auto LineStart = Parsed.source.rfind('\n', Token.Loc.Offset);
+      const auto LineStart = Parsed.source.rfind('\n', Token.Loc.Begin);
       const auto PrefixStart =
           LineStart == std::string::npos ? 0 : LineStart + 1;
       const auto Prefix =
           std::string_view(Parsed.source)
-              .substr(PrefixStart, Token.Loc.Offset - PrefixStart);
+              .substr(PrefixStart, Token.Loc.Begin - PrefixStart);
       if (std::any_of(Prefix.begin(), Prefix.end(),
                       [](unsigned char C) { return !std::isspace(C); }))
         break;
       Lines.push_back(CleanComment(Spelling(Token)));
-      Cursor = Token.Loc.Offset;
+      Cursor = Token.Loc.Begin;
       --Index;
     }
     std::reverse(Lines.begin(), Lines.end());
@@ -230,13 +230,13 @@ struct Document {
   Span FindDeclaration(const lex::Node &Node, lex::TokenKind Keyword) const {
     bool SawKeyword = false;
     for (const auto &Token : Parsed.tokens) {
-      if (Token.Loc.Offset < Node.Loc.Offset)
+      if (Token.Loc.Begin < Node.Loc.Begin)
         continue;
-      if (Token.Loc.Offset >= Node.Loc.End())
+      if (Token.Loc.Begin >= Node.Loc.End)
         break;
       if (Keyword == lex::TokenKind::name && Token.kind == Keyword &&
           Spelling(Token) == Node.text)
-        return {Token.Loc.Offset, Token.Loc.Len};
+        return {Token.Loc.Begin, Token.Loc.Length()};
       if (Token.kind == Keyword) {
         SawKeyword = true;
         continue;
@@ -245,9 +245,9 @@ struct Document {
           (Token.kind == lex::TokenKind::name ||
            Token.kind == lex::TokenKind::keyword_extern) &&
           Spelling(Token) == Node.text)
-        return {Token.Loc.Offset, Token.Loc.Len};
+        return {Token.Loc.Begin, Token.Loc.Length()};
     }
-    return {Node.Loc.Offset, Node.text.size()};
+    return {Node.Loc.Begin, Node.text.size()};
   }
 
   const Symbol *FindVisible(std::string_view Name, std::size_t Offset) const {
@@ -271,7 +271,7 @@ struct Document {
   }
 
   std::string InferType(const lex::Node &Node, std::size_t Offset) const {
-    using K = lex::TokenKind;
+    using K = lex::NodeKind;
     if (Node.kind == K::ast_literal) {
       if (Node.text == "true" || Node.text == "false")
         return "bool";
@@ -317,9 +317,9 @@ struct Document {
   }
 
   void CollectBlock(const lex::Node &Node, Span Scope) {
-    using K = lex::TokenKind;
+    using K = lex::NodeKind;
     if (Node.kind == K::ast_block)
-      Scope = {Node.Loc.Offset, Node.Loc.Len};
+      Scope = {Node.Loc.Begin, Node.Loc.Length()};
     if (Node.kind == K::ast_let && !Node.children.empty()) {
       const auto &Name = *Node.children.front();
       std::string Type;
@@ -332,7 +332,7 @@ struct Document {
         Initializer = Node.children[1].get();
       }
       if (Type.empty() && Initializer)
-        Type = InferType(*Initializer, Name.Loc.Offset);
+        Type = InferType(*Initializer, Name.Loc.Begin);
       if (Name.kind == K::ast_binding_list) {
         llvm::StringRef Remaining(Type);
         if (Remaining.starts_with("(") && Remaining.ends_with(")"))
@@ -360,7 +360,7 @@ struct Document {
                              BindingType,
                              "let " + Binding->text + ": " + BindingType,
                              Module,
-                             {Binding->Loc.Offset, Binding->Loc.Len},
+                             {Binding->Loc.Begin, Binding->Loc.Length()},
                              Scope});
         }
         return;
@@ -371,16 +371,16 @@ struct Document {
            Type,
            Type.empty() ? "let " + Name.text : "let " + Name.text + ": " + Type,
            Module,
-           {Name.Loc.Offset, Name.Loc.Len},
+           {Name.Loc.Begin, Name.Loc.Length()},
            Scope});
-      Symbols.back().Documentation = DocumentationAt(Node.Loc.Offset);
+      Symbols.back().Documentation = DocumentationAt(Node.Loc.Begin);
     }
     for (const auto &Child : Node.children)
       CollectBlock(*Child, Scope);
   }
 
   void Rebuild(std::string Source) {
-    Parsed = lex::Lexer().parse(std::move(Source), Path);
+    Parsed = lex::Parser().parse(std::move(Source), Path);
     Module.clear();
     ModuleSpan = {};
     ImportRefs.clear();
@@ -389,11 +389,11 @@ struct Document {
     Symbols.clear();
     if (!Parsed.root)
       return;
-    using K = lex::TokenKind;
+    using K = lex::NodeKind;
     for (const auto &Node : Parsed.root->children) {
       if (Node->kind == K::ast_module_decl) {
         Module = Node->text;
-        ModuleSpan = {Node->Loc.Offset, Node->text.size()};
+        ModuleSpan = {Node->Loc.Begin, Node->text.size()};
       } else if (Node->kind == K::ast_import) {
         if (Node->text == "c") {
           if (Node->children.empty())
@@ -405,9 +405,9 @@ struct Document {
               (std::filesystem::path(Path).parent_path() / Header.text)
                   .lexically_normal()
                   .string(),
-              Span{Header.Loc.Offset + 1, Header.Loc.Len - 2});
+              Span{Header.Loc.Begin + 1, Header.Loc.Length() - 2});
         } else {
-          ImportRefs.push_back({Node->text, {Node->Loc.Offset, Node->Loc.Len}});
+          ImportRefs.push_back({Node->text, {Node->Loc.Begin, Node->Loc.Length()}});
         }
       }
     }
@@ -420,15 +420,15 @@ struct Document {
             [](const auto &Child) { return Child->kind == K::ast_public; });
         Symbols.push_back({SymbolType::Enum, Node->text, Node->text,
                            "enum " + Node->text, Module,
-                           FindDeclaration(*Node, K::keyword_enum), FileScope,
+                           FindDeclaration(*Node, lex::TokenKind::keyword_enum), FileScope,
                            Public});
         for (const auto &Variant : Node->children)
           if (Variant->kind == K::ast_enum_variant)
             Symbols.push_back({SymbolType::EnumMember, Variant->text,
                                Node->text, Node->text + "." + Variant->text,
                                Module,
-                               {Variant->Loc.Offset, Variant->text.size()},
-                               {Node->Loc.Offset, Node->Loc.Len}, Public,
+                               {Variant->Loc.Begin, Variant->text.size()},
+                               {Node->Loc.Begin, Node->Loc.Length()}, Public,
                                {}, Node->text});
         continue;
       }
@@ -438,9 +438,9 @@ struct Document {
       const bool IsFunction = Node->kind == K::ast_function;
       const bool IsAnnotation = Node->kind == K::ast_annotation_decl;
       const auto Definition =
-          FindDeclaration(*Node, IsFunction     ? K::keyword_fn
-                                 : IsAnnotation ? K::keyword_annotation
-                                                : K::keyword_class);
+          FindDeclaration(*Node, IsFunction     ? lex::TokenKind::keyword_fn
+                                 : IsAnnotation ? lex::TokenKind::keyword_annotation
+                                                : lex::TokenKind::keyword_class);
       bool IsPublic = false;
       std::string ReturnType;
       std::string Detail = IsFunction     ? "fn " + Node->text + "("
@@ -470,9 +470,9 @@ struct Document {
                                         : SymbolType::Class,
                          Node->text, IsFunction ? ReturnType : Node->text,
                          Detail, Module, Definition, FileScope, IsPublic});
-      Symbols.back().Documentation = DocumentationAt(Node->Loc.Offset);
+      Symbols.back().Documentation = DocumentationAt(Node->Loc.Begin);
       if (!IsFunction && !IsAnnotation) {
-        const Span ClassScope{Node->Loc.Offset, Node->Loc.Len};
+        const Span ClassScope{Node->Loc.Begin, Node->Loc.Length()};
         for (const auto &Member : Node->children) {
           if (Member->kind == K::ast_public ||
               Member->kind == K::ast_annotation)
@@ -502,12 +502,12 @@ struct Document {
               Detail += " -> " + Type;
           }
           const auto Definition = Member->kind == K::ast_function
-                                      ? FindDeclaration(*Member, K::keyword_fn)
-                                      : FindDeclaration(*Member, K::name);
+                                      ? FindDeclaration(*Member, lex::TokenKind::keyword_fn)
+                                      : FindDeclaration(*Member, lex::TokenKind::name);
           Symbols.push_back({Field ? SymbolType::Field : SymbolType::Method,
                              Member->text, Type, Detail, Module, Definition,
                              ClassScope, Public,
-                             DocumentationAt(Member->Loc.Offset), Node->text});
+                             DocumentationAt(Member->Loc.Begin), Node->text});
         }
       }
     }
@@ -520,11 +520,11 @@ struct Document {
           Body = Child.get();
       if (!Body)
         return;
-      const Span FunctionScope{Body->Loc.Offset, Body->Loc.Len};
+      const Span FunctionScope{Body->Loc.Begin, Body->Loc.Length()};
       if (Owner)
         Symbols.push_back({SymbolType::Parameter, "this", "*" + Owner->text,
                            "this: *" + Owner->text, Module,
-                           FindDeclaration(*Owner, K::keyword_class),
+                           FindDeclaration(*Owner, lex::TokenKind::keyword_class),
                            FunctionScope});
       for (const auto &Child : Node->children) {
         if (Child->kind != K::ast_parameter || Child->children.empty())
@@ -535,7 +535,7 @@ struct Document {
              TypeName(*Child->children.front()),
              Child->text + ": " + TypeName(*Child->children.front()),
              Module,
-             {Child->Loc.Offset, Child->text.size()},
+             {Child->Loc.Begin, Child->text.size()},
              FunctionScope});
       }
       CollectBlock(*Body, FunctionScope);
@@ -734,7 +734,7 @@ class Server {
       if ((Token.kind == lex::TokenKind::name ||
            Token.kind == lex::TokenKind::keyword_this ||
            Token.kind == lex::TokenKind::keyword_extern) &&
-          Offset >= Token.Loc.Offset && Offset <= Token.Loc.End()) {
+          Offset >= Token.Loc.Begin && Offset <= Token.Loc.End) {
         if (Index)
           *Index = I;
         return &Token;
@@ -840,7 +840,7 @@ class Server {
   std::optional<Location>
   AnnotationMemberLocation(const Document &Current, std::string Type,
                            std::string_view Name) const {
-    using K = lex::TokenKind;
+    using K = lex::NodeKind;
     Type = Dereference(std::move(Type));
     const auto ExpandName = [](std::string_view Pattern,
                                std::string_view TargetName,
@@ -935,9 +935,8 @@ class Server {
               for (const auto &Argument : Part->children)
                 if (!Argument->children.empty()) {
                   const auto &Target = *Argument->children.front();
-                  if (Target.kind == K::ast_name &&
-                      !Target.children.empty())
-                    TargetBinding = Target.children.front()->text;
+                  if (Target.kind == K::ast_annotation_binding)
+                    TargetBinding = Target.text;
                 }
             if (Part->kind == K::ast_annotation_parameter) {
               Parameters.push_back(Part.get());
@@ -990,8 +989,8 @@ class Server {
                   Name)
                 continue;
               const auto Keyword = Member->kind == K::ast_function
-                                       ? K::keyword_fn
-                                       : K::name;
+                                       ? lex::TokenKind::keyword_fn
+                                       : lex::TokenKind::name;
               return Location{Doc.Uri, Doc.ToRange(
                                            Doc.FindDeclaration(*Member,
                                                                Keyword))};
@@ -1076,7 +1075,7 @@ class Server {
     if (Qualifier.empty()) {
       if (const auto *Local = Doc.FindVisible(Name, Offset);
           Local && ((Local->Kind == SymbolType::Annotation) == AnnotationUse ||
-                    Local->Definition.Offset == Token->Loc.Offset))
+                    Local->Definition.Offset == Token->Loc.Begin))
         return {&Doc, Local};
     }
     std::pair<const Document *, const Symbol *> Result;
@@ -1136,11 +1135,11 @@ class Server {
 
   // The module named by `module X;` or `import X;` at this offset.
   std::string ModuleAt(const Document &Doc, std::size_t Offset) const {
-    using K = lex::TokenKind;
+    using K = lex::NodeKind;
     for (const auto &Node : Doc.Parsed.root->children) {
       if (Node->kind != K::ast_module_decl && Node->kind != K::ast_import)
         continue;
-      if (Offset < Node->Loc.Offset || Offset > Node->Loc.End())
+      if (Offset < Node->Loc.Begin || Offset > Node->Loc.End)
         continue;
       if (Node->text == "c")
         return {};
@@ -1379,14 +1378,14 @@ class Server {
             Other.Spelling(Token) != Symbol->Name)
           continue;
         const bool Declaration = &Other == TargetDoc &&
-                                 Token.Loc.Offset == Symbol->Definition.Offset;
+                                 Token.Loc.Begin == Symbol->Definition.Offset;
         if (Declaration && !Params.context.includeDeclaration)
           continue;
         if (Symbol->Kind == SymbolType::Variable ||
             Symbol->Kind == SymbolType::Parameter) {
           // Locals only exist inside their own scope of their own document.
-          if (&Other != TargetDoc || Token.Loc.Offset < Symbol->Scope.Offset ||
-              Token.Loc.Offset > Symbol->Scope.Offset + Symbol->Scope.Length)
+          if (&Other != TargetDoc || Token.Loc.Begin < Symbol->Scope.Offset ||
+              Token.Loc.Begin > Symbol->Scope.Offset + Symbol->Scope.Length)
             continue;
         } else {
           const auto [Qualifier, Name] = QualifiedName(Other, Index);
@@ -1400,7 +1399,7 @@ class Server {
                 continue;
             } else {
               const auto Type =
-                  ReceiverType(Other, Qualifier, Token.Loc.Offset);
+                  ReceiverType(Other, Qualifier, Token.Loc.Begin);
               const auto Expected =
                   Symbol->Owner.find('.') == std::string::npos
                       ? TargetDoc->Module + "." + Symbol->Owner
@@ -1414,7 +1413,7 @@ class Server {
             if (&Other != TargetDoc && !Imports(Other, Symbol->Module))
               continue;
             // A local of the same name shadows the symbol at this offset.
-            if (const auto *Local = Other.FindVisible(Name, Token.Loc.Offset);
+            if (const auto *Local = Other.FindVisible(Name, Token.Loc.Begin);
                 Local && Local != Symbol &&
                 (Local->Kind == SymbolType::Variable ||
                  Local->Kind == SymbolType::Parameter))
@@ -1424,7 +1423,7 @@ class Server {
                 Other.Symbols.begin(), Other.Symbols.end(),
                 [&](const auto &Candidate) {
                   return &Candidate != Symbol && Candidate.Name == Name &&
-                         Candidate.Definition.Offset == Token.Loc.Offset &&
+                         Candidate.Definition.Offset == Token.Loc.Begin &&
                          (Candidate.Kind == SymbolType::Variable ||
                           Candidate.Kind == SymbolType::Parameter);
                 });
@@ -1433,7 +1432,7 @@ class Server {
           }
         }
         Result.push_back(
-            {Other.Uri, Other.ToRange({Token.Loc.Offset, Token.Loc.Len})});
+            {Other.Uri, Other.ToRange({Token.Loc.Begin, Token.Loc.Length()})});
       }
     }
     return Result;
@@ -1474,8 +1473,8 @@ public:
     std::vector<Diagnostic> Result;
     for (const auto &Entry : Doc.Parsed.diagnostics) {
       Diagnostic Diagnostic;
-      const auto Length = std::max<std::size_t>(Entry.Loc.Len, 1);
-      Diagnostic.range = Doc.ToRange({Entry.Loc.Offset, Length});
+      const auto Length = std::max<std::size_t>(Entry.Loc.Length(), 1);
+      Diagnostic.range = Doc.ToRange({Entry.Loc.Begin, Length});
       Diagnostic.severity = DiagnosticSeverity::Error;
       Diagnostic.source = "kelyra";
       Diagnostic.message = std::string(lex::GetDiagnosticInfo(Entry.Kind).Msg);
@@ -1550,7 +1549,7 @@ public:
     const auto &Current = Documents.at(Params.textDocument.uri.file().str());
     const auto Offset = OffsetAt(Current.Parsed.source, Params.position);
     const auto *Token = TokenAt(Current, Offset);
-    Hover Result(Current.ToRange(Token ? Span{Token->Loc.Offset, Token->Loc.Len}
+    Hover Result(Current.ToRange(Token ? Span{Token->Loc.Begin, Token->Loc.Length()}
                                        : Span{Offset, 1}));
     Result.contents.value = "```kelyra\n" + Found->Detail + "\n```";
     if (!Found->Documentation.empty())
@@ -1579,7 +1578,7 @@ public:
     const auto Offset = OffsetAt(Doc.Parsed.source, Params.position);
     std::size_t Cursor = Tokens.size();
     for (std::size_t I = 0; I < Tokens.size(); ++I)
-      if (Tokens[I].Loc.Offset >= Offset) {
+      if (Tokens[I].Loc.Begin >= Offset) {
         Cursor = I;
         break;
       }
@@ -1630,7 +1629,7 @@ public:
     }
     auto [Owner, Found] =
         Resolve(Params.textDocument.uri,
-                PositionAt(Doc.Parsed.source, Callee.Loc.Offset));
+                PositionAt(Doc.Parsed.source, Callee.Loc.Begin));
     if (!Found)
       return std::nullopt;
     if (Found->Kind == SymbolType::Class) {
@@ -1708,7 +1707,7 @@ public:
                           lex::TokenKind Keyword) {
       const auto Definition = Doc.FindDeclaration(Node, Keyword);
       DocumentSymbol Symbol(Node.text, Kind,
-                            Doc.ToRange({Node.Loc.Offset, Node.Loc.Len}),
+                            Doc.ToRange({Node.Loc.Begin, Node.Loc.Length()}),
                             Doc.ToRange(Definition));
       if (const auto Found = Details.find(Definition.Offset);
           Found != Details.end())
@@ -1716,33 +1715,33 @@ public:
       return Symbol;
     };
     for (const auto &Child : Doc.Parsed.root->children) {
-      if (Child->kind == lex::TokenKind::ast_function) {
+      if (Child->kind == lex::NodeKind::ast_function) {
         Result.push_back(
             Make(*Child, SymbolKind::Function, lex::TokenKind::keyword_fn));
-      } else if (Child->kind == lex::TokenKind::ast_enum) {
+      } else if (Child->kind == lex::NodeKind::ast_enum) {
         auto Enum = Make(*Child, SymbolKind::Enum, lex::TokenKind::keyword_enum);
         for (const auto &Variant : Child->children)
-          if (Variant->kind == lex::TokenKind::ast_enum_variant)
+          if (Variant->kind == lex::NodeKind::ast_enum_variant)
             Enum.children.push_back(
                 Make(*Variant, SymbolKind::EnumMember, lex::TokenKind::name));
         Result.push_back(std::move(Enum));
-      } else if (Child->kind == lex::TokenKind::ast_annotation_decl) {
+      } else if (Child->kind == lex::NodeKind::ast_annotation_decl) {
         Result.push_back(Make(*Child, SymbolKind::Class,
                               lex::TokenKind::keyword_annotation));
-      } else if (Child->kind == lex::TokenKind::ast_class) {
+      } else if (Child->kind == lex::NodeKind::ast_class) {
         auto Class =
             Make(*Child, SymbolKind::Class, lex::TokenKind::keyword_class);
         for (const auto &Member : Child->children) {
-          if (Member->kind == lex::TokenKind::ast_field)
+          if (Member->kind == lex::NodeKind::ast_field)
             Class.children.push_back(
                 Make(*Member, SymbolKind::Field, lex::TokenKind::name));
-          else if (Member->kind == lex::TokenKind::ast_function)
+          else if (Member->kind == lex::NodeKind::ast_function)
             Class.children.push_back(
                 Make(*Member, SymbolKind::Method, lex::TokenKind::keyword_fn));
-          else if (Member->kind == lex::TokenKind::ast_constructor)
+          else if (Member->kind == lex::NodeKind::ast_constructor)
             Class.children.push_back(
                 Make(*Member, SymbolKind::Constructor, lex::TokenKind::name));
-          else if (Member->kind == lex::TokenKind::ast_destructor)
+          else if (Member->kind == lex::NodeKind::ast_destructor)
             Class.children.push_back(
                 Make(*Member, SymbolKind::Method, lex::TokenKind::name));
         }

@@ -14,13 +14,13 @@
 #include <unordered_map>
 
 using namespace kelyra;
-using K = lex::TokenKind;
+using K = lex::NodeKind;
 
 mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
   if (const auto *Constant = Analysis.GetConstant(Expression))
     return EmitExpression(*Constant);
   if (const auto *Constant = Analysis.GetExternalConstant(Expression)) {
-    const auto Width = sema::GetBitWidth(Constant->Value);
+    const auto Width = Analysis.GetBitWidth(Constant->Value);
     const auto Negative = Constant->Integer.starts_with('-');
     const llvm::StringRef Digits(Constant->Integer.data() + (Negative ? 1 : 0),
                                  Constant->Integer.size() - (Negative ? 1 : 0));
@@ -35,7 +35,7 @@ mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
     const bool Negative = Variant->Value.starts_with('-');
     const llvm::StringRef Digits(Variant->Value.data() + (Negative ? 1 : 0),
                                  Variant->Value.size() - (Negative ? 1 : 0));
-    auto Value = llvm::APInt(sema::GetBitWidth(Type), Digits, 10);
+    auto Value = llvm::APInt(Analysis.GetBitWidth(Type), Digits, 10);
     if (Negative)
       Value = -Value;
     return mlir::arith::ConstantIntOp::create(
@@ -50,14 +50,15 @@ mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
     if (!Type.Results.front().IsVoid())
       Results.push_back(GetType(Type.Results.front()));
     const auto Loc = GetLocation(Expression.Loc);
-    auto Function = mlir::func::ConstantOp::create(
-        Builder, Loc, Builder.getFunctionType(Parameters, Results),
-        mlir::FlatSymbolRefAttr::get(&Context, *Symbol));
-    return mlir::UnrealizedConversionCastOp::create(Builder, Loc, GetType(Type),
-                                                    Function.getResult())
+    auto Function = mlir::func::ConstantOp::create(Builder,
+                                                   Loc,
+                                                   Builder.getFunctionType(Parameters, Results),
+                                                   mlir::FlatSymbolRefAttr::get(&Context, *Symbol));
+    return mlir::UnrealizedConversionCastOp::create(
+               Builder, Loc, GetType(Type), Function.getResult())
         .getResult(0);
   }
-  using K = lex::TokenKind;
+  using K = lex::NodeKind;
   using Handler = mlir::Value (IRGen::*)(const lex::Node &);
   static const std::unordered_map<K, Handler> Handlers = {
       {K::ast_name, &IRGen::EmitNameExpression},
@@ -74,52 +75,46 @@ mlir::Value codegen::IRGen::EmitExpression(const lex::Node &Expression) {
       {K::ast_match, &IRGen::EmitMatchExpression},
   };
   const auto It = Handlers.find(Expression.kind);
-  assert(It != Handlers.end() &&
-         "semantic analysis accepted an expression without an IR handler");
+  assert(It != Handlers.end() && "semantic analysis accepted an expression without an IR handler");
   auto Value = (this->*It->second)(Expression);
   if (const auto *Interface = Analysis.GetInterfaceConversion(Expression))
-    return EmitInterfaceConversion(Expression, Value,
-                                   *Analysis.GetClass(*Interface));
+    return EmitInterfaceConversion(Expression, Value, *Analysis.GetClass(*Interface));
   return Value;
 }
 
-mlir::Value
-codegen::IRGen::EmitInterfaceConversion(const lex::Node &Expression,
-                                        mlir::Value Object,
-                                        const sema::ClassInfo &Interface) {
+mlir::Value codegen::IRGen::EmitInterfaceConversion(const lex::Node &Expression, mlir::Value Object,
+                                                    const sema::ClassInfo &Interface) {
   const auto Loc = GetLocation(Expression.Loc);
   sema::Type InterfaceType{sema::BuiltinType::Class, {}};
   InterfaceType.ClassName = Interface.QualifiedName;
   InterfaceType.AddPointer();
-  const auto *Concrete =
-      Analysis.GetClass(Analysis.GetType(Expression).ClassName);
+  const auto *Concrete = Analysis.GetClass(Analysis.GetType(Expression).ClassName);
   const bool FromInterface = Concrete->IsInterface;
   auto Source = Object;
   if (FromInterface)
-    Object = mlir::LLVM::ExtractValueOp::create(Builder, Loc, Source,
-                                                std::size_t{0});
-  auto Value = mlir::LLVM::UndefOp::create(Builder, Loc, GetType(InterfaceType))
-                   .getResult();
-  Value = mlir::LLVM::InsertValueOp::create(Builder, Loc, Value, Object,
-                                            Builder.getDenseI64ArrayAttr({0}));
+    Object = mlir::LLVM::ExtractValueOp::create(Builder, Loc, Source, std::size_t{0});
+  auto Value = mlir::LLVM::UndefOp::create(Builder, Loc, GetType(InterfaceType)).getResult();
+  Value = mlir::LLVM::InsertValueOp::create(
+      Builder, Loc, Value, Object, Builder.getDenseI64ArrayAttr({0}));
   auto Pointer = mlir::LLVM::LLVMPointerType::get(&Context);
   for (std::size_t I = 0; I < Interface.InterfaceMethods.size(); ++I) {
     const auto &MethodKey = Interface.InterfaceMethods[I];
     const auto &Signature = Analysis.GetFunctionSignature(MethodKey);
     if (FromInterface) {
-      const auto Method = std::find_if(
-          Concrete->InterfaceMethods.begin(), Concrete->InterfaceMethods.end(),
-          [&](const auto &Candidate) {
-            return Analysis.GetFunctionSignature(Candidate) == Signature;
-          });
+      const auto Method =
+          std::find_if(Concrete->InterfaceMethods.begin(),
+                       Concrete->InterfaceMethods.end(),
+                       [&](const auto &Candidate) {
+                         return Analysis.GetFunctionSignature(Candidate) == Signature;
+                       });
       assert(Method != Concrete->InterfaceMethods.end());
       auto Callee = mlir::LLVM::ExtractValueOp::create(
-          Builder, Loc, Source,
-          static_cast<std::size_t>(Method - Concrete->InterfaceMethods.begin() +
-                                   1));
+          Builder,
+          Loc,
+          Source,
+          static_cast<std::size_t>(Method - Concrete->InterfaceMethods.begin() + 1));
       Value = mlir::LLVM::InsertValueOp::create(
-          Builder, Loc, Value, Callee,
-          Builder.getDenseI64ArrayAttr({static_cast<int64_t>(I + 1)}));
+          Builder, Loc, Value, Callee, Builder.getDenseI64ArrayAttr({static_cast<int64_t>(I + 1)}));
       continue;
     }
     const sema::ClassInfo *MethodOwner = Concrete;
@@ -132,15 +127,13 @@ codegen::IRGen::EmitInterfaceConversion(const lex::Node &Expression,
           break;
         }
       if (!Method)
-        MethodOwner = MethodOwner->BaseName.empty()
-                          ? nullptr
-                          : Analysis.GetClass(MethodOwner->BaseName);
+        MethodOwner =
+            MethodOwner->BaseName.empty() ? nullptr : Analysis.GetClass(MethodOwner->BaseName);
     }
     assert(Method && "interface conformance requires a method");
     mlir::Value Callee;
     for (const sema::ClassInfo *Owner = Concrete; Owner;
-         Owner = Owner->BaseName.empty() ? nullptr
-                                         : Analysis.GetClass(Owner->BaseName)) {
+         Owner = Owner->BaseName.empty() ? nullptr : Analysis.GetClass(Owner->BaseName)) {
       const auto Slot = Owner->VirtualSlots.find(Signature);
       if (Slot != Owner->VirtualSlots.end()) {
         auto Address = FieldAddress(*Owner, Object, Slot->second, Loc);
@@ -154,24 +147,22 @@ codegen::IRGen::EmitInterfaceConversion(const lex::Node &Expression,
       for (const auto &Part : Method->children) {
         if (Part->kind == K::ast_parameter)
           Parameters.push_back(GetType(Analysis.GetType(*Part)));
-        else if ((Part->kind == K::ast_type ||
-                  Part->kind == K::ast_pointer_type ||
-                  Part->kind == K::ast_array_type ||
-                  Part->kind == K::ast_slice_type ||
+        else if ((Part->kind == K::ast_type || Part->kind == K::ast_pointer_type ||
+                  Part->kind == K::ast_array_type || Part->kind == K::ast_slice_type ||
                   Part->kind == K::ast_function_type) &&
                  !Analysis.GetType(*Part).IsVoid())
           Results.push_back(GetType(Analysis.GetType(*Part)));
       }
       auto Function = mlir::func::ConstantOp::create(
-          Builder, Loc, Builder.getFunctionType(Parameters, Results),
+          Builder,
+          Loc,
+          Builder.getFunctionType(Parameters, Results),
           mlir::FlatSymbolRefAttr::get(&Context, Analysis.GetSymbol(*Method)));
-      Callee = mlir::UnrealizedConversionCastOp::create(Builder, Loc, Pointer,
-                                                        Function.getResult())
+      Callee = mlir::UnrealizedConversionCastOp::create(Builder, Loc, Pointer, Function.getResult())
                    .getResult(0);
     }
     Value = mlir::LLVM::InsertValueOp::create(
-        Builder, Loc, Value, Callee,
-        Builder.getDenseI64ArrayAttr({static_cast<int64_t>(I + 1)}));
+        Builder, Loc, Value, Callee, Builder.getDenseI64ArrayAttr({static_cast<int64_t>(I + 1)}));
   }
   return Value;
 }
@@ -183,13 +174,11 @@ mlir::Value codegen::IRGen::EmitNameExpression(const lex::Node &Expression) {
   const auto &SemanticType = Analysis.GetType(Expression);
   const auto Type = GetType(SemanticType);
   if (Analysis.GetField(Expression) || Analysis.GetStaticField(Expression))
-    return mlir::LLVM::LoadOp::create(Builder, Loc, Type,
-                                      EmitAddress(Expression));
+    return mlir::LLVM::LoadOp::create(Builder, Loc, Type, EmitAddress(Expression));
   auto *Variable = FindVariable(Expression.text);
   if (!Variable->Address)
     return Variable->DirectValue;
-  return mlir::LLVM::LoadOp::create(Builder, Loc, Type,
-                                    EmitAddress(Expression));
+  return mlir::LLVM::LoadOp::create(Builder, Loc, Type, EmitAddress(Expression));
 }
 
 mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
@@ -198,8 +187,8 @@ mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
     const auto &Base = *Expression.children.front();
     const auto &BaseType = Analysis.GetType(Base);
     if (BaseType.IsArray())
-      return mlir::arith::ConstantIntOp::create(Builder, Loc,
-                                                BaseType.ArrayLength(), 64);
+      return mlir::arith::ConstantIntOp::create(
+          Builder, Loc, BaseType.ArrayLength(), Analysis.GetTargetLayout().GetPointerBitWidth());
     if (BaseType.IsSlice()) {
       auto Slice = EmitExpression(Base);
       return mlir::LLVM::ExtractValueOp::create(Builder, Loc, Slice, 1);
@@ -210,20 +199,18 @@ mlir::Value codegen::IRGen::EmitIndexExpression(const lex::Node &Expression) {
     if (Analysis.IsClassTemporary(Base)) {
       auto [Address, Temporary] = EmitClassSourceAddress(Base);
       const auto *Class = Analysis.GetClass(Analysis.GetType(Base));
-      auto Field = FieldAddress(*Analysis.GetFieldOwner(Expression), Address,
-                                Analysis.GetFieldIndex(Expression), Loc);
-      auto Value = mlir::LLVM::LoadOp::create(
-          Builder, Loc, GetType(Analysis.GetType(Expression)), Field);
+      auto Field = FieldAddress(
+          *Analysis.GetFieldOwner(Expression), Address, Analysis.GetFieldIndex(Expression), Loc);
+      auto Value =
+          mlir::LLVM::LoadOp::create(Builder, Loc, GetType(Analysis.GetType(Expression)), Field);
       if (Temporary)
-        mlir::func::CallOp::create(Builder, Loc, Class->DestructorSymbol,
-                                   mlir::TypeRange{},
-                                   mlir::ValueRange{Address});
+        mlir::func::CallOp::create(
+            Builder, Loc, Class->DestructorSymbol, mlir::TypeRange{}, mlir::ValueRange{Address});
       return Value;
     }
   }
-  return mlir::LLVM::LoadOp::create(Builder, Loc,
-                                    GetType(Analysis.GetType(Expression)),
-                                    EmitAddress(Expression));
+  return mlir::LLVM::LoadOp::create(
+      Builder, Loc, GetType(Analysis.GetType(Expression)), EmitAddress(Expression));
 }
 
 mlir::Value codegen::IRGen::EmitSliceExpression(const lex::Node &Expression) {
@@ -238,23 +225,30 @@ mlir::Value codegen::IRGen::EmitSliceExpression(const lex::Node &Expression) {
     End = EmitSliceIndex(*Expression.children[1]);
   else if (Expression.text == "both")
     End = EmitSliceIndex(*Expression.children[2]);
-  auto Ordered = mlir::arith::CmpIOp::create(
-      Builder, Loc, mlir::arith::CmpIPredicate::ule, Start, End);
-  auto InRange = mlir::arith::CmpIOp::create(
-      Builder, Loc, mlir::arith::CmpIPredicate::ule, End, Length);
+  auto Ordered =
+      mlir::arith::CmpIOp::create(Builder, Loc, mlir::arith::CmpIPredicate::ule, Start, End);
+  auto InRange =
+      mlir::arith::CmpIOp::create(Builder, Loc, mlir::arith::CmpIPredicate::ule, End, Length);
   auto Valid = mlir::arith::AndIOp::create(Builder, Loc, Ordered, InRange);
   EmitSliceBoundsCheck(Valid, Loc);
-  auto Pointer = mlir::LLVM::GEPOp::create(
-      Builder, Loc, mlir::LLVM::LLVMPointerType::get(&Context),
-      GetType(Analysis.GetType(Expression).Indexed()), Data,
-      mlir::ValueRange{Start});
-  auto Count = mlir::arith::SubIOp::create(Builder, Loc, End, Start);
-  auto Result = mlir::LLVM::ZeroOp::create(
-      Builder, Loc, GetType(Analysis.GetType(Expression)));
+  auto Pointer = mlir::LLVM::GEPOp::create(Builder,
+                                           Loc,
+                                           mlir::LLVM::LLVMPointerType::get(&Context),
+                                           GetType(Analysis.GetType(Expression).Indexed()),
+                                           Data,
+                                           mlir::ValueRange{Start});
+  mlir::Value Count = mlir::arith::SubIOp::create(Builder, Loc, End, Start);
+  if (Analysis.GetTargetLayout().GetPointerBitWidth() < 64)
+    Count = mlir::arith::TruncIOp::create(
+        Builder,
+        Loc,
+        Builder.getIntegerType(Analysis.GetTargetLayout().GetPointerBitWidth()),
+        Count);
+  auto Result = mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Analysis.GetType(Expression)));
   auto WithPointer = mlir::LLVM::InsertValueOp::create(
       Builder, Loc, Result, Pointer, Builder.getDenseI64ArrayAttr({0}));
-  return mlir::LLVM::InsertValueOp::create(Builder, Loc, WithPointer, Count,
-                                           Builder.getDenseI64ArrayAttr({1}));
+  return mlir::LLVM::InsertValueOp::create(
+      Builder, Loc, WithPointer, Count, Builder.getDenseI64ArrayAttr({1}));
 }
 
 mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
@@ -267,17 +261,15 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
     llvm::SmallVector<mlir::Value> Args{FindVariable("this")->DirectValue};
     for (std::size_t I = 1; I < Expression.children.size(); ++I) {
       const auto &Argument = *Expression.children[I];
-      Args.push_back(Analysis.GetType(Argument).IsClass()
-                         ? EmitClassArgument(Argument)
-                         : EmitExpression(Argument));
+      Args.push_back(Analysis.GetType(Argument).IsClass() ? EmitClassArgument(Argument)
+                                                          : EmitExpression(Argument));
     }
-    mlir::func::CallOp::create(Builder, Loc, Analysis.GetCallee(Expression),
-                               mlir::TypeRange{}, Args);
+    mlir::func::CallOp::create(
+        Builder, Loc, Analysis.GetCallee(Expression), mlir::TypeRange{}, Args);
     return {};
   }
   const auto &SemanticType = Analysis.GetType(Expression);
-  const auto Type =
-      SemanticType.IsVoid() ? mlir::Type() : GetType(SemanticType);
+  const auto Type = SemanticType.IsVoid() ? mlir::Type() : GetType(SemanticType);
   llvm::SmallVector<mlir::Value> Arguments;
   mlir::Value ReceiverTemporary;
   if (Analysis.IsIndirectCall(Expression)) {
@@ -291,8 +283,7 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
       Arguments.push_back(EmitExpression(*Expression.children[I]));
     auto FunctionType = mlir::LLVM::LLVMFunctionType::get(
         Type ? Type : mlir::LLVM::LLVMVoidType::get(&Context), Parameters);
-    auto Call =
-        mlir::LLVM::CallOp::create(Builder, Loc, FunctionType, Arguments);
+    auto Call = mlir::LLVM::CallOp::create(Builder, Loc, FunctionType, Arguments);
     return Type ? Call.getResult() : mlir::Value();
   }
   if (Analysis.IsMethodCall(Expression)) {
@@ -305,9 +296,8 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
         if (Temporary)
           ReceiverTemporary = Address;
       } else {
-        Arguments.push_back(Analysis.GetType(Base).IsPointer()
-                                ? EmitExpression(Base)
-                                : EmitAddress(Base));
+        Arguments.push_back(Analysis.GetType(Base).IsPointer() ? EmitExpression(Base)
+                                                               : EmitAddress(Base));
       }
     } else {
       Arguments.push_back(FindVariable("this")->DirectValue);
@@ -328,28 +318,24 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
       } else {
         const auto &ArgumentType = Analysis.GetType(Argument);
         auto Address = CreateAlloca(ArgumentType, GetLocation(Argument.Loc));
-        mlir::LLVM::StoreOp::create(Builder, GetLocation(Argument.Loc),
-                                    EmitExpression(Argument), Address);
+        mlir::LLVM::StoreOp::create(
+            Builder, GetLocation(Argument.Loc), EmitExpression(Argument), Address);
         Arguments.push_back(Address);
       }
     } else {
-      Arguments.push_back(Analysis.GetType(Argument).IsClass()
-                              ? EmitClassArgument(Argument)
-                              : EmitExpression(Argument));
+      Arguments.push_back(Analysis.GetType(Argument).IsClass() ? EmitClassArgument(Argument)
+                                                               : EmitExpression(Argument));
     }
   }
   const auto Callee = Wrapper ? Wrapper->Name : Analysis.GetCallee(Expression);
   if (Wrapper && Wrapper->ReturnByAddress) {
-    mlir::func::CallOp::create(Builder, Loc, Callee, mlir::TypeRange{},
-                               Arguments);
+    mlir::func::CallOp::create(Builder, Loc, Callee, mlir::TypeRange{}, Arguments);
     return mlir::LLVM::LoadOp::create(Builder, Loc, Type, ResultAddress);
   }
   if (const auto *Interface = Analysis.GetInterfaceCall(Expression)) {
     auto Receiver = Arguments.front();
-    Arguments.front() =
-        mlir::LLVM::ExtractValueOp::create(Builder, Loc, Receiver, 0);
-    auto Target = mlir::LLVM::ExtractValueOp::create(Builder, Loc, Receiver,
-                                                     Interface->second + 1);
+    Arguments.front() = mlir::LLVM::ExtractValueOp::create(Builder, Loc, Receiver, 0);
+    auto Target = mlir::LLVM::ExtractValueOp::create(Builder, Loc, Receiver, Interface->second + 1);
     llvm::SmallVector<mlir::Type> Parameters;
     for (auto Argument : Arguments)
       Parameters.push_back(Argument.getType());
@@ -357,16 +343,14 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
         Type ? Type : mlir::LLVM::LLVMVoidType::get(&Context), Parameters);
     llvm::SmallVector<mlir::Value> IndirectArguments{Target};
     IndirectArguments.append(Arguments.begin(), Arguments.end());
-    auto Call = mlir::LLVM::CallOp::create(Builder, Loc, FunctionType,
-                                           IndirectArguments);
+    auto Call = mlir::LLVM::CallOp::create(Builder, Loc, FunctionType, IndirectArguments);
     return Type ? Call.getResult() : mlir::Value();
   }
   if (const auto *Virtual = Analysis.GetVirtualCall(Expression)) {
     const auto &Owner = *Analysis.GetClass(Virtual->first);
     const auto &Signature = Owner.Fields[Virtual->second].Value;
     auto Slot = FieldAddress(Owner, Arguments.front(), Virtual->second, Loc);
-    auto Callee =
-        mlir::LLVM::LoadOp::create(Builder, Loc, GetType(Signature), Slot);
+    auto Callee = mlir::LLVM::LoadOp::create(Builder, Loc, GetType(Signature), Slot);
     llvm::SmallVector<mlir::Type> Parameters;
     for (const auto &Parameter : Signature.Parameters)
       Parameters.push_back(GetType(Parameter));
@@ -374,28 +358,28 @@ mlir::Value codegen::IRGen::EmitCallExpression(const lex::Node &Expression) {
         Type ? Type : mlir::LLVM::LLVMVoidType::get(&Context), Parameters);
     llvm::SmallVector<mlir::Value> IndirectArguments{Callee.getResult()};
     IndirectArguments.append(Arguments.begin(), Arguments.end());
-    auto Call = mlir::LLVM::CallOp::create(Builder, Loc, FunctionType,
-                                           IndirectArguments);
+    auto Call = mlir::LLVM::CallOp::create(Builder, Loc, FunctionType, IndirectArguments);
     if (ReceiverTemporary) {
       const auto &Base = *Expression.children.front()->children.front();
-      mlir::func::CallOp::create(
-          Builder, Loc,
-          Analysis.GetClass(Analysis.GetType(Base))->DestructorSymbol,
-          mlir::TypeRange{}, mlir::ValueRange{ReceiverTemporary});
+      mlir::func::CallOp::create(Builder,
+                                 Loc,
+                                 Analysis.GetClass(Analysis.GetType(Base))->DestructorSymbol,
+                                 mlir::TypeRange{},
+                                 mlir::ValueRange{ReceiverTemporary});
     }
     return Type ? Call.getResult() : mlir::Value();
   }
   llvm::SmallVector<mlir::Type> Results;
   if (Type)
     Results.push_back(Type);
-  auto Call =
-      mlir::func::CallOp::create(Builder, Loc, Callee, Results, Arguments);
+  auto Call = mlir::func::CallOp::create(Builder, Loc, Callee, Results, Arguments);
   if (ReceiverTemporary) {
     const auto &Base = *Expression.children.front()->children.front();
-    mlir::func::CallOp::create(
-        Builder, Loc,
-        Analysis.GetClass(Analysis.GetType(Base))->DestructorSymbol,
-        mlir::TypeRange{}, mlir::ValueRange{ReceiverTemporary});
+    mlir::func::CallOp::create(Builder,
+                               Loc,
+                               Analysis.GetClass(Analysis.GetType(Base))->DestructorSymbol,
+                               mlir::TypeRange{},
+                               mlir::ValueRange{ReceiverTemporary});
   }
   return Type ? Call.getResult(0) : mlir::Value();
 }
@@ -419,19 +403,20 @@ mlir::Value codegen::IRGen::EmitLiteralExpression(const lex::Node &Expression) {
                                        : Escaped);
     }
     Value.push_back('\0');
-    return mlir::LLVM::createGlobalString(
-        Loc, Builder, "kelyra_string_" + std::to_string(GlobalStringCount++),
-        Value, mlir::LLVM::Linkage::Private);
+    return mlir::LLVM::createGlobalString(Loc,
+                                          Builder,
+                                          "kelyra_string_" + std::to_string(GlobalStringCount++),
+                                          Value,
+                                          mlir::LLVM::Linkage::Private);
   }
   if (SemanticType.Element == sema::BuiltinType::Bool) {
     llvm::APInt Value(1, Expression.text == "true");
     return mlir::arith::ConstantIntOp::create(Builder, Loc, Type, Value);
   }
-  if (sema::IsInteger(SemanticType.Element) ||
-      SemanticType.Element == sema::BuiltinType::Char) {
+  if (sema::IsInteger(SemanticType.Element) || SemanticType.Element == sema::BuiltinType::Char) {
     llvm::APInt Value;
     llvm::StringRef(Expression.text).getAsInteger(10, Value);
-    Value = Value.zextOrTrunc(sema::GetBitWidth(SemanticType));
+    Value = Value.zextOrTrunc(Analysis.GetBitWidth(SemanticType));
     return mlir::arith::ConstantIntOp::create(Builder, Loc, Type, Value);
   }
   const auto FloatType = mlir::cast<mlir::FloatType>(Type);
@@ -462,7 +447,7 @@ mlir::Value codegen::IRGen::EmitUnaryExpression(const lex::Node &Expression) {
   if (sema::IsFloat(SemanticType.Element))
     return mlir::arith::NegFOp::create(Builder, Loc, Value);
   auto Zero = mlir::arith::ConstantIntOp::create(
-      Builder, Loc, Type, llvm::APInt(sema::GetBitWidth(SemanticType), 0));
+      Builder, Loc, Type, llvm::APInt(Analysis.GetBitWidth(SemanticType), 0));
   return mlir::arith::SubIOp::create(Builder, Loc, Zero, Value);
 }
 
@@ -473,22 +458,17 @@ mlir::Value codegen::IRGen::EmitBlockExpression(const lex::Node &Expression) {
   mlir::Value Result;
   for (std::size_t I = 0; I < Expression.children.size(); ++I) {
     if (!Builder.getInsertionBlock()->empty() &&
-        Builder.getInsertionBlock()
-            ->back()
-            .hasTrait<mlir::OpTrait::IsTerminator>())
+        Builder.getInsertionBlock()->back().hasTrait<mlir::OpTrait::IsTerminator>())
       break;
     const auto &Child = *Expression.children[I];
-    const bool Tail = I + 1 == Expression.children.size() &&
-                      lex::IsExpressionNode(Child.kind);
+    const bool Tail = I + 1 == Expression.children.size() && lex::IsExpressionNode(Child.kind);
     if (Tail)
       Result = EmitExpression(Child);
     else
       EmitStatement(Child);
   }
   if (Builder.getInsertionBlock()->empty() ||
-      !Builder.getInsertionBlock()
-           ->back()
-           .hasTrait<mlir::OpTrait::IsTerminator>())
+      !Builder.getInsertionBlock()->back().hasTrait<mlir::OpTrait::IsTerminator>())
     EmitCleanups(Cleanups.size() - 1, Loc);
   Cleanups.pop_back();
   Scopes.pop_back();
@@ -521,12 +501,11 @@ mlir::Value codegen::IRGen::EmitMatchExpression(const lex::Node &Expression) {
       llvm::StringRef Digits(Pattern->data() + (Negative ? 1 : 0),
                              Pattern->size() - (Negative ? 1 : 0));
       auto Integer = llvm::APInt(
-          sema::GetBitWidth(Analysis.GetType(*Expression.children.front())),
-          Digits, 10);
+          Analysis.GetBitWidth(Analysis.GetType(*Expression.children.front())), Digits, 10);
       if (Negative)
         Integer = -Integer;
-      auto Constant = mlir::arith::ConstantIntOp::create(
-          Builder, Loc, Scrutinee.getType(), Integer);
+      auto Constant =
+          mlir::arith::ConstantIntOp::create(Builder, Loc, Scrutinee.getType(), Integer);
       auto Equal = mlir::arith::CmpIOp::create(
           Builder, Loc, mlir::arith::CmpIPredicate::eq, Scrutinee, Constant);
       mlir::cf::CondBranchOp::create(Builder, Loc, Equal, Body, Next);
@@ -534,9 +513,7 @@ mlir::Value codegen::IRGen::EmitMatchExpression(const lex::Node &Expression) {
     Builder.setInsertionPointToStart(Body);
     auto Value = EmitExpression(*Arm.children.back());
     if (Builder.getInsertionBlock()->empty() ||
-        !Builder.getInsertionBlock()
-             ->back()
-             .hasTrait<mlir::OpTrait::IsTerminator>()) {
+        !Builder.getInsertionBlock()->back().hasTrait<mlir::OpTrait::IsTerminator>()) {
       if (ResultAddress)
         mlir::LLVM::StoreOp::create(Builder, Loc, Value, ResultAddress);
       mlir::cf::BranchOp::create(Builder, Loc, Join);
@@ -545,10 +522,10 @@ mlir::Value codegen::IRGen::EmitMatchExpression(const lex::Node &Expression) {
       Builder.setInsertionPointToStart(Next);
   }
   Builder.setInsertionPointToStart(Join);
-  return ResultAddress ? mlir::LLVM::LoadOp::create(
-                             Builder, Loc, GetType(ResultType), ResultAddress)
-                             .getResult()
-                       : mlir::Value();
+  return ResultAddress
+             ? mlir::LLVM::LoadOp::create(Builder, Loc, GetType(ResultType), ResultAddress)
+                   .getResult()
+             : mlir::Value();
 }
 
 mlir::Value codegen::IRGen::EmitCastExpression(const lex::Node &Expression) {
@@ -568,11 +545,11 @@ mlir::Value codegen::IRGen::EmitCastExpression(const lex::Node &Expression) {
   const bool SourceFloat = sema::IsFloat(Source.Element);
   const bool TargetFloat = sema::IsFloat(Target.Element);
   if (SourceFloat && TargetFloat) {
-    if (sema::GetBitWidth(Source) == sema::GetBitWidth(Target))
+    if (Analysis.GetBitWidth(Source) == Analysis.GetBitWidth(Target))
       return Value;
-    if (sema::GetBitWidth(Source) < sema::GetBitWidth(Target))
-      return mlir::arith::ExtFOp::create(Builder, Loc, ResultType, Value,
-                                         mlir::arith::FastMathFlagsAttr{});
+    if (Analysis.GetBitWidth(Source) < Analysis.GetBitWidth(Target))
+      return mlir::arith::ExtFOp::create(
+          Builder, Loc, ResultType, Value, mlir::arith::FastMathFlagsAttr{});
     return mlir::arith::TruncFOp::create(Builder, Loc, ResultType, Value);
   }
   if (SourceFloat) {
@@ -585,14 +562,13 @@ mlir::Value codegen::IRGen::EmitCastExpression(const lex::Node &Expression) {
       return mlir::arith::SIToFPOp::create(Builder, Loc, ResultType, Value);
     return mlir::arith::UIToFPOp::create(Builder, Loc, ResultType, Value);
   }
-  if (sema::GetBitWidth(Source) < sema::GetBitWidth(Target)) {
-    const auto *Enum =
-        Source.IsEnum() ? Analysis.GetEnum(Source.EnumName) : nullptr;
+  if (Analysis.GetBitWidth(Source) < Analysis.GetBitWidth(Target)) {
+    const auto *Enum = Source.IsEnum() ? Analysis.GetEnum(Source.EnumName) : nullptr;
     if (sema::IsSignedInteger(Enum ? Enum->Underlying.Element : Source.Element))
       return mlir::arith::ExtSIOp::create(Builder, Loc, ResultType, Value);
     return mlir::arith::ExtUIOp::create(Builder, Loc, ResultType, Value);
   }
-  if (sema::GetBitWidth(Source) > sema::GetBitWidth(Target))
+  if (Analysis.GetBitWidth(Source) > Analysis.GetBitWidth(Target))
     return mlir::arith::TruncIOp::create(Builder, Loc, ResultType, Value);
   return Value;
 }
@@ -647,21 +623,17 @@ mlir::Value codegen::IRGen::EmitBinaryExpression(const lex::Node &Expression) {
     if (Expression.text == "!=")
       Predicate = mlir::arith::CmpIPredicate::ne;
     else if (Expression.text == "<")
-      Predicate = sema::IsSignedInteger(OperandType.Element)
-                      ? mlir::arith::CmpIPredicate::slt
-                      : mlir::arith::CmpIPredicate::ult;
+      Predicate = sema::IsSignedInteger(OperandType.Element) ? mlir::arith::CmpIPredicate::slt
+                                                             : mlir::arith::CmpIPredicate::ult;
     else if (Expression.text == "<=")
-      Predicate = sema::IsSignedInteger(OperandType.Element)
-                      ? mlir::arith::CmpIPredicate::sle
-                      : mlir::arith::CmpIPredicate::ule;
+      Predicate = sema::IsSignedInteger(OperandType.Element) ? mlir::arith::CmpIPredicate::sle
+                                                             : mlir::arith::CmpIPredicate::ule;
     else if (Expression.text == ">")
-      Predicate = sema::IsSignedInteger(OperandType.Element)
-                      ? mlir::arith::CmpIPredicate::sgt
-                      : mlir::arith::CmpIPredicate::ugt;
+      Predicate = sema::IsSignedInteger(OperandType.Element) ? mlir::arith::CmpIPredicate::sgt
+                                                             : mlir::arith::CmpIPredicate::ugt;
     else if (Expression.text == ">=")
-      Predicate = sema::IsSignedInteger(OperandType.Element)
-                      ? mlir::arith::CmpIPredicate::sge
-                      : mlir::arith::CmpIPredicate::uge;
+      Predicate = sema::IsSignedInteger(OperandType.Element) ? mlir::arith::CmpIPredicate::sge
+                                                             : mlir::arith::CmpIPredicate::uge;
     return mlir::arith::CmpIOp::create(Builder, Loc, Predicate, Lhs, Rhs);
   }
   if (sema::IsFloat(SemanticType.Element)) {

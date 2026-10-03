@@ -13,7 +13,7 @@ mkdir -p "$root/build"
 # Build the library object, then link the string example against it.
 "$kelp" build
 "$compiler" --emit-exe \
-  --module-path="$root/src" --external-path="$root/src" \
+  --module-search-path="$root/src" --external-path="$root/src" \
   --link-input="$root/.kelp/build/kstd.o" \
   -o "$output" "$root/examples/string_example.kly"
 "$output" >"$stdout"

@@ -9,17 +9,6 @@
 #include "llvm/Support/raw_ostream.h"
 
 namespace kelyra {
-enum class LogLevel { Error, Warn, Info, Debug };
-
-inline llvm::cl::opt<LogLevel> LogLevelOpt{
-    "log-level", llvm::cl::desc("Log level:"),
-    llvm::cl::values(
-        clEnumValN(LogLevel::Error, "error", "Errors only"),
-        clEnumValN(LogLevel::Warn, "warn", "Warnings and errors"),
-        clEnumValN(LogLevel::Info, "info", "Info, warnings, errors"),
-        clEnumValN(LogLevel::Debug, "debug", "Everything")),
-    llvm::cl::init(LogLevel::Warn), llvm::cl::cat(Option::KelyraCategory)};
-
 // 每个日志级别对应的前缀和颜色
 template <LogLevel Level> struct LogTraits;
 
@@ -72,7 +61,7 @@ public:
 private:
   bool Started = false;
   static bool isEnabled() {
-    return static_cast<int>(Level) <= static_cast<int>(LogLevelOpt.getValue());
+    return static_cast<int>(Level) <= static_cast<int>(Option::LogLevel.getValue());
   }
 };
 

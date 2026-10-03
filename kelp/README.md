@@ -52,9 +52,8 @@ configured `.tar.gz` source archive.
 `output` prints the absolute configured artifact path without building or
 fetching dependencies; editor integrations use it to configure a debugger.
 Builds report preparation, compilation, and completion on stderr, including the
-entry/output paths. Kelyra's `--progress` lists every loaded `.kly` module, C header,
-C source, and the code-generation/link stages. These are phase counters, not
-time-based percentages; a failed build never reports successful completion.
+entry/output paths. These are phase counters, not time-based percentages;
+a failed build never reports successful completion.
 
 Every command reports wall-clock durations on stderr: a per-project
 `checked`/`built`/`tested`/`packaged` line, plus a workspace total when the
@@ -96,36 +95,42 @@ artifact path.
 `build.kind` selects what `kelp build` produces:
 
 - `executable` (default) links an executable at `build.output`;
-- `library` compiles the project to an object file (default `<name>.o`) and
+- `library` compiles the project to an archive of module objects (default `<name>.o`) and
   rejects `kelp run`.
 
 Every project builds into the workspace cache instead of a `build` directory of
 its own. Artifacts live at `.kelp/build/<project path>`, so `libs/math` produces
 `.kelp/build/libs/math/math.o` and the workspace root project produces
 `.kelp/build/<name>`. `build.output` and `package.output` name the artifact
-inside that directory; a leading `build/` written by older manifests still
-means the directory itself. A single ignored `.kelp/` therefore covers every
+inside that directory. Windows executables without an explicit extension receive
+`.exe`. A single ignored `.kelp/` therefore covers every
 project, and `kelp members` reports the path relative to the workspace root.
 
-A library is compiled once and linked, not copied into every consumer. When a
-project depends on a library, Kelp builds that library's object, passes its
-source directory to Kelyra as an `--external-path` (so the consumer emits only
-declarations for its modules) and passes the object as a `--link-input`. The
-library's configured C sources are compiled into that object. That
-is how subprojects reference each other: put the shared code in a `library`
-project and depend on it; executable-kind dependencies stay source-level. A
-library dependency builds with the consumer's compiler and shares its
-dependency cache.
+A library compiles all enabled modules under its entry file's source directory.
+It produces an archive and a matching `.kmi` interface beside it. Kelp passes
+the interface to consumers for type checking and links the archive; Kelyra
+does not reparse the library's `.kly` files in that build. The interface is a
+versioned, target-specific AST snapshot, including bodies needed by generics
+and annotations. Kelp builds library dependencies with the consumer's compiler
+and target. Executable-kind dependencies remain source-level.
+Libraries that use `import c` still need their original C headers available to
+consumers; embedding C import metadata in `.kmi` is a later format extension.
 
-For an existing library, set `library` on the dependency. Kelp still uses its
-source directory for module declarations, but skips its build and links the
-supplied object or archive:
+For an existing library, set `library` on the dependency. Kelp skips its build
+and expects a matching interface named `<library>.kmi` beside the supplied
+archive:
 
 ```toml
 [dependencies.math]
 path = "../libs/math"
 library = "prebuilt/math.o" # relative to the dependency project
 ```
+
+Kelp stores a build fingerprint beside each artifact. A repeated build reuses
+the artifact when the compiler, manifest, source trees, direct C sources,
+linked local files, and dependency interfaces have the same contents. A changed
+dependency rebuilds its consumers. Projects using `import c` or `build.c-args`
+are rebuilt until the compiler can report complete C header dependencies.
 
 `build.c-sources` compiles C source files; `build.c-libraries` links existing
 C objects or archives. List only the C sources that still need compilation.

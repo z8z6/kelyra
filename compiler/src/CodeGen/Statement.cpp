@@ -13,19 +13,17 @@
 #include <unordered_set>
 
 using namespace kelyra;
-using K = lex::TokenKind;
+using K = lex::NodeKind;
 
 namespace {
-bool IsTypeNode(lex::TokenKind Kind) {
-  using K = lex::TokenKind;
-  return Kind == K::ast_type || Kind == K::ast_pointer_type ||
-         Kind == K::ast_array_type || Kind == K::ast_slice_type ||
-         Kind == K::ast_result_types || Kind == K::ast_function_type;
+bool IsTypeNode(lex::NodeKind Kind) {
+  using K = lex::NodeKind;
+  return Kind == K::ast_type || Kind == K::ast_pointer_type || Kind == K::ast_array_type ||
+         Kind == K::ast_slice_type || Kind == K::ast_result_types || Kind == K::ast_function_type;
 }
 
 bool HasTerminator(mlir::Block *Block) {
-  return !Block->empty() &&
-         Block->back().hasTrait<mlir::OpTrait::IsTerminator>();
+  return !Block->empty() && Block->back().hasTrait<mlir::OpTrait::IsTerminator>();
 }
 } // namespace
 
@@ -41,16 +39,14 @@ void codegen::IRGen::EmitBlock(const lex::Node &Block) {
     if (HasTerminator(Builder.getInsertionBlock()))
       break;
     const bool PreviousInitializing = InitializingField;
-    InitializingField =
-        InTransferConstructor && CurrentClass &&
-        (Cleanups.size() == 2 || InlineConstructorBlock == &Block) &&
-        Index < CurrentClass->UserFieldCount;
+    InitializingField = InTransferConstructor && CurrentClass &&
+                        (Cleanups.size() == 2 || InlineConstructorBlock == &Block) &&
+                        Index < CurrentClass->UserFieldCount;
     EmitStatement(*Statement);
-    if (InTransferConstructor && CurrentClass &&
-        Index + 1 == CurrentClass->UserFieldCount &&
+    if (InTransferConstructor && CurrentClass && Index + 1 == CurrentClass->UserFieldCount &&
         !HasTerminator(Builder.getInsertionBlock()))
-      EmitVirtualSlots(*CurrentClass, FindVariable("this")->DirectValue,
-                       GetLocation(Statement->Loc));
+      EmitVirtualSlots(
+          *CurrentClass, FindVariable("this")->DirectValue, GetLocation(Statement->Loc));
     InitializingField = PreviousInitializing;
   }
   if (!HasTerminator(Builder.getInsertionBlock()))
@@ -61,7 +57,7 @@ void codegen::IRGen::EmitBlock(const lex::Node &Block) {
 }
 
 void codegen::IRGen::EmitStatement(const lex::Node &Statement) {
-  using K = lex::TokenKind;
+  using K = lex::NodeKind;
   if (Statement.kind == K::ast_alias_decl)
     return;
   using Handler = void (IRGen::*)(const lex::Node &);
@@ -80,8 +76,7 @@ void codegen::IRGen::EmitStatement(const lex::Node &Statement) {
       {K::ast_for, &IRGen::EmitForStatement},
   };
   const auto It = Handlers.find(Statement.kind);
-  assert(It != Handlers.end() &&
-         "semantic analysis accepted a statement without an IR handler");
+  assert(It != Handlers.end() && "semantic analysis accepted a statement without an IR handler");
   (this->*It->second)(Statement);
 }
 
@@ -108,11 +103,9 @@ void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
   }
   const auto Type = Analysis.GetType(Statement);
   auto Address = CreateAlloca(Type, Loc);
-  const bool HasType =
-      Statement.children.size() > 1 && IsTypeNode(Statement.children[1]->kind);
-  const lex::Node *Initializer = Statement.children.size() > (HasType ? 2u : 1u)
-                                     ? Statement.children.back().get()
-                                     : nullptr;
+  const bool HasType = Statement.children.size() > 1 && IsTypeNode(Statement.children[1]->kind);
+  const lex::Node *Initializer =
+      Statement.children.size() > (HasType ? 2u : 1u) ? Statement.children.back().get() : nullptr;
   if (Type.IsClass()) {
     const auto &Class = *Analysis.GetClass(Type);
     if (Analysis.GetConstructorCall(*Initializer)) {
@@ -121,18 +114,16 @@ void codegen::IRGen::EmitLetStatement(const lex::Node &Statement) {
       auto [Source, Temporary] = EmitClassSourceAddress(*Initializer);
       EmitTransfer(Class, Address, Source, Temporary, Loc);
       if (Temporary)
-        mlir::func::CallOp::create(Builder, Loc, Class.DestructorSymbol,
-                                   mlir::TypeRange{}, mlir::ValueRange{Source});
+        mlir::func::CallOp::create(
+            Builder, Loc, Class.DestructorSymbol, mlir::TypeRange{}, mlir::ValueRange{Source});
     }
     Scopes.back().emplace(Name.text, Variable{Type, Address, {}});
     Cleanups.back().push_back({Analysis.GetClass(Type), Address});
     EmitDebugVariable(Name.text, Name.Loc, Type, Address);
     return;
   }
-  auto Value =
-      Initializer
-          ? EmitExpression(*Initializer)
-          : mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Type)).getRes();
+  auto Value = Initializer ? EmitExpression(*Initializer)
+                           : mlir::LLVM::ZeroOp::create(Builder, Loc, GetType(Type)).getRes();
   mlir::LLVM::StoreOp::create(Builder, Loc, Value, Address);
   Scopes.back().emplace(Name.text, Variable{Type, Address, {}});
   EmitDebugVariable(Name.text, Name.Loc, Type, Address);
@@ -144,8 +135,7 @@ void codegen::IRGen::EmitAssignStatement(const lex::Node &Statement) {
   auto Address = EmitAddress(*Statement.children[0]);
   const auto &TargetType = Analysis.GetType(*Statement.children[0]);
   if (TargetType.IsClass()) {
-    if (InitializingField &&
-        Analysis.GetConstructorCall(*Statement.children[1])) {
+    if (InitializingField && Analysis.GetConstructorCall(*Statement.children[1])) {
       EmitConstruction(*Statement.children[1], Address);
       return;
     }
@@ -157,26 +147,23 @@ void codegen::IRGen::EmitAssignStatement(const lex::Node &Statement) {
       } else {
         auto Staging = CreateAlloca(TargetType, Loc);
         EmitTransfer(Class, Staging, Source, Temporary, Loc);
-        mlir::func::CallOp::create(Builder, Loc, Class.DestructorSymbol,
-                                   mlir::TypeRange{},
-                                   mlir::ValueRange{Address});
+        mlir::func::CallOp::create(
+            Builder, Loc, Class.DestructorSymbol, mlir::TypeRange{}, mlir::ValueRange{Address});
         EmitTransfer(Class, Address, Staging, true, Loc);
-        mlir::func::CallOp::create(Builder, Loc, Class.DestructorSymbol,
-                                   mlir::TypeRange{},
-                                   mlir::ValueRange{Staging});
+        mlir::func::CallOp::create(
+            Builder, Loc, Class.DestructorSymbol, mlir::TypeRange{}, mlir::ValueRange{Staging});
       }
       if (Temporary)
-        mlir::func::CallOp::create(Builder, Loc, Class.DestructorSymbol,
-                                   mlir::TypeRange{}, mlir::ValueRange{Source});
+        mlir::func::CallOp::create(
+            Builder, Loc, Class.DestructorSymbol, mlir::TypeRange{}, mlir::ValueRange{Source});
     };
     if (!InitializingField && !Temporary) {
-      auto TargetAddress = mlir::LLVM::PtrToIntOp::create(
-          Builder, Loc, Builder.getI64Type(), Address);
-      auto SourceAddress = mlir::LLVM::PtrToIntOp::create(
-          Builder, Loc, Builder.getI64Type(), Source);
-      auto Same = mlir::arith::CmpIOp::create(Builder, Loc,
-                                              mlir::arith::CmpIPredicate::eq,
-                                              TargetAddress, SourceAddress);
+      auto TargetAddress =
+          mlir::LLVM::PtrToIntOp::create(Builder, Loc, Builder.getI64Type(), Address);
+      auto SourceAddress =
+          mlir::LLVM::PtrToIntOp::create(Builder, Loc, Builder.getI64Type(), Source);
+      auto Same = mlir::arith::CmpIOp::create(
+          Builder, Loc, mlir::arith::CmpIPredicate::eq, TargetAddress, SourceAddress);
       auto *Region = Builder.getInsertionBlock()->getParent();
       auto *Work = new mlir::Block();
       auto *After = new mlir::Block();
@@ -209,9 +196,11 @@ void codegen::IRGen::EmitExpressionStatement(const lex::Node &Statement) {
     const auto Loc = GetLocation(Expression.Loc);
     auto Address = CreateAlloca(Type, Loc);
     mlir::LLVM::StoreOp::create(Builder, Loc, Value, Address);
-    mlir::func::CallOp::create(Builder, Loc,
+    mlir::func::CallOp::create(Builder,
+                               Loc,
                                Analysis.GetClass(Type)->DestructorSymbol,
-                               mlir::TypeRange{}, mlir::ValueRange{Address});
+                               mlir::TypeRange{},
+                               mlir::ValueRange{Address});
   }
   return;
 }
@@ -240,17 +229,15 @@ void codegen::IRGen::EmitAsmStatement(const lex::Node &Statement) {
   }
 
   auto ExplicitRegister = [](const lex::Node *Binding) -> std::string_view {
-    return Binding && !Binding->children.empty()
-               ? std::string_view(Binding->children.front()->text)
-               : std::string_view();
+    return Binding && !Binding->children.empty() ? std::string_view(Binding->children.front()->text)
+                                                 : std::string_view();
   };
   auto RegisterFor = [&](const lex::Node *Binding, const auto &OtherBindings) {
     auto Register = ExplicitRegister(Binding);
     if (!Register.empty())
       return Register;
     const auto Other = OtherBindings.find(Binding->text);
-    return Other == OtherBindings.end() ? std::string_view()
-                                        : ExplicitRegister(Other->second);
+    return Other == OtherBindings.end() ? std::string_view() : ExplicitRegister(Other->second);
   };
   auto RegisterClass = [&](const lex::Node &Binding) {
     return sema::IsFloat(Analysis.GetType(Binding).Element) ? "f" : "r";
@@ -263,9 +250,8 @@ void codegen::IRGen::EmitAsmStatement(const lex::Node &Statement) {
   for (std::size_t I = 0; I < Outputs.size(); ++I) {
     const auto *Output = Outputs[I];
     const auto Register = RegisterFor(Output, InputsByName);
-    Constraints.push_back(Register.empty()
-                              ? std::string("=&") + RegisterClass(*Output)
-                              : "=&{" + std::string(Register) + "}");
+    Constraints.push_back(Register.empty() ? std::string("=&") + RegisterClass(*Output)
+                                           : "=&{" + std::string(Register) + "}");
     OutputTypes.push_back(GetType(Analysis.GetType(*Output)));
     OperandIndices.emplace(Output->text, I);
     if (!Register.empty())
@@ -275,8 +261,7 @@ void codegen::IRGen::EmitAsmStatement(const lex::Node &Statement) {
   llvm::SmallVector<mlir::Value> InputValues;
   for (const auto *Input : Inputs) {
     std::optional<std::size_t> TiedOutput;
-    if (const auto Output = OperandIndices.find(Input->text);
-        Output != OperandIndices.end())
+    if (const auto Output = OperandIndices.find(Input->text); Output != OperandIndices.end())
       TiedOutput = Output->second;
     const auto Register = RegisterFor(Input, OutputsByName);
     if (!TiedOutput && !Register.empty())
@@ -284,26 +269,22 @@ void codegen::IRGen::EmitAsmStatement(const lex::Node &Statement) {
           Output != OutputRegisters.end())
         TiedOutput = Output->second;
     const auto ConstraintIndex = Constraints.size();
-    Constraints.push_back(TiedOutput ? std::to_string(*TiedOutput)
-                          : Register.empty()
-                              ? RegisterClass(*Input)
-                              : "{" + std::string(Register) + "}");
+    Constraints.push_back(TiedOutput         ? std::to_string(*TiedOutput)
+                          : Register.empty() ? RegisterClass(*Input)
+                                             : "{" + std::string(Register) + "}");
     if (!OperandIndices.contains(Input->text))
-      OperandIndices.emplace(Input->text,
-                             TiedOutput ? *TiedOutput : ConstraintIndex);
+      OperandIndices.emplace(Input->text, TiedOutput ? *TiedOutput : ConstraintIndex);
     auto *Variable = FindVariable(Input->text);
     InputValues.push_back(
         Variable->Address ? mlir::LLVM::LoadOp::create(
-                                Builder, Loc, GetType(Variable->SemanticType),
-                                Variable->Address)
+                                Builder, Loc, GetType(Variable->SemanticType), Variable->Address)
                                 .getResult()
                           : Variable->DirectValue);
   }
 
   auto AddClobber = [&](std::string_view Register) {
     const auto Constraint = "~{" + std::string(Register) + "}";
-    if (std::find(Constraints.begin(), Constraints.end(), Constraint) ==
-        Constraints.end())
+    if (std::find(Constraints.begin(), Constraints.end(), Constraint) == Constraints.end())
       Constraints.push_back(Constraint);
   };
   for (const auto &Clobber : Clobbers)
@@ -315,14 +296,12 @@ void codegen::IRGen::EmitAsmStatement(const lex::Node &Statement) {
 
   std::string Asm;
   for (std::size_t I = 0; I < Statement.text.size(); ++I) {
-    if (Statement.text[I] == '{' && I + 1 < Statement.text.size() &&
-        Statement.text[I + 1] == '{') {
+    if (Statement.text[I] == '{' && I + 1 < Statement.text.size() && Statement.text[I + 1] == '{') {
       Asm.push_back('{');
       ++I;
       continue;
     }
-    if (Statement.text[I] == '}' && I + 1 < Statement.text.size() &&
-        Statement.text[I + 1] == '}') {
+    if (Statement.text[I] == '}' && I + 1 < Statement.text.size() && Statement.text[I + 1] == '}') {
       Asm.push_back('}');
       ++I;
       continue;
@@ -338,8 +317,7 @@ void codegen::IRGen::EmitAsmStatement(const lex::Node &Statement) {
   }
   const auto First = Asm.find_first_not_of(" \t\r\n");
   const auto Last = Asm.find_last_not_of(" \t\r\n");
-  Asm = First == std::string::npos ? std::string()
-                                   : Asm.substr(First, Last - First + 1);
+  Asm = First == std::string::npos ? std::string() : Asm.substr(First, Last - First + 1);
   std::string ConstraintText;
   for (const auto &Constraint : Constraints) {
     if (!ConstraintText.empty())
@@ -354,21 +332,25 @@ void codegen::IRGen::EmitAsmStatement(const lex::Node &Statement) {
     ResultType = mlir::LLVM::LLVMStructType::getLiteral(&Context, OutputTypes);
   mlir::LLVM::AsmDialectAttr Dialect;
   if (Options.contains("intel"))
-    Dialect = mlir::LLVM::AsmDialectAttr::get(&Context,
-                                              mlir::LLVM::AsmDialect::AD_Intel);
-  auto InlineAsm = mlir::LLVM::InlineAsmOp::create(
-      Builder, Loc, ResultType, InputValues, Asm, ConstraintText,
-      /*has_side_effects=*/true, /*is_align_stack=*/false,
-      mlir::LLVM::TailCallKind::None, /*convergent=*/false, Dialect,
-      mlir::ArrayAttr());
+    Dialect = mlir::LLVM::AsmDialectAttr::get(&Context, mlir::LLVM::AsmDialect::AD_Intel);
+  auto InlineAsm = mlir::LLVM::InlineAsmOp::create(Builder,
+                                                   Loc,
+                                                   ResultType,
+                                                   InputValues,
+                                                   Asm,
+                                                   ConstraintText,
+                                                   /*has_side_effects=*/true,
+                                                   /*is_align_stack=*/false,
+                                                   mlir::LLVM::TailCallKind::None,
+                                                   /*convergent=*/false,
+                                                   Dialect,
+                                                   mlir::ArrayAttr());
   for (std::size_t I = 0; I < Outputs.size(); ++I) {
-    mlir::Value Value = OutputTypes.size() == 1
-                            ? InlineAsm.getRes()
-                            : mlir::LLVM::ExtractValueOp::create(
-                                  Builder, Loc, InlineAsm.getRes(), I)
-                                  .getResult();
-    mlir::LLVM::StoreOp::create(Builder, Loc, Value,
-                                FindVariable(Outputs[I]->text)->Address);
+    mlir::Value Value =
+        OutputTypes.size() == 1
+            ? InlineAsm.getRes()
+            : mlir::LLVM::ExtractValueOp::create(Builder, Loc, InlineAsm.getRes(), I).getResult();
+    mlir::LLVM::StoreOp::create(Builder, Loc, Value, FindVariable(Outputs[I]->text)->Address);
   }
   return;
 }
@@ -377,22 +359,20 @@ void codegen::IRGen::EmitReturnStatement(const lex::Node &Statement) {
   const auto Loc = GetLocation(Statement.Loc);
   llvm::SmallVector<mlir::Value> Results;
   if (Statement.children.size() > 1) {
-    mlir::Value Values = mlir::LLVM::UndefOp::create(
-        Builder, Loc, GetType(Analysis.GetType(Statement)));
+    mlir::Value Values =
+        mlir::LLVM::UndefOp::create(Builder, Loc, GetType(Analysis.GetType(Statement)));
     for (std::size_t I = 0; I < Statement.children.size(); ++I)
       Values = mlir::LLVM::InsertValueOp::create(
           Builder, Loc, Values, EmitExpression(*Statement.children[I]), I);
     Results.push_back(Values);
   } else if (!Statement.children.empty()) {
     const auto &Value = *Statement.children.front();
-    Results.push_back(Analysis.GetType(Value).IsClass()
-                          ? EmitClassArgument(Value)
-                          : EmitExpression(Value));
+    Results.push_back(Analysis.GetType(Value).IsClass() ? EmitClassArgument(Value)
+                                                        : EmitExpression(Value));
   }
   EmitCleanups(0, Loc);
   if (ActiveDestructor)
-    EmitFieldDestructors(*ActiveDestructor, FindVariable("this")->DirectValue,
-                         Loc);
+    EmitFieldDestructors(*ActiveDestructor, FindVariable("this")->DirectValue, Loc);
   mlir::func::ReturnOp::create(Builder, Loc, Results);
   return;
 }
@@ -494,9 +474,11 @@ void codegen::IRGen::EmitForStatement(const lex::Node &Statement) {
   }
   mlir::Value Iterator = Receiver;
   if (!Info.IterSymbol.empty()) {
-    auto Call = mlir::func::CallOp::create(
-        Builder, Loc, Info.IterSymbol, mlir::TypeRange{GetType(Info.Iterator)},
-        mlir::ValueRange{Receiver});
+    auto Call = mlir::func::CallOp::create(Builder,
+                                           Loc,
+                                           Info.IterSymbol,
+                                           mlir::TypeRange{GetType(Info.Iterator)},
+                                           mlir::ValueRange{Receiver});
     Iterator = CreateAlloca(Info.Iterator, Loc);
     mlir::LLVM::StoreOp::create(Builder, Loc, Call.getResult(0), Iterator);
     Cleanups.back().push_back({Analysis.GetClass(Info.Iterator), Iterator});
@@ -515,30 +497,36 @@ void codegen::IRGen::EmitForStatement(const lex::Node &Statement) {
   mlir::cf::BranchOp::create(Builder, Loc, Header);
 
   Builder.setInsertionPointToStart(Header);
-  auto Next = mlir::func::CallOp::create(Builder, Loc, Info.NextSymbol,
+  auto Next = mlir::func::CallOp::create(Builder,
+                                         Loc,
+                                         Info.NextSymbol,
                                          mlir::TypeRange{GetType(Info.Maybe)},
                                          mlir::ValueRange{Iterator});
   mlir::LLVM::StoreOp::create(Builder, Loc, Next.getResult(0), MaybeAddress);
-  auto HasValue = mlir::func::CallOp::create(
-      Builder, Loc, Info.HasValueSymbol,
-      mlir::TypeRange{GetType(sema::Type{sema::BuiltinType::Bool, {}})},
-      mlir::ValueRange{MaybeAddress});
-  mlir::cf::CondBranchOp::create(Builder, Loc, HasValue.getResult(0), Body,
-                                 Exhausted);
+  auto HasValue =
+      mlir::func::CallOp::create(Builder,
+                                 Loc,
+                                 Info.HasValueSymbol,
+                                 mlir::TypeRange{GetType(sema::Type{sema::BuiltinType::Bool, {}})},
+                                 mlir::ValueRange{MaybeAddress});
+  mlir::cf::CondBranchOp::create(Builder, Loc, HasValue.getResult(0), Body, Exhausted);
 
   Builder.setInsertionPointToStart(Body);
   Scopes.emplace_back();
   Cleanups.emplace_back();
   auto ItemAddress = CreateAlloca(Info.Item, Loc);
-  auto Item = mlir::func::CallOp::create(Builder, Loc, Info.ValueSymbol,
+  auto Item = mlir::func::CallOp::create(Builder,
+                                         Loc,
+                                         Info.ValueSymbol,
                                          mlir::TypeRange{GetType(Info.Item)},
                                          mlir::ValueRange{MaybeAddress});
   mlir::LLVM::StoreOp::create(Builder, Loc, Item.getResult(0), ItemAddress);
-  mlir::func::CallOp::create(Builder, Loc,
+  mlir::func::CallOp::create(Builder,
+                             Loc,
                              Analysis.GetClass(Info.Maybe)->DestructorSymbol,
-                             mlir::TypeRange{}, mlir::ValueRange{MaybeAddress});
-  Scopes.back().emplace(Statement.children.front()->text,
-                        Variable{Info.Item, ItemAddress, {}});
+                             mlir::TypeRange{},
+                             mlir::ValueRange{MaybeAddress});
+  Scopes.back().emplace(Statement.children.front()->text, Variable{Info.Item, ItemAddress, {}});
   if (Info.Item.IsClass())
     Cleanups.back().push_back({Analysis.GetClass(Info.Item), ItemAddress});
   Loops.push_back({After, Header, Cleanups.size() - 1});
@@ -552,9 +540,11 @@ void codegen::IRGen::EmitForStatement(const lex::Node &Statement) {
   Scopes.pop_back();
 
   Builder.setInsertionPointToStart(Exhausted);
-  mlir::func::CallOp::create(Builder, Loc,
+  mlir::func::CallOp::create(Builder,
+                             Loc,
                              Analysis.GetClass(Info.Maybe)->DestructorSymbol,
-                             mlir::TypeRange{}, mlir::ValueRange{MaybeAddress});
+                             mlir::TypeRange{},
+                             mlir::ValueRange{MaybeAddress});
   mlir::cf::BranchOp::create(Builder, Loc, After);
 
   Builder.setInsertionPointToStart(After);

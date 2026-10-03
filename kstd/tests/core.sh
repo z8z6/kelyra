@@ -8,6 +8,6 @@ trap 'rm -f "$output"' EXIT HUP INT TERM
 
 cd "$root"
 for example in ascii math; do
-  "$compiler" --emit-exe --module-path="$root/src" -o "$output" "examples/${example}_example.kly"
+  "$compiler" --emit-exe --module-search-path="$root/src" -o "$output" "examples/${example}_example.kly"
   "$output"
 done

@@ -58,22 +58,21 @@ export FAKE_KELYRA_LOG=$tmp/debug-arguments
 grep -q '\[1/3\] Preparing demo' "$tmp/progress"
 grep -q '\[2/3\] Building src/main.kly' "$tmp/progress"
 grep -q '\[3/3\] Finished .kelp/build/demo' "$tmp/progress"
-grep -qx -- '--progress' "$FAKE_KELYRA_LOG"
 grep -qx -- '-O0' "$FAKE_KELYRA_LOG"
 "$kelp" build
 grep -qx -- '-O3' "$FAKE_KELYRA_LOG"
 sed -i '/optimization = 3/a runtime = "freestanding"' kelp.toml
 "$kelp" build
-grep -qx -- '--runtime=freestanding' "$FAKE_KELYRA_LOG"
+grep -qx -- '--main-runtime=freestanding' "$FAKE_KELYRA_LOG"
 sed -i '/runtime = "freestanding"/a target = "x86_64-pc-windows-msvc"' kelp.toml
 "$kelp" build
 grep -qx -- '--target=x86_64-pc-windows-msvc' "$FAKE_KELYRA_LOG"
 sed -i '/target = "x86_64-pc-windows-msvc"/a windows-import-libraries = ["Synchronization.lib"]' kelp.toml
 "$kelp" build
-grep -qx -- '--link-input=Synchronization.lib' "$FAKE_KELYRA_LOG"
+grep -qx -- '--link=Synchronization.lib' "$FAKE_KELYRA_LOG"
 sed -i 's/target = "x86_64-pc-windows-msvc"/target = "x86_64-unknown-linux-gnu"/' kelp.toml
 "$kelp" build
-if grep -qx -- '--link-input=Synchronization.lib' "$FAKE_KELYRA_LOG"; then
+if grep -qx -- '--link=Synchronization.lib' "$FAKE_KELYRA_LOG"; then
   echo "Windows import library leaked into Linux build" >&2
   exit 1
 fi
@@ -136,10 +135,10 @@ cd consumer
 "$kelp" build
 test ! -e .kelp/stage
 grep -qx -- 'src/main.kly' "$FAKE_KELYRA_LOG"
-grep -qx -- "--module-path=$tmp/consumer/src" "$FAKE_KELYRA_LOG"
-grep -qx -- "--module-path=$tmp/consumer/.kelp/dependencies/demo/src" \
+grep -qx -- "--module-search-path=$tmp/consumer/src" "$FAKE_KELYRA_LOG"
+grep -qx -- "--module-search-path=$tmp/consumer/.kelp/dependencies/demo/src" \
   "$FAKE_KELYRA_LOG"
-grep -q -- "--c-source=$tmp/consumer/.kelp/dependencies/demo/src/demo/runtime.c" \
+grep -q -- "--link=$tmp/consumer/.kelp/dependencies/demo/src/demo/runtime.c" \
   "$FAKE_KELYRA_LOG"
 "$kelp" package
 test -f .kelp/build/consumer-0.1.0.tar.gz
@@ -188,13 +187,13 @@ printf 'prebuilt C library\n' > workspace/app/src/prebuilt-c.a
 
 cd workspace
 "$kelp" members | grep -qx 'libs/math math library .kelp/build/libs/math/math.o'
-"$kelp" members | grep -qx 'app app executable .kelp/build/app/app'
+"$kelp" members | grep -qx 'app app executable .kelp/build/app/app.exe'
 "$kelp" members | grep -qx '. - workspace -'
 
 # A workspace root without [project] builds every member by default.
 "$kelp" build
 test -f .kelp/build/libs/math/math.o
-test -x .kelp/build/app/app
+test -x .kelp/build/app/app.exe
 # Only the shared build directory is written; projects stay clean.
 test ! -e libs/math/build
 test ! -e app/build
@@ -203,7 +202,7 @@ test ! -e app/build
 rm -f .kelp/build/libs/math/math.o
 "$kelp" build math
 test -f .kelp/build/libs/math/math.o
-test "$("$kelp" output app)" = "$tmp/workspace/.kelp/build/app/app"
+test "$("$kelp" output app)" = "$tmp/workspace/.kelp/build/app/app.exe"
 if "$kelp" build missing >/dev/null 2>&1; then
   echo "unknown workspace member was accepted" >&2
   exit 1
@@ -220,13 +219,14 @@ export FAKE_KELYRA_LOG=$tmp/workspace-arguments
 rm -rf app/build
 "$kelp" build app
 grep -qx -- 'src/main.kly' "$FAKE_KELYRA_LOG"
-grep -qx -- "--module-path=$tmp/workspace/libs/math/src" "$FAKE_KELYRA_LOG"
-grep -qx -- "--external-path=$tmp/workspace/libs/math/src" "$FAKE_KELYRA_LOG"
-grep -qx -- "--link-input=$tmp/workspace/.kelp/build/libs/math/math.o" \
+grep -qx -- "--module-search-path=$tmp/workspace/libs/math/src" "$FAKE_KELYRA_LOG"
+grep -qx -- "--module-interface-path=$tmp/workspace/.kelp/build/libs/math/math.o.kmi" \
   "$FAKE_KELYRA_LOG"
-grep -q -- "--c-source=src/runtime.c" "$FAKE_KELYRA_LOG"
-grep -qx -- "--link-input=$tmp/workspace/app/src/prebuilt-c.a" "$FAKE_KELYRA_LOG"
-grep -qx -- '--link-input=Synchronization.lib' "$FAKE_KELYRA_LOG"
+grep -qx -- "--link=$tmp/workspace/.kelp/build/libs/math/math.o" \
+  "$FAKE_KELYRA_LOG"
+grep -q -- "--link=src/runtime.c" "$FAKE_KELYRA_LOG"
+grep -qx -- "--link=$tmp/workspace/app/src/prebuilt-c.a" "$FAKE_KELYRA_LOG"
+grep -qx -- '--link=Synchronization.lib' "$FAKE_KELYRA_LOG"
 test -f .kelp/build/libs/math/math.o
 test ! -e app/.kelp
 
@@ -235,7 +235,7 @@ printf 'prebuilt Kelyra library\n' > libs/math/prebuilt.o
 printf '\nlibrary = "prebuilt.o"\n' >> app/kelp.toml
 rm -f .kelp/build/libs/math/math.o
 "$kelp" build app
-grep -qx -- "--link-input=$tmp/workspace/libs/math/prebuilt.o" "$FAKE_KELYRA_LOG"
+grep -qx -- "--link=$tmp/workspace/libs/math/prebuilt.o" "$FAKE_KELYRA_LOG"
 test ! -e .kelp/build/libs/math/math.o
 
 # check, test, and package accept --workspace.

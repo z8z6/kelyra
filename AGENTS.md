@@ -6,6 +6,9 @@
   changes in that fork, then update the submodule pointer in this repository.
 - Format C++ using the LLVM style and name class member variables in
   PascalCase.
+- Do not use `throw` or `try/catch` for error handling. Report errors with
+  `kerr()`, then immediately `return` a failure result. Propagate failures
+  through return values.
 - Validate compiler and Kelp changes with `ctest --test-dir build`, standard
   library changes with the relevant `kstd/tests/` scripts, and editor changes
   with `npm test --prefix kide/vscode`.

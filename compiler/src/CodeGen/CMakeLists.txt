@@ -1,12 +1,16 @@
-add_library(kelyra_codegen Class.cpp Debug.cpp Expression.cpp IRGen.cpp
-  Option.cpp RuntimeReflection.cpp Statement.cpp)
+file(GLOB_RECURSE KELYRA_CODEGEN_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
+  "${PROJECT_SOURCE_DIR}/include/CodeGen/*.h"
+)
+add_library(kelyra_codegen ${KELYRA_CODEGEN_SOURCES})
 get_directory_property(KELYRA_LLVM_NATIVE_ARCH
   DIRECTORY "${KELYRA_LLVM_SOURCE_DIR}/llvm"
   DEFINITION LLVM_NATIVE_ARCH
 )
 target_include_directories(kelyra_codegen PUBLIC "${PROJECT_SOURCE_DIR}/include")
 target_compile_definitions(kelyra_codegen PRIVATE
-  KELYRA_RUNTIME_DIR="${PROJECT_SOURCE_DIR}/runtime")
+  KELYRA_RUNTIME_DIR="${PROJECT_SOURCE_DIR}/src/runtime")
 target_include_directories(kelyra_codegen SYSTEM PUBLIC
   "${KELYRA_LLVM_SOURCE_DIR}/llvm/include"
   "${KELYRA_LLVM_BINARY_DIR}/include"

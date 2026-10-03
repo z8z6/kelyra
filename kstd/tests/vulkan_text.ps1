@@ -12,7 +12,7 @@ $FontLib = Join-Path $Workspace 'build/fonts/prefix/lib'
 $IcuLib = Join-Path $Workspace 'build/fonts/icu-source/lib64'
 $LayoutTest = Join-Path $Build 'font_layout_test.exe'
 & (Join-Path $Workspace 'build/bin/kelyra.exe') --emit-exe `
-    "--module-path=$(Join-Path $Root 'src')" `
+    "--module-search-path=$(Join-Path $Root 'src')" `
     "--link-input=$(Join-Path $FontLib 'harfbuzz.lib')" `
     "--link-input=$(Join-Path $FontLib 'freetype.lib')" `
     "--link-input=$(Join-Path $IcuLib 'icuuc.lib')" `

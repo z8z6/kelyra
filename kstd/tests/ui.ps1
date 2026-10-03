@@ -18,7 +18,7 @@ foreach ($Name in @(
 )) {
     $Source = Join-Path $StandardLibrary "examples/$Name.kly"
     $Output = Join-Path $OutputDirectory "$Name.exe"
-    & $Compiler --emit-exe "--module-path=$StandardLibrary/src" -o $Output $Source
+    & $Compiler --emit-exe "--module-search-path=$StandardLibrary/src" -o $Output $Source
     if ($LASTEXITCODE -ne 0) { throw "Compilation failed: $Name" }
     & $Output
     if ($LASTEXITCODE -ne 0) { throw "Example failed: $Name ($LASTEXITCODE)" }
